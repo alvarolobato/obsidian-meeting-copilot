@@ -27,7 +27,7 @@ export default class SystemRecordingPlugin extends Plugin {
 
         // Status bar
         this.statusBarEl = this.addStatusBarItem();
-        this.statusBarEl.style.display = "none";
+        this.statusBarEl.addClass("system-recording-hidden");
 
         // Commands
         this.addCommand({
@@ -63,7 +63,7 @@ export default class SystemRecordingPlugin extends Plugin {
         this.settings = Object.assign(
             {},
             DEFAULT_SETTINGS,
-            await this.loadData()
+            await this.loadData() as Partial<SystemRecordingSettings>
         );
     }
 
@@ -77,7 +77,7 @@ export default class SystemRecordingPlugin extends Plugin {
         if (this.recorder.isRecording) {
             this.stopRecording();
         } else {
-            this.startRecording();
+            void this.startRecording();
         }
     }
 
@@ -97,6 +97,8 @@ export default class SystemRecordingPlugin extends Plugin {
         // Generate file name
         const fileName = this.formatFileName(this.settings.fileNameTemplate);
         const relativePath = `${folder}/${fileName}.m4a`;
+        // Obsidian's FileSystemAdapter has getBasePath() but it's not in the public type
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         const vaultBasePath = (adapter as any).getBasePath() as string;
         const absolutePath = path.join(vaultBasePath, relativePath);
 
@@ -143,7 +145,7 @@ export default class SystemRecordingPlugin extends Plugin {
 
     private startDurationTimer() {
         if (this.statusBarEl) {
-            this.statusBarEl.style.display = "";
+            this.statusBarEl.removeClass("system-recording-hidden");
         }
 
         this.durationInterval = window.setInterval(() => {
@@ -169,7 +171,7 @@ export default class SystemRecordingPlugin extends Plugin {
 
     private hideStatusBar() {
         if (this.statusBarEl) {
-            this.statusBarEl.style.display = "none";
+            this.statusBarEl.addClass("system-recording-hidden");
             this.statusBarEl.setText("");
         }
     }

@@ -21,9 +21,9 @@ export class Recorder {
     }
 
     private getBinaryPath(plugin: Plugin): string {
-        const pluginDir = (plugin.app.vault.adapter as any).getBasePath()
-            + "/"
-            + plugin.manifest.dir;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+        const basePath = (plugin.app.vault.adapter as any).getBasePath() as string;
+        const pluginDir = basePath + "/" + plugin.manifest.dir;
         return path.join(pluginDir, "system-recorder");
     }
 
@@ -42,7 +42,7 @@ export class Recorder {
 
         let buffer = "";
 
-        proc.stdout?.on("data", (data: Buffer) => {
+        proc.stdout?.on("data", (data: string | Uint8Array) => {
             buffer += data.toString();
             const lines = buffer.split("\n");
             buffer = lines.pop() ?? "";
@@ -50,7 +50,7 @@ export class Recorder {
             for (const line of lines) {
                 if (!line.trim()) continue;
                 try {
-                    const status: RecorderStatus = JSON.parse(line);
+                    const status = JSON.parse(line) as RecorderStatus;
                     this.onStatus?.(status);
 
                     if (status.status === "stopped" || status.status === "error") {
@@ -62,7 +62,7 @@ export class Recorder {
             }
         });
 
-        proc.stderr?.on("data", (data: Buffer) => {
+        proc.stderr?.on("data", (data: string | Uint8Array) => {
             const msg = data.toString().trim();
             if (msg) {
                 this.onError?.(msg);

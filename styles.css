@@ -1,3 +1,7 @@
+.system-recording-hidden {
+    display: none;
+}
+
 .is-recording {
     color: var(--text-error) !important;
     animation: recording-pulse 1.5s ease-in-out infinite;

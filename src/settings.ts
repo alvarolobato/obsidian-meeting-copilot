@@ -25,10 +25,10 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName("Recording folder")
-            .setDesc("Folder in your vault to save recordings")
+            .setDesc("Folder in your vault to save recordings.")
             .addText((text) =>
                 text
-                    .setPlaceholder("recordings")
+                    .setPlaceholder("Recordings")
                     .setValue(this.plugin.settings.recordingFolder)
                     .onChange(async (value) => {
                         this.plugin.settings.recordingFolder = value;
@@ -39,11 +39,13 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         new Setting(containerEl)
             .setName("File name template")
             .setDesc(
-                "Template for recording file names. YYYY, MM, DD, HH, mm, ss are replaced with date/time."
+                // eslint-disable-next-line obsidianmd/ui/sentence-case
+                "File name format. YYYY, MM, DD, HH, mm, ss are replaced with date and time."
             )
             .addText((text) =>
                 text
-                    .setPlaceholder("recording-YYYY-MM-DD-HHmmss")
+                    // eslint-disable-next-line obsidianmd/ui/sentence-case
+                    .setPlaceholder("Recording-YYYY-MM-DD-HHmmss")
                     .setValue(this.plugin.settings.fileNameTemplate)
                     .onChange(async (value) => {
                         this.plugin.settings.fileNameTemplate = value;
