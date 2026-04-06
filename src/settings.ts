@@ -8,7 +8,7 @@ export interface SystemRecordingSettings {
 
 export const DEFAULT_SETTINGS: SystemRecordingSettings = {
     recordingFolder: "recordings",
-    fileNameTemplate: "recording-YYYY-MM-DD-HHmm",
+    fileNameTemplate: "recording-YYYY-MM-DD-HHmmss",
 };
 
 export class SystemRecordingSettingTab extends PluginSettingTab {
@@ -39,11 +39,11 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         new Setting(containerEl)
             .setName("File name template")
             .setDesc(
-                "Template for recording file names. YYYY, MM, DD, HH, mm are replaced with date/time."
+                "Template for recording file names. YYYY, MM, DD, HH, mm, ss are replaced with date/time."
             )
             .addText((text) =>
                 text
-                    .setPlaceholder("recording-YYYY-MM-DD-HHmm")
+                    .setPlaceholder("recording-YYYY-MM-DD-HHmmss")
                     .setValue(this.plugin.settings.fileNameTemplate)
                     .onChange(async (value) => {
                         this.plugin.settings.fileNameTemplate = value;

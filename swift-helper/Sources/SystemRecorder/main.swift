@@ -26,7 +26,7 @@ func emitJSON(_ dict: [String: Any]) {
 
 // MARK: - Signal handling
 
-nonisolated(unsafe) var stopRequested = false
+var stopRequested = false
 let stopSemaphore = DispatchSemaphore(value: 0)
 
 for sig: Int32 in [SIGINT, SIGHUP, SIGTERM] {

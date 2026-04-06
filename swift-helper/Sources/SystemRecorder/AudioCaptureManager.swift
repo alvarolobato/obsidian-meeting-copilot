@@ -16,9 +16,14 @@ final class AudioCaptureManager: NSObject, @unchecked Sendable {
 
     func startCapture() async throws {
         // 1. ScreenCaptureKit: system audio
-        let content = try await SCShareableContent.excludingDesktopWindows(
-            false, onScreenWindowsOnly: false
-        )
+        let content: SCShareableContent
+        do {
+            content = try await SCShareableContent.excludingDesktopWindows(
+                false, onScreenWindowsOnly: false
+            )
+        } catch {
+            throw RecorderError.captureNotAuthorized
+        }
         guard let display = content.displays.first else {
             throw RecorderError.noDisplay
         }
