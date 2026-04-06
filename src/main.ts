@@ -96,7 +96,7 @@ export default class SystemRecordingPlugin extends Plugin {
 
         // Generate file name
         const fileName = this.formatFileName(this.settings.fileNameTemplate);
-        const relativePath = `${folder}/${fileName}.m4a`;
+        const relativePath = `${folder}/${fileName}.wav`;
         // Obsidian's FileSystemAdapter has getBasePath() but it's not in the public type
         // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         const vaultBasePath = (adapter as any).getBasePath() as string;

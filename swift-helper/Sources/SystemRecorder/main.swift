@@ -4,16 +4,21 @@ import AVFoundation
 // MARK: - Argument parsing
 
 let args = CommandLine.arguments
-guard args.count >= 4,
+guard args.count >= 6,
       args[1] == "start",
-      args[2] == "--output" else {
-    let errorJson = "{\"status\": \"error\", \"message\": \"Usage: system-recorder start --output <path>\"}"
+      args[2] == "--output",
+      args[4] == "--stop-file" else {
+    let errorJson = "{\"status\": \"error\", \"message\": \"Usage: system-recorder start --output <path> --stop-file <path>\"}"
     FileHandle.standardOutput.write(Data((errorJson + "\n").utf8))
     exit(1)
 }
 
-let outputPath = args[3]
-let outputURL = URL(fileURLWithPath: outputPath)
+let finalOutputPath = args[3]
+let stopFilePath = args[5]
+
+// Record to a temp file, then move to final path when done
+let tempOutputURL = URL(fileURLWithPath: NSTemporaryDirectory())
+    .appendingPathComponent("system-recorder-\(ProcessInfo.processInfo.processIdentifier).wav")
 
 // MARK: - JSON output helper
 
@@ -24,18 +29,6 @@ func emitJSON(_ dict: [String: Any]) {
     }
 }
 
-// MARK: - Signal handling
-
-var stopRequested = false
-let stopSemaphore = DispatchSemaphore(value: 0)
-
-for sig: Int32 in [SIGINT, SIGHUP, SIGTERM] {
-    signal(sig) { _ in
-        stopRequested = true
-        stopSemaphore.signal()
-    }
-}
-
 // MARK: - Main recording logic
 
 if #available(macOS 13.0, *) {
@@ -43,7 +36,7 @@ if #available(macOS 13.0, *) {
     let mixer: AudioMixer
 
     do {
-        mixer = try AudioMixer(outputURL: outputURL)
+        mixer = try AudioMixer(outputURL: tempOutputURL)
     } catch {
         emitJSON(["status": "error", "message": "Failed to create audio writer: \(error.localizedDescription)"])
         exit(1)
@@ -54,8 +47,13 @@ if #available(macOS 13.0, *) {
         mixer.appendSystemAudio(sampleBuffer)
     }
 
+    // Wire microphone audio → mixer
+    captureManager.onMicrophoneAudio = { buffer, _ in
+        mixer.appendMicrophoneAudio(buffer)
+    }
+
     // Start capture
-    let startTask = Task {
+    _ = Task {
         do {
             try await captureManager.startCapture()
             emitJSON(["status": "recording", "duration": 0])
@@ -65,29 +63,36 @@ if #available(macOS 13.0, *) {
         }
     }
 
-    // Duration ticker - emit duration every second
+    // Duration ticker + stop file check every 0.5 seconds
     let startDate = Date()
     let ticker = DispatchSource.makeTimerSource(queue: .global())
-    ticker.schedule(deadline: .now() + 1, repeating: 1.0)
+    ticker.schedule(deadline: .now() + 0.5, repeating: 0.5)
     ticker.setEventHandler {
+        // Check if stop file exists
+        if FileManager.default.fileExists(atPath: stopFilePath) {
+            ticker.cancel()
+            try? FileManager.default.removeItem(atPath: stopFilePath)
+
+            Task {
+                await captureManager.stopCapture()
+                let duration = await mixer.finalize()
+
+                // Move temp file to final destination
+                let finalURL = URL(fileURLWithPath: finalOutputPath)
+                try? FileManager.default.moveItem(at: tempOutputURL, to: finalURL)
+
+                emitJSON(["status": "stopped", "duration": Int(duration), "file": finalOutputPath])
+                exit(0)
+            }
+            return
+        }
+
         let elapsed = Int(Date().timeIntervalSince(startDate))
         emitJSON(["status": "recording", "duration": elapsed])
     }
     ticker.resume()
 
-    // Wait for stop signal
-    stopSemaphore.wait()
-    ticker.cancel()
-
-    // Stop and finalize
-    let finalizeTask = Task {
-        await captureManager.stopCapture()
-        let duration = await mixer.finalize()
-        emitJSON(["status": "stopped", "duration": Int(duration), "file": outputPath])
-        exit(0)
-    }
-
-    // Keep run loop alive for async tasks
+    // Keep run loop alive
     RunLoop.current.run(until: Date.distantFuture)
 
 } else {

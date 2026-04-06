@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(swift --version)",
+      "Bash(swift run:*)",
+      "Bash(git reset:*)",
+      "Bash(gtimeout 2 swift run SystemRecorder start --output /tmp/test.m4a)",
+      "Bash(npm install:*)",
+      "Bash(npm run:*)",
+      "Bash(git rm:*)",
+      "Bash(timeout 3 /Users/s32747/vault/.obsidian/plugins/system-recording/system-recorder start --output /tmp/test-recording.m4a)",
+      "Bash(gtimeout 3 /Users/s32747/vault/.obsidian/plugins/system-recording/system-recorder start --output /tmp/test-recording.m4a)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(codesign --force --sign - /Users/s32747/Develop/obsidian-system-recording/system-recorder)",
+      "Bash(codesign -v /Users/s32747/vault/.obsidian/plugins/system-recording/system-recorder)",
+      "Bash(codesign --force --sign - --entitlements swift-helper/SystemRecorder.entitlements system-recorder)",
+      "Bash(cp system-recorder:*)",
+      "Bash(codesign -dvvv /tmp/test_sc)",
+      "Bash(codesign -dvvv /Users/s32747/Develop/obsidian-system-recording/system-recorder)",
+      "Bash(lldb /Users/s32747/Develop/obsidian-system-recording/system-recorder -- start --output /tmp/test.m4a)",
+      "Bash(/tmp/test-spm/.build/release/TestSC)",
+      "Bash(swift package:*)",
+      "mcp__github__create_repository",
+      "Bash(git branch:*)",
+      "Read(//private/var/folders/y3/bybgtbq51g98kgznvvszt_vdrdgsdz/T/**)",
+      "Read(//tmp/**)",
+      "Bash(pkill -f \"system-recorder start\")",
+      "Bash(PID=$! sleep 5 touch /tmp/test-stop-debug sleep 2 echo \"=== STDERR ===\" cat /tmp/rec-stderr2.log)",
+      "Bash(afinfo /tmp/test-dbg2.m4a)",
+      "Bash(rm -f /tmp/test-stop-debug /tmp/test-dbg3.m4a)",
+      "Bash(/Users/s32747/Develop/obsidian-system-recording/system-recorder start:*)",
+      "Bash(afinfo /tmp/test-dbg8.m4a)",
+      "Bash(cp /Users/s32747/Develop/obsidian-system-recording/system-recorder /Users/s32747/vault/.obsidian/plugins/system-recording/system-recorder)",
+      "Bash(cp main.js /Users/s32747/vault/.obsidian/plugins/system-recording/main.js)"
+    ],
+    "additionalDirectories": [
+      "/Users/s32747/Develop/obsidian-system-recording/docs/superpowers",
+      "/tmp"
+    ]
+  }
+}

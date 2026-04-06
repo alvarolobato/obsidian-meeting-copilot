@@ -1,5 +1,6 @@
 import { ChildProcess, spawn } from "child_process";
 import * as path from "path";
+import * as fs from "fs";
 import { Plugin, Platform } from "obsidian";
 
 export interface RecorderStatus {
@@ -12,6 +13,7 @@ export interface RecorderStatus {
 export class Recorder {
     private process: ChildProcess | null = null;
     private _isRecording = false;
+    private stopFilePath: string | null = null;
 
     onStatus: ((status: RecorderStatus) => void) | null = null;
     onError: ((message: string) => void) | null = null;
@@ -36,7 +38,18 @@ export class Recorder {
         }
 
         const binaryPath = this.getBinaryPath(plugin);
-        const proc = spawn(binaryPath, ["start", "--output", outputPath]);
+        const stopFile = path.join(
+            require("os").tmpdir(),
+            `system-recorder-stop-${Date.now()}`
+        );
+        this.stopFilePath = stopFile;
+
+        const proc = spawn(binaryPath, [
+            "start", "--output", outputPath,
+            "--stop-file", stopFile,
+        ], {
+            stdio: ["ignore", "pipe", "pipe"],
+        });
         this.process = proc;
         this._isRecording = true;
 
@@ -69,21 +82,28 @@ export class Recorder {
             }
         });
 
-        proc.on("close", () => {
+        proc.on("close", (code: number | null) => {
+            const wasRecording = this._isRecording;
             this._isRecording = false;
             this.process = null;
+            this.stopFilePath = null;
+            if (wasRecording && code !== 0 && code !== null) {
+                this.onError?.(`Process exited with code ${code}`);
+            }
         });
 
         proc.on("error", (err: Error) => {
             this._isRecording = false;
             this.process = null;
+            this.stopFilePath = null;
             this.onError?.(err.message);
         });
     }
 
     stop(): void {
-        if (this.process && this._isRecording) {
-            this.process.kill("SIGINT");
+        if (this._isRecording && this.stopFilePath) {
+            // Create the stop file - the Swift CLI polls for this
+            fs.writeFileSync(this.stopFilePath, "stop");
         }
     }
 }

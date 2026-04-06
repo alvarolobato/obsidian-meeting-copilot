@@ -6,6 +6,7 @@ import CoreMedia
 @available(macOS 13.0, *)
 final class AudioCaptureManager: NSObject, @unchecked Sendable {
     private var stream: SCStream?
+    private var streamOutput: StreamOutput?
     private var audioEngine: AVAudioEngine?
 
     // Callbacks for captured audio buffers
@@ -41,13 +42,14 @@ final class AudioCaptureManager: NSObject, @unchecked Sendable {
         config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
 
         let stream = SCStream(filter: filter, configuration: config, delegate: nil)
-        let streamOutput = StreamOutput()
-        streamOutput.onAudioBuffer = { [weak self] sampleBuffer in
+        let output = StreamOutput()
+        output.onAudioBuffer = { [weak self] sampleBuffer in
             self?.onSystemAudio?(sampleBuffer)
         }
-        try stream.addStreamOutput(streamOutput, type: .audio, sampleHandlerQueue: .global())
+        try stream.addStreamOutput(output, type: .audio, sampleHandlerQueue: .global())
         try await stream.startCapture()
         self.stream = stream
+        self.streamOutput = output
 
         // 2. AVAudioEngine: microphone
         let audioEngine = AVAudioEngine()
