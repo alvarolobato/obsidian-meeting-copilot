@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 
 // MARK: - Argument parsing
 
@@ -12,6 +13,7 @@ guard args.count >= 4,
 }
 
 let outputPath = args[3]
+let outputURL = URL(fileURLWithPath: outputPath)
 
 // MARK: - JSON output helper
 
@@ -24,19 +26,71 @@ func emitJSON(_ dict: [String: Any]) {
 
 // MARK: - Signal handling
 
-let shouldStop = DispatchSemaphore(value: 0)
+nonisolated(unsafe) var stopRequested = false
+let stopSemaphore = DispatchSemaphore(value: 0)
 
 for sig: Int32 in [SIGINT, SIGHUP, SIGTERM] {
     signal(sig) { _ in
-        shouldStop.signal()
+        stopRequested = true
+        stopSemaphore.signal()
     }
 }
 
-emitJSON(["status": "recording", "duration": 0])
+// MARK: - Main recording logic
 
-// Placeholder: actual recording will be added in Task 3-4
-// For now, wait for signal
-shouldStop.wait()
+if #available(macOS 13.0, *) {
+    let captureManager = AudioCaptureManager()
+    let mixer: AudioMixer
 
-emitJSON(["status": "stopped", "duration": 0, "file": outputPath])
-exit(0)
+    do {
+        mixer = try AudioMixer(outputURL: outputURL)
+    } catch {
+        emitJSON(["status": "error", "message": "Failed to create audio writer: \(error.localizedDescription)"])
+        exit(1)
+    }
+
+    // Wire system audio → mixer
+    captureManager.onSystemAudio = { sampleBuffer in
+        mixer.appendSystemAudio(sampleBuffer)
+    }
+
+    // Start capture
+    let startTask = Task {
+        do {
+            try await captureManager.startCapture()
+            emitJSON(["status": "recording", "duration": 0])
+        } catch {
+            emitJSON(["status": "error", "message": "Failed to start capture: \(error.localizedDescription)"])
+            exit(1)
+        }
+    }
+
+    // Duration ticker - emit duration every second
+    let startDate = Date()
+    let ticker = DispatchSource.makeTimerSource(queue: .global())
+    ticker.schedule(deadline: .now() + 1, repeating: 1.0)
+    ticker.setEventHandler {
+        let elapsed = Int(Date().timeIntervalSince(startDate))
+        emitJSON(["status": "recording", "duration": elapsed])
+    }
+    ticker.resume()
+
+    // Wait for stop signal
+    stopSemaphore.wait()
+    ticker.cancel()
+
+    // Stop and finalize
+    let finalizeTask = Task {
+        await captureManager.stopCapture()
+        let duration = await mixer.finalize()
+        emitJSON(["status": "stopped", "duration": Int(duration), "file": outputPath])
+        exit(0)
+    }
+
+    // Keep run loop alive for async tasks
+    RunLoop.current.run(until: Date.distantFuture)
+
+} else {
+    emitJSON(["status": "error", "message": "macOS 13.0 or later is required"])
+    exit(1)
+}
