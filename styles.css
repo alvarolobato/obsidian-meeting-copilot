@@ -1,8 +1,9 @@
-/*
+.is-recording {
+    color: var(--text-error) !important;
+    animation: recording-pulse 1.5s ease-in-out infinite;
+}
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
-
-If your plugin does not need CSS, delete this file.
-
-*/
+@keyframes recording-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
