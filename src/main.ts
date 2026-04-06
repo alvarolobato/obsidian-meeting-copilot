@@ -1,99 +1,207 @@
-import {App, Editor, MarkdownView, Modal, Notice, Plugin} from 'obsidian';
-import {DEFAULT_SETTINGS, MyPluginSettings, SampleSettingTab} from "./settings";
+import { MarkdownView, Notice, Plugin } from "obsidian";
+import {
+    DEFAULT_SETTINGS,
+    SystemRecordingSettings,
+    SystemRecordingSettingTab,
+} from "./settings";
+import { Recorder, RecorderStatus } from "./recorder";
+import * as path from "path";
 
-// Remember to rename these classes and interfaces!
+export default class SystemRecordingPlugin extends Plugin {
+    settings: SystemRecordingSettings;
+    private recorder = new Recorder();
+    private statusBarEl: HTMLElement | null = null;
+    private durationInterval: number | null = null;
+    private recordingStartTime: number | null = null;
+    private ribbonIconEl: HTMLElement | null = null;
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+    async onload() {
+        await this.loadSettings();
 
-	async onload() {
-		await this.loadSettings();
+        // Ribbon icon
+        this.ribbonIconEl = this.addRibbonIcon(
+            "microphone",
+            "Toggle recording",
+            () => this.toggleRecording()
+        );
 
-		// This creates an icon in the left ribbon.
-		this.addRibbonIcon('dice', 'Sample', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
+        // Status bar
+        this.statusBarEl = this.addStatusBarItem();
+        this.statusBarEl.style.display = "none";
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status bar text');
+        // Commands
+        this.addCommand({
+            id: "start-recording",
+            name: "Start recording",
+            callback: () => this.startRecording(),
+        });
 
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-modal-simple',
-			name: 'Open modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'replace-selected',
-			name: 'Replace selected content',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				editor.replaceSelection('Sample editor command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-modal-complex',
-			name: 'Open modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
+        this.addCommand({
+            id: "stop-recording",
+            name: "Stop recording",
+            callback: () => this.stopRecording(),
+        });
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-				return false;
-			}
-		});
+        // Settings tab
+        this.addSettingTab(new SystemRecordingSettingTab(this.app, this));
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
+        // Recorder callbacks
+        this.recorder.onStatus = (status: RecorderStatus) =>
+            this.handleStatus(status);
+        this.recorder.onError = (message: string) =>
+            new Notice(`Recording error: ${message}`);
+    }
 
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			new Notice("Click");
-		});
+    onunload() {
+        if (this.recorder.isRecording) {
+            this.recorder.stop();
+        }
+        this.clearDurationTimer();
+    }
 
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
+    async loadSettings() {
+        this.settings = Object.assign(
+            {},
+            DEFAULT_SETTINGS,
+            await this.loadData()
+        );
+    }
 
-	}
+    async saveSettings() {
+        await this.saveData(this.settings);
+    }
 
-	onunload() {
-	}
+    // MARK: - Recording control
 
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<MyPluginSettings>);
-	}
+    private toggleRecording() {
+        if (this.recorder.isRecording) {
+            this.stopRecording();
+        } else {
+            this.startRecording();
+        }
+    }
 
-	async saveSettings() {
-		await this.saveData(this.settings);
-	}
-}
+    private async startRecording() {
+        if (this.recorder.isRecording) {
+            new Notice("Already recording");
+            return;
+        }
 
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
+        // Ensure recording folder exists
+        const folder = this.settings.recordingFolder;
+        const adapter = this.app.vault.adapter;
+        if (!(await adapter.exists(folder))) {
+            await adapter.mkdir(folder);
+        }
 
-	onOpen() {
-		let {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
+        // Generate file name
+        const fileName = this.formatFileName(this.settings.fileNameTemplate);
+        const relativePath = `${folder}/${fileName}.m4a`;
+        const vaultBasePath = (adapter as any).getBasePath() as string;
+        const absolutePath = path.join(vaultBasePath, relativePath);
 
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
+        // Start recording
+        this.recorder.start(this, absolutePath);
+        this.recordingStartTime = Date.now();
+        this.startDurationTimer();
+        this.updateRibbonIcon(true);
+
+        new Notice("Recording started");
+    }
+
+    private stopRecording() {
+        if (!this.recorder.isRecording) {
+            new Notice("Not recording");
+            return;
+        }
+
+        this.recorder.stop();
+        new Notice("Stopping recording...");
+    }
+
+    // MARK: - Status handling
+
+    private handleStatus(status: RecorderStatus) {
+        if (status.status === "stopped" && status.file) {
+            this.clearDurationTimer();
+            this.updateRibbonIcon(false);
+            this.hideStatusBar();
+
+            // Insert link into current note
+            const fileName = path.basename(status.file);
+            this.insertRecordingLink(fileName);
+            new Notice("Recording saved");
+        } else if (status.status === "error") {
+            this.clearDurationTimer();
+            this.updateRibbonIcon(false);
+            this.hideStatusBar();
+            new Notice(`Recording error: ${status.message ?? "Unknown error"}`);
+        }
+    }
+
+    // MARK: - UI helpers
+
+    private startDurationTimer() {
+        if (this.statusBarEl) {
+            this.statusBarEl.style.display = "";
+        }
+
+        this.durationInterval = window.setInterval(() => {
+            if (!this.recordingStartTime || !this.statusBarEl) return;
+            const elapsed = Math.floor(
+                (Date.now() - this.recordingStartTime) / 1000
+            );
+            const h = String(Math.floor(elapsed / 3600)).padStart(2, "0");
+            const m = String(Math.floor((elapsed % 3600) / 60)).padStart(2, "0");
+            const s = String(elapsed % 60).padStart(2, "0");
+            this.statusBarEl.setText(`Recording ${h}:${m}:${s}`);
+        }, 1000);
+
+        this.registerInterval(this.durationInterval);
+    }
+
+    private clearDurationTimer() {
+        if (this.durationInterval !== null) {
+            window.clearInterval(this.durationInterval);
+            this.durationInterval = null;
+        }
+    }
+
+    private hideStatusBar() {
+        if (this.statusBarEl) {
+            this.statusBarEl.style.display = "none";
+            this.statusBarEl.setText("");
+        }
+    }
+
+    private updateRibbonIcon(recording: boolean) {
+        if (this.ribbonIconEl) {
+            if (recording) {
+                this.ribbonIconEl.addClass("is-recording");
+            } else {
+                this.ribbonIconEl.removeClass("is-recording");
+            }
+        }
+    }
+
+    private insertRecordingLink(fileName: string) {
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (view) {
+            const editor = view.editor;
+            const cursor = editor.getCursor();
+            editor.replaceRange(`![[${fileName}]]\n`, cursor);
+        }
+    }
+
+    // MARK: - Helpers
+
+    private formatFileName(template: string): string {
+        const now = new Date();
+        return template
+            .replace("YYYY", String(now.getFullYear()))
+            .replace("MM", String(now.getMonth() + 1).padStart(2, "0"))
+            .replace("DD", String(now.getDate()).padStart(2, "0"))
+            .replace("HH", String(now.getHours()).padStart(2, "0"))
+            .replace("mm", String(now.getMinutes()).padStart(2, "0"));
+    }
 }
