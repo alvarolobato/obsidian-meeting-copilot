@@ -12,7 +12,8 @@ import * as path from "path";
 export default class SystemRecordingPlugin extends Plugin {
     settings: SystemRecordingSettings;
     private recorder = new Recorder();
-	private provisioner = new BinaryProvisioner(nodeDeps());
+    private provisioner = new BinaryProvisioner(nodeDeps());
+    private starting = false;
     private statusBarEl: HTMLElement | null = null;
     private durationInterval: number | null = null;
     private recordingStartTime: number | null = null;
@@ -85,52 +86,62 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     private async startRecording() {
-		if (this.recorder.isRecording) {
-			new Notice("Already recording");
-			return;
-		}
+        if (this.recorder.isRecording) {
+            new Notice("Already recording");
+            return;
+        }
 
-		if (!Platform.isMacOS) {
-			new Notice("System recording is only supported on macOS");
-			return;
-		}
+        // A start is already in progress (binary provisioning may be awaiting)
+        if (this.starting) {
+            return;
+        }
 
-		// Ensure the recorder helper binary is present and verified
-		let binaryPath: string;
-		try {
-			binaryPath = await this.provisioner.ensure(
-				resolveBinaryPath(this),
-				this.manifest.version,
-				() => new Notice("Downloading recorder helper…")
-			);
-		} catch (e) {
-			new Notice((e as Error).message);
-			return;
-		}
+        if (!Platform.isMacOS) {
+            new Notice("System recording is only supported on macOS");
+            return;
+        }
 
-		// Ensure recording folder exists
-		const folder = this.settings.recordingFolder;
-		const adapter = this.app.vault.adapter;
-		if (!(await adapter.exists(folder))) {
-			await adapter.mkdir(folder);
-		}
+        this.starting = true;
+        try {
+            // Ensure the recorder helper binary is present and verified
+            let binaryPath: string;
+            try {
+                binaryPath = await this.provisioner.ensure(
+                    resolveBinaryPath(this),
+                    this.manifest.version,
+                    () => new Notice("Downloading recorder helper…")
+                );
+            } catch (e) {
+                new Notice(e instanceof Error ? e.message : String(e));
+                return;
+            }
 
-		// Generate file name
-		const fileName = this.formatFileName(this.settings.fileNameTemplate);
-		const relativePath = `${folder}/${fileName}.wav`;
-		// Obsidian's FileSystemAdapter has getBasePath() but it's not in the public type
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-		const vaultBasePath = (adapter as any).getBasePath() as string;
-		const absolutePath = path.join(vaultBasePath, relativePath);
+            // Ensure recording folder exists
+            const folder = this.settings.recordingFolder;
+            const adapter = this.app.vault.adapter;
+            if (!(await adapter.exists(folder))) {
+                await adapter.mkdir(folder);
+            }
 
-		// Start recording
-		this.recorder.start(binaryPath, absolutePath);
-		this.recordingStartTime = Date.now();
-		this.startDurationTimer();
-		this.updateRibbonIcon(true);
+            // Generate file name
+            const fileName = this.formatFileName(this.settings.fileNameTemplate);
+            const relativePath = `${folder}/${fileName}.wav`;
+            // Obsidian's FileSystemAdapter has getBasePath() but it's not in the public type
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            const vaultBasePath = (adapter as any).getBasePath() as string;
+            const absolutePath = path.join(vaultBasePath, relativePath);
 
-		new Notice("Recording started");
-	}
+            // Start recording
+            this.recorder.start(binaryPath, absolutePath);
+            this.recordingStartTime = Date.now();
+            this.startDurationTimer();
+            this.updateRibbonIcon(true);
+
+            new Notice("Recording started");
+        } finally {
+            this.starting = false;
+        }
+    }
 
     private stopRecording() {
         if (!this.recorder.isRecording) {
