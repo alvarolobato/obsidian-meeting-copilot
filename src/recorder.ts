@@ -2,7 +2,6 @@ import { ChildProcess, spawn } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
-import { Plugin, Platform } from "obsidian";
 
 export interface RecorderStatus {
     status: "recording" | "stopped" | "error";
@@ -23,22 +22,9 @@ export class Recorder {
         return this._isRecording;
     }
 
-    private getBinaryPath(plugin: Plugin): string {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-        const basePath = (plugin.app.vault.adapter as any).getBasePath() as string;
-        const pluginDir = basePath + "/" + plugin.manifest.dir;
-        return path.join(pluginDir, "system-recorder");
-    }
-
-    start(plugin: Plugin, outputPath: string): void {
+    start(binaryPath: string, outputPath: string): void {
         if (this._isRecording) return;
 
-        if (!Platform.isMacOS) {
-            this.onError?.("System recording is only supported on macOS");
-            return;
-        }
-
-        const binaryPath = this.getBinaryPath(plugin);
         const stopFile = path.join(
             os.tmpdir(),
             `system-recorder-stop-${Date.now()}`

@@ -1,15 +1,18 @@
-import { MarkdownView, Notice, Plugin } from "obsidian";
+import { MarkdownView, Notice, Platform, Plugin } from "obsidian";
 import {
     DEFAULT_SETTINGS,
     SystemRecordingSettings,
     SystemRecordingSettingTab,
 } from "./settings";
 import { Recorder, RecorderStatus } from "./recorder";
+import { BinaryProvisioner } from "./binary";
+import { nodeDeps, resolveBinaryPath } from "./binary-runtime";
 import * as path from "path";
 
 export default class SystemRecordingPlugin extends Plugin {
     settings: SystemRecordingSettings;
     private recorder = new Recorder();
+	private provisioner = new BinaryProvisioner(nodeDeps());
     private statusBarEl: HTMLElement | null = null;
     private durationInterval: number | null = null;
     private recordingStartTime: number | null = null;
@@ -82,34 +85,52 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     private async startRecording() {
-        if (this.recorder.isRecording) {
-            new Notice("Already recording");
-            return;
-        }
+		if (this.recorder.isRecording) {
+			new Notice("Already recording");
+			return;
+		}
 
-        // Ensure recording folder exists
-        const folder = this.settings.recordingFolder;
-        const adapter = this.app.vault.adapter;
-        if (!(await adapter.exists(folder))) {
-            await adapter.mkdir(folder);
-        }
+		if (!Platform.isMacOS) {
+			new Notice("System recording is only supported on macOS");
+			return;
+		}
 
-        // Generate file name
-        const fileName = this.formatFileName(this.settings.fileNameTemplate);
-        const relativePath = `${folder}/${fileName}.wav`;
-        // Obsidian's FileSystemAdapter has getBasePath() but it's not in the public type
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-        const vaultBasePath = (adapter as any).getBasePath() as string;
-        const absolutePath = path.join(vaultBasePath, relativePath);
+		// Ensure the recorder helper binary is present and verified
+		let binaryPath: string;
+		try {
+			binaryPath = await this.provisioner.ensure(
+				resolveBinaryPath(this),
+				this.manifest.version,
+				() => new Notice("Downloading recorder helper…")
+			);
+		} catch (e) {
+			new Notice((e as Error).message);
+			return;
+		}
 
-        // Start recording
-        this.recorder.start(this, absolutePath);
-        this.recordingStartTime = Date.now();
-        this.startDurationTimer();
-        this.updateRibbonIcon(true);
+		// Ensure recording folder exists
+		const folder = this.settings.recordingFolder;
+		const adapter = this.app.vault.adapter;
+		if (!(await adapter.exists(folder))) {
+			await adapter.mkdir(folder);
+		}
 
-        new Notice("Recording started");
-    }
+		// Generate file name
+		const fileName = this.formatFileName(this.settings.fileNameTemplate);
+		const relativePath = `${folder}/${fileName}.wav`;
+		// Obsidian's FileSystemAdapter has getBasePath() but it's not in the public type
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+		const vaultBasePath = (adapter as any).getBasePath() as string;
+		const absolutePath = path.join(vaultBasePath, relativePath);
+
+		// Start recording
+		this.recorder.start(binaryPath, absolutePath);
+		this.recordingStartTime = Date.now();
+		this.startDurationTimer();
+		this.updateRibbonIcon(true);
+
+		new Notice("Recording started");
+	}
 
     private stopRecording() {
         if (!this.recorder.isRecording) {
