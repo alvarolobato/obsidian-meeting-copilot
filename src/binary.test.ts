@@ -13,6 +13,7 @@ function makeDeps(overrides: Partial<ProvisionerDeps> = {}): ProvisionerDeps {
 		writeFile: async () => undefined,
 		chmod: async () => undefined,
 		rename: async () => undefined,
+		unlink: async () => undefined,
 		download: async () => Buffer.from("downloaded"),
 		sha256: () => VALID,
 		...overrides,
@@ -95,6 +96,18 @@ describe("BinaryProvisioner", () => {
 		await new BinaryProvisioner(makeDeps({ fileExists: async () => false, sha256: () => VALID }), VALID)
 			.ensure(BIN, VERSION, cb);
 		expect(cb).toHaveBeenCalledOnce();
+	});
+
+	it("removes the temp file when installation fails", async () => {
+		const unlink = vi.fn(async () => undefined);
+		const deps = makeDeps({
+			fileExists: async () => false,
+			sha256: () => VALID,
+			chmod: async () => { throw new Error("EACCES"); },
+			unlink,
+		});
+		await expect(new BinaryProvisioner(deps, VALID).ensure(BIN, VERSION)).rejects.toThrow("EACCES");
+		expect(unlink).toHaveBeenCalledWith(`${BIN}.tmp`);
 	});
 
 	it("dedupes concurrent ensure calls into a single download", async () => {
