@@ -21,6 +21,8 @@ export function nodeDeps(): ProvisionerDeps {
 		rename: (from, to) => fsp.rename(from, to),
 		unlink: (p) => fsp.unlink(p),
 		download: async (url) => {
+			// requestUrl follows redirects automatically (GitHub release assets 302 to a CDN);
+			// res.status is the final response code.
 			const res = await requestUrl({ url, method: "GET", throw: false });
 			if (res.status !== 200) {
 				throw new Error(`HTTP ${res.status}`);
