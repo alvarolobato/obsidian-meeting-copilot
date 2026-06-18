@@ -62,7 +62,7 @@ src/
 ## データフロー
 
 1. **起動**: 設定・トークンを読み込む。認証済み かつ 自動録音ON なら `scheduler.start()`。
-2. **ポーリング（既定 5 分毎 + 起動直後）**: `listEvents` で直近の予定（窓 = now 〜 now+数時間）を取得 → `shouldRecord` で除外フィルタ → 結果をキャッシュ（id, summary, start, end, meetLink）。
+2. **ポーリング（既定 5 分毎 + 起動直後）**: `listEvents` で直近の予定（窓 = `now - grace` 〜 `now + 24時間`、`maxResults=50`）を取得 → `shouldRecord` で除外フィルタ → 結果をキャッシュ（id, summary, start, end, meetLink）。窓の下端を `now - grace` にするのは、ポーリング直前に開始したばかりの予定も取りこぼさないため。
 3. **ティック（既定 20〜30 秒毎）**: キャッシュ各予定を現在時刻と照合。状態 `Map<eventId, {started: boolean, ended: boolean}>` で重複発火を防止。
    - **開始検知**（`now >= start` かつ start 未発火 かつ `now - start < grace`）: `onEventStart(event)` を発火 → start を記録。
    - **終了検知**（`now >= end` かつ end 未発火 かつ `now - end < grace`）: `onEventEnd(event)` を発火 → end を記録。
