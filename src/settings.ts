@@ -68,8 +68,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     })
             );
 
-		// eslint-disable-next-line obsidianmd/ui/sentence-case
-		containerEl.createEl("h3", { text: "Google カレンダー連携" });
+		new Setting(containerEl).setName("Google カレンダー連携").setHeading();
 
 		new Setting(containerEl)
 			// eslint-disable-next-line obsidianmd/ui/sentence-case
@@ -101,19 +100,15 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 			});
 
 		new Setting(containerEl)
-			// eslint-disable-next-line obsidianmd/ui/sentence-case
 			.setName("Google 認証")
 			.setDesc(
 				this.plugin.isCalendarAuthenticated()
-					// eslint-disable-next-line obsidianmd/ui/sentence-case
 					? "認証済み。再認証するとトークンを更新します。"
-					// eslint-disable-next-line obsidianmd/ui/sentence-case
 					: "未認証。Client ID / Secret を設定してから認証してください。"
 			)
 			.addButton((btn) =>
 				btn
 					.setButtonText(
-						// eslint-disable-next-line obsidianmd/ui/sentence-case
 						this.plugin.isCalendarAuthenticated() ? "再認証" : "認証する"
 					)
 					.setCta()
@@ -124,9 +119,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			// eslint-disable-next-line obsidianmd/ui/sentence-case
 			.setName("カレンダー自動録音")
-			// eslint-disable-next-line obsidianmd/ui/sentence-case
 			.setDesc("予定の開始時刻に録音開始の通知を出します。")
 			.addToggle((toggle) =>
 				toggle
@@ -139,12 +132,11 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			// eslint-disable-next-line obsidianmd/ui/sentence-case
 			.setName("対象カレンダー ID")
-			// eslint-disable-next-line obsidianmd/ui/sentence-case
 			.setDesc("監視するカレンダーの ID。既定の primary はメインカレンダー。")
 			.addText((text) =>
 				text
+					// eslint-disable-next-line obsidianmd/ui/sentence-case
 					.setPlaceholder("primary")
 					.setValue(this.plugin.settings.calendarId)
 					.onChange(async (value) => {
@@ -154,9 +146,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			// eslint-disable-next-line obsidianmd/ui/sentence-case
 			.setName("除外キーワード")
-			// eslint-disable-next-line obsidianmd/ui/sentence-case
 			.setDesc("タイトルにこれらの語を含む予定は録音しません（改行またはカンマ区切り、大文字小文字無視）。")
 			.addTextArea((ta) =>
 				ta
@@ -168,7 +158,6 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			// eslint-disable-next-line obsidianmd/ui/sentence-case
 			.setName("Meet を自動で開く")
 			// eslint-disable-next-line obsidianmd/ui/sentence-case
 			.setDesc("予定の開始時刻に Google Meet リンクをブラウザで開きます。")
