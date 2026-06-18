@@ -100,8 +100,7 @@ export class GoogleOAuth {
 			code_challenge: codeChallenge,
 			code_challenge_method: "S256",
 		});
-		// eslint-disable-next-line obsidianmd/ui/sentence-case
-		new Notice("ブラウザで Google 認証を開きます…");
+		new Notice("Google 認証をブラウザで開きます…");
 		window.open(`${AUTH_URL}?${authParams.toString()}`, "_blank");
 
 		let code: string;
@@ -146,8 +145,7 @@ export class GoogleOAuth {
 			expires_at: Date.now() + json.expires_in * 1000,
 			scope: json.scope,
 		});
-		// eslint-disable-next-line obsidianmd/ui/sentence-case
-		new Notice("✅ Google Calendar 認証完了");
+		new Notice("✅ カレンダー認証が完了しました");
 	}
 }
 
@@ -211,11 +209,11 @@ function startLoopbackServer(expectedState: string): Promise<LoopbackResult> {
 				reject(new Error("Failed to determine loopback port"));
 				return;
 			}
-			const timer = setTimeout(() => {
+			const timer = window.setTimeout(() => {
 				rejectCode(new Error("認証がタイムアウトしました (5分)。"));
 			}, 5 * 60 * 1000);
 			const close = () => {
-				clearTimeout(timer);
+				window.clearTimeout(timer);
 				server.close();
 			};
 			resolve({ port: addr.port, codePromise, close });

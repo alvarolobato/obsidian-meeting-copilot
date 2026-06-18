@@ -5,11 +5,13 @@ import { Notice } from "obsidian";
  * Clicking the button runs `onClick` and dismisses the notice.
  */
 export function actionNotice(message: string, buttonLabel: string, onClick: () => void): Notice {
-	const frag = document.createDocumentFragment();
+	const frag = window.activeDocument.createDocumentFragment();
 	const container = frag.createDiv();
 	container.createSpan({ text: message });
-	const btn = container.createEl("button", { text: buttonLabel, cls: "mod-cta" });
-	btn.setCssProps({ "margin-inline-start": "8px" });
+	const btn = container.createEl("button", {
+		text: buttonLabel,
+		cls: ["mod-cta", "system-recording-notice-button"],
+	});
 	const notice = new Notice(frag, 0);
 	btn.addEventListener("click", () => {
 		onClick();
