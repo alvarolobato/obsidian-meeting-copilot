@@ -223,12 +223,18 @@ export default class SystemRecordingPlugin extends Plugin {
 					onEventStart: (event) => this.handleEventStart(event),
 					onEventEnd: (event) => this.handleEventEnd(event),
 					onError: (message) => new Notice(`Calendar error: ${message}`),
+					registerInterval: (id) => this.registerInterval(id),
 				});
 			}
 			if (!this.scheduler.isRunning) this.scheduler.start();
 		} else {
 			this.scheduler?.stop();
 		}
+	}
+
+	/** Re-poll the calendar immediately (e.g. after changing the target calendar). No-op if not running. */
+	refreshCalendarNow(): void {
+		void this.scheduler?.poll();
 	}
 
 	private async fetchCalendarEvents(

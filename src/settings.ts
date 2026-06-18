@@ -134,7 +134,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("対象カレンダー ID")
 			.setDesc("監視するカレンダーの ID。既定の primary はメインカレンダー。")
-			.addText((text) =>
+			.addText((text) => {
 				text
 					// eslint-disable-next-line obsidianmd/ui/sentence-case
 					.setPlaceholder("primary")
@@ -142,8 +142,12 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.calendarId = value.trim() || "primary";
 						await this.plugin.saveSettings();
-					})
-			);
+					});
+				// Re-poll immediately once the user finishes editing (avoids per-keystroke API calls).
+				this.plugin.registerDomEvent(text.inputEl, "blur", () => {
+					this.plugin.refreshCalendarNow();
+				});
+			});
 
 		new Setting(containerEl)
 			.setName("除外キーワード")

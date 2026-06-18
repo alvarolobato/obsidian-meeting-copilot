@@ -87,4 +87,20 @@ describe("CalendarScheduler", () => {
 		s.tick();
 		expect(deps.onEventStart).toHaveBeenCalledTimes(2);
 	});
+
+	it("registers both intervals via registerInterval and clears them on stop", () => {
+		let seq = 0;
+		const setInterval = vi.fn(() => ++seq);
+		const clearInterval = vi.fn();
+		vi.stubGlobal("window", { setInterval, clearInterval });
+		const registerInterval = vi.fn();
+		const s = new CalendarScheduler(makeDeps({ v: T }, [], { registerInterval }));
+		s.start(1000, 2000);
+		expect(setInterval).toHaveBeenCalledTimes(2);
+		expect(registerInterval).toHaveBeenNthCalledWith(1, 1);
+		expect(registerInterval).toHaveBeenNthCalledWith(2, 2);
+		s.stop();
+		expect(clearInterval).toHaveBeenCalledTimes(2);
+		vi.unstubAllGlobals();
+	});
 });

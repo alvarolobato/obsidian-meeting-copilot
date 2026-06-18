@@ -12,6 +12,8 @@ export interface SchedulerDeps {
 	onEventStart: (event: ScheduledEvent) => void;
 	onEventEnd: (event: ScheduledEvent) => void;
 	onError?: (message: string) => void;
+	/** Optional hook to register each interval with the plugin lifecycle (auto-cleared on unload). */
+	registerInterval?: (id: number) => void;
 }
 
 /** A boundary fires only if the clock is at/after it but within this window. */
@@ -72,7 +74,9 @@ export class CalendarScheduler {
 		if (this.pollTimer !== null) return;
 		void this.poll();
 		this.pollTimer = window.setInterval(() => void this.poll(), pollIntervalMs);
+		this.deps.registerInterval?.(this.pollTimer);
 		this.tickTimer = window.setInterval(() => this.tick(), tickIntervalMs);
+		this.deps.registerInterval?.(this.tickTimer);
 	}
 
 	stop(): void {
