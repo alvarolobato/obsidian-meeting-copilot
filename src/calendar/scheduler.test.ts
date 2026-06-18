@@ -31,7 +31,7 @@ describe("CalendarScheduler", () => {
 		s.tick();
 		s.tick(); // second tick must not re-fire
 		expect(deps.onEventStart).toHaveBeenCalledTimes(1);
-		expect((deps.onEventStart as any).mock.calls[0][0].id).toBe("e1");
+		expect(deps.onEventStart).toHaveBeenCalledWith(expect.objectContaining({ id: "e1" }));
 	});
 
 	it("fires onEventEnd once when the clock crosses the end within grace", async () => {
