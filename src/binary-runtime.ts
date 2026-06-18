@@ -1,4 +1,4 @@
-import { requestUrl, type Plugin } from "obsidian";
+import { FileSystemAdapter, requestUrl, type Plugin } from "obsidian";
 import * as fsp from "fs/promises";
 import * as path from "path";
 import * as crypto from "crypto";
@@ -34,8 +34,7 @@ export function nodeDeps(): ProvisionerDeps {
 }
 
 export function resolveBinaryPath(plugin: Plugin): string {
-	// FileSystemAdapter exposes getBasePath() but it is not in the public type
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-	const basePath = (plugin.app.vault.adapter as any).getBasePath() as string;
+	const adapter = plugin.app.vault.adapter;
+	const basePath = adapter instanceof FileSystemAdapter ? adapter.getBasePath() : "";
 	return path.join(basePath, plugin.manifest.dir ?? "", "system-recorder");
 }

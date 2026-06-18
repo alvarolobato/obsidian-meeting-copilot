@@ -1,4 +1,4 @@
-import { MarkdownView, Notice, Platform, Plugin } from "obsidian";
+import { FileSystemAdapter, MarkdownView, Notice, Platform, Plugin } from "obsidian";
 import {
     DEFAULT_SETTINGS,
     SystemRecordingSettings,
@@ -69,8 +69,7 @@ export default class SystemRecordingPlugin extends Plugin {
 
 		this.addCommand({
 			id: "authenticate-google-calendar",
-			// eslint-disable-next-line obsidianmd/ui/sentence-case
-			name: "Authenticate Google Calendar",
+			name: "Authenticate calendar",
 			callback: () => void this.authenticateCalendar(),
 		});
 
@@ -83,8 +82,8 @@ export default class SystemRecordingPlugin extends Plugin {
 				this.updateScheduler();
 				new Notice(
 					this.settings.calendarAutoRecord
-						? "カレンダー自動録音: ON"
-						: "カレンダー自動録音: OFF"
+						? "カレンダー自動録音を有効化しました"
+						: "カレンダー自動録音を無効化しました"
 				);
 			},
 		});
@@ -169,9 +168,8 @@ export default class SystemRecordingPlugin extends Plugin {
             // Generate file name
             const fileName = this.formatFileName(this.settings.fileNameTemplate);
             const relativePath = `${folder}/${fileName}.wav`;
-            // Obsidian's FileSystemAdapter has getBasePath() but it's not in the public type
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-            const vaultBasePath = (adapter as any).getBasePath() as string;
+            const vaultBasePath =
+                adapter instanceof FileSystemAdapter ? adapter.getBasePath() : "";
             const absolutePath = path.join(vaultBasePath, relativePath);
 
             // Start recording

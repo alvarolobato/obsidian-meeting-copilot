@@ -54,13 +54,10 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         new Setting(containerEl)
             .setName("File name template")
             .setDesc(
-                // eslint-disable-next-line obsidianmd/ui/sentence-case
-                "File name format. YYYY, MM, DD, HH, mm, ss are replaced with date and time."
+                "File name format. Tokens `YYYY MM DD HH mm ss` are replaced with the date and time."
             )
             .addText((text) =>
                 text
-                    // eslint-disable-next-line obsidianmd/ui/sentence-case
-                    .setPlaceholder("Recording-YYYY-MM-DD-HHmmss")
                     .setValue(this.plugin.settings.fileNameTemplate)
                     .onChange(async (value) => {
                         this.plugin.settings.fileNameTemplate = value;
@@ -71,10 +68,8 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 		new Setting(containerEl).setName("Google カレンダー連携").setHeading();
 
 		new Setting(containerEl)
-			// eslint-disable-next-line obsidianmd/ui/sentence-case
-			.setName("OAuth Client ID")
-			// eslint-disable-next-line obsidianmd/ui/sentence-case
-			.setDesc("Google Cloud で作成した OAuth クライアントの Client ID。")
+			.setName("クライアント ID")
+			.setDesc("Google で発行したクライアント ID。")
 			.addText((text) =>
 				text
 					.setValue(this.plugin.settings.googleClientId)
@@ -85,10 +80,8 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			// eslint-disable-next-line obsidianmd/ui/sentence-case
-			.setName("OAuth Client Secret")
-			// eslint-disable-next-line obsidianmd/ui/sentence-case
-			.setDesc("OAuth クライアントの Client Secret。")
+			.setName("クライアントシークレット")
+			.setDesc("Google で発行したクライアントシークレット。")
 			.addText((text) => {
 				text.inputEl.type = "password";
 				text
@@ -104,7 +97,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 			.setDesc(
 				this.plugin.isCalendarAuthenticated()
 					? "認証済み。再認証するとトークンを更新します。"
-					: "未認証。Client ID / Secret を設定してから認証してください。"
+					: "未認証。クライアント ID とシークレットを設定してから認証してください。"
 			)
 			.addButton((btn) =>
 				btn
@@ -136,8 +129,6 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 			.setDesc("監視するカレンダーの ID。既定の primary はメインカレンダー。")
 			.addText((text) => {
 				text
-					// eslint-disable-next-line obsidianmd/ui/sentence-case
-					.setPlaceholder("primary")
 					.setValue(this.plugin.settings.calendarId)
 					.onChange(async (value) => {
 						this.plugin.settings.calendarId = value.trim() || "primary";
@@ -163,8 +154,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Meet を自動で開く")
-			// eslint-disable-next-line obsidianmd/ui/sentence-case
-			.setDesc("予定の開始時刻に Google Meet リンクをブラウザで開きます。")
+			.setDesc("予定に会議リンクがあれば開始時刻にブラウザで開きます。")
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.openMeetAutomatically)
