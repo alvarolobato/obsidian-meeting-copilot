@@ -1,6 +1,7 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import SystemRecordingPlugin from "./main";
 import type { StoredTokens } from "./auth/googleOAuth";
+import { t } from "./i18n";
 
 export interface SystemRecordingSettings {
 	recordingFolder: string;
@@ -36,14 +37,15 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 
     display(): void {
         const { containerEl } = this;
+        const s = t();
         containerEl.empty();
 
         new Setting(containerEl)
-            .setName("Recording folder")
-            .setDesc("Folder in your vault to save recordings.")
+            .setName(s.settings.recordingFolder.name)
+            .setDesc(s.settings.recordingFolder.desc)
             .addText((text) =>
                 text
-                    .setPlaceholder("Recordings")
+                    .setPlaceholder(s.settings.recordingFolder.placeholder)
                     .setValue(this.plugin.settings.recordingFolder)
                     .onChange(async (value) => {
                         this.plugin.settings.recordingFolder = value;
@@ -52,10 +54,8 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
             );
 
         new Setting(containerEl)
-            .setName("File name template")
-            .setDesc(
-                "File name format. Tokens `YYYY MM DD HH mm ss` are replaced with the date and time."
-            )
+            .setName(s.settings.fileNameTemplate.name)
+            .setDesc(s.settings.fileNameTemplate.desc)
             .addText((text) =>
                 text
                     .setValue(this.plugin.settings.fileNameTemplate)
@@ -65,11 +65,11 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     })
             );
 
-		new Setting(containerEl).setName("Google カレンダー連携").setHeading();
+		new Setting(containerEl).setName(s.settings.calendarHeading).setHeading();
 
 		new Setting(containerEl)
-			.setName("クライアント ID")
-			.setDesc("Google で発行したクライアント ID。")
+			.setName(s.settings.clientId.name)
+			.setDesc(s.settings.clientId.desc)
 			.addText((text) =>
 				text
 					.setValue(this.plugin.settings.googleClientId)
@@ -80,8 +80,8 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("クライアントシークレット")
-			.setDesc("Google で発行したクライアントシークレット。")
+			.setName(s.settings.clientSecret.name)
+			.setDesc(s.settings.clientSecret.desc)
 			.addText((text) => {
 				text.inputEl.type = "password";
 				text
@@ -93,16 +93,18 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 			});
 
 		new Setting(containerEl)
-			.setName("Google 認証")
+			.setName(s.settings.googleAuth.name)
 			.setDesc(
 				this.plugin.isCalendarAuthenticated()
-					? "認証済み。再認証するとトークンを更新します。"
-					: "未認証。クライアント ID とシークレットを設定してから認証してください。"
+					? s.settings.googleAuth.descAuthenticated
+					: s.settings.googleAuth.descUnauthenticated
 			)
 			.addButton((btn) =>
 				btn
 					.setButtonText(
-						this.plugin.isCalendarAuthenticated() ? "再認証" : "認証する"
+						this.plugin.isCalendarAuthenticated()
+							? s.settings.googleAuth.buttonReauthenticate
+							: s.settings.googleAuth.buttonAuthenticate
 					)
 					.setCta()
 					.onClick(async () => {
@@ -112,8 +114,8 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("カレンダー自動録音")
-			.setDesc("予定の開始時刻に録音開始の通知を出します。")
+			.setName(s.settings.calendarAutoRecord.name)
+			.setDesc(s.settings.calendarAutoRecord.desc)
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.calendarAutoRecord)
@@ -125,8 +127,8 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("対象カレンダー ID")
-			.setDesc("監視するカレンダーの ID。既定の primary はメインカレンダー。")
+			.setName(s.settings.targetCalendarId.name)
+			.setDesc(s.settings.targetCalendarId.desc)
 			.addText((text) => {
 				text
 					.setValue(this.plugin.settings.calendarId)
@@ -141,8 +143,8 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 			});
 
 		new Setting(containerEl)
-			.setName("除外キーワード")
-			.setDesc("タイトルにこれらの語を含む予定は録音しません（改行またはカンマ区切り、大文字小文字無視）。")
+			.setName(s.settings.exclusionKeywords.name)
+			.setDesc(s.settings.exclusionKeywords.desc)
 			.addTextArea((ta) =>
 				ta
 					.setValue(this.plugin.settings.exclusionKeywords)
@@ -153,8 +155,8 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Meet を自動で開く")
-			.setDesc("予定に会議リンクがあれば開始時刻にブラウザで開きます。")
+			.setName(s.settings.openMeet.name)
+			.setDesc(s.settings.openMeet.desc)
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.openMeetAutomatically)

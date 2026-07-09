@@ -1,6 +1,7 @@
 import { Notice, Platform, requestUrl } from "obsidian";
 import * as http from "http";
 import * as nodeUrl from "url";
+import { t } from "../i18n";
 
 export interface OAuthCredentials {
 	client_id: string;
@@ -35,7 +36,7 @@ export class GoogleOAuth {
 	/** Returns a valid access token, refreshing if it expires within 60s. */
 	async getAccessToken(): Promise<string> {
 		const tokens = this.storage.getTokens();
-		if (!tokens) throw new Error("認証されていません。コマンドパレットで認証してください。");
+		if (!tokens) throw new Error(t().oauth.notAuthenticated);
 		if (Date.now() < tokens.expires_at - 60_000) {
 			return tokens.access_token;
 		}
@@ -44,7 +45,7 @@ export class GoogleOAuth {
 
 	private async refresh(tokens: StoredTokens): Promise<string> {
 		const creds = this.storage.getCredentials();
-		if (!creds) throw new Error("OAuth credentials が未設定です。");
+		if (!creds) throw new Error(t().oauth.credentialsNotSet);
 		const body = new URLSearchParams({
 			client_id: creds.client_id,
 			client_secret: creds.client_secret,
@@ -75,11 +76,11 @@ export class GoogleOAuth {
 	/** Loopback + PKCE flow: opens the browser, captures the code locally, exchanges for tokens. Desktop only. */
 	async authenticate(): Promise<void> {
 		if (!Platform.isDesktop) {
-			throw new Error("OAuth認証はデスクトップ版のみ対応です。");
+			throw new Error(t().oauth.desktopOnly);
 		}
 		const creds = this.storage.getCredentials();
 		if (!creds) {
-			throw new Error("先に OAuth Client ID / Secret を設定してください。");
+			throw new Error(t().oauth.setCredentialsFirst);
 		}
 
 		const codeVerifier = randomString(32);
@@ -100,7 +101,7 @@ export class GoogleOAuth {
 			code_challenge: codeChallenge,
 			code_challenge_method: "S256",
 		});
-		new Notice("Google 認証をブラウザで開きます…");
+		new Notice(t().oauth.openingBrowser);
 		window.open(`${AUTH_URL}?${authParams.toString()}`, "_blank");
 
 		let code: string;
@@ -135,9 +136,7 @@ export class GoogleOAuth {
 			scope: string;
 		};
 		if (!json.refresh_token) {
-			throw new Error(
-				"refresh_token が返ってきません。OAuth 同意画面のテストユーザーに自分を追加して再試行してください。"
-			);
+			throw new Error(t().oauth.noRefreshToken);
 		}
 		await this.storage.setTokens({
 			access_token: json.access_token,
@@ -145,7 +144,7 @@ export class GoogleOAuth {
 			expires_at: Date.now() + json.expires_in * 1000,
 			scope: json.scope,
 		});
-		new Notice("✅ カレンダー認証が完了しました");
+		new Notice(t().oauth.authComplete);
 	}
 }
 
@@ -175,26 +174,24 @@ function startLoopbackServer(expectedState: string): Promise<LoopbackResult> {
 				const q = parsed.query;
 				if (q.error) {
 					res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
-					res.end(`<h1>OAuth エラー</h1><p>${escapeHtml(String(q.error))}</p>`);
+					res.end(t().oauth.htmlError(escapeHtml(String(q.error))));
 					rejectCode(new Error(`OAuth error: ${String(q.error)}`));
 					return;
 				}
 				if (q.state !== expectedState) {
 					res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
-					res.end(`<h1>state 不一致</h1>`);
+					res.end(t().oauth.htmlStateMismatch);
 					rejectCode(new Error("OAuth state mismatch"));
 					return;
 				}
 				if (typeof q.code !== "string") {
 					res.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
-					res.end(`<h1>code がありません</h1>`);
+					res.end(t().oauth.htmlCodeMissing);
 					rejectCode(new Error("OAuth code missing"));
 					return;
 				}
 				res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-				res.end(
-					`<!doctype html><html><head><title>認証完了</title></head><body style="font-family:system-ui;padding:40px;text-align:center;"><h1>✅ 認証完了</h1><p>このタブを閉じて Obsidian に戻ってください。</p></body></html>`
-				);
+				res.end(t().oauth.htmlSuccess);
 				resolveCode(q.code);
 			} catch (e) {
 				rejectCode(e as Error);
@@ -210,7 +207,7 @@ function startLoopbackServer(expectedState: string): Promise<LoopbackResult> {
 				return;
 			}
 			const timer = window.setTimeout(() => {
-				rejectCode(new Error("認証がタイムアウトしました (5分)。"));
+				rejectCode(new Error(t().oauth.timeout));
 			}, 5 * 60 * 1000);
 			const close = () => {
 				window.clearTimeout(timer);

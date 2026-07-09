@@ -13,6 +13,7 @@ import { listEvents } from "./calendar/googleCalendar";
 import { shouldRecord, parseKeywords } from "./calendar/eventFilter";
 import { CalendarScheduler, ScheduledEvent } from "./calendar/scheduler";
 import { actionNotice } from "./ui/actionNotice";
+import { t } from "./i18n";
 
 export default class SystemRecordingPlugin extends Plugin {
     settings: SystemRecordingSettings;
@@ -43,7 +44,7 @@ export default class SystemRecordingPlugin extends Plugin {
         // Ribbon icon
         this.ribbonIconEl = this.addRibbonIcon(
             "microphone",
-            "Toggle recording",
+            t().ribbon.toggleRecording,
             () => this.toggleRecording()
         );
 
@@ -54,13 +55,13 @@ export default class SystemRecordingPlugin extends Plugin {
         // Commands
         this.addCommand({
             id: "start-recording",
-            name: "Start recording",
+            name: t().commands.startRecording,
             callback: () => this.startRecording(),
         });
 
         this.addCommand({
             id: "stop-recording",
-            name: "Stop recording",
+            name: t().commands.stopRecording,
             callback: () => this.stopRecording(),
         });
 
@@ -69,21 +70,21 @@ export default class SystemRecordingPlugin extends Plugin {
 
 		this.addCommand({
 			id: "authenticate-google-calendar",
-			name: "Authenticate calendar",
+			name: t().commands.authenticateCalendar,
 			callback: () => void this.authenticateCalendar(),
 		});
 
 		this.addCommand({
 			id: "toggle-calendar-auto-recording",
-			name: "Toggle calendar auto-recording",
+			name: t().commands.toggleCalendarAutoRecording,
 			callback: async () => {
 				this.settings.calendarAutoRecord = !this.settings.calendarAutoRecord;
 				await this.saveSettings();
 				this.updateScheduler();
 				new Notice(
 					this.settings.calendarAutoRecord
-						? "カレンダー自動録音を有効化しました"
-						: "カレンダー自動録音を無効化しました"
+						? t().notices.autoRecordEnabled
+						: t().notices.autoRecordDisabled
 				);
 			},
 		});
@@ -92,7 +93,7 @@ export default class SystemRecordingPlugin extends Plugin {
         this.recorder.onStatus = (status: RecorderStatus) =>
             this.handleStatus(status);
         this.recorder.onError = (message: string) =>
-            new Notice(`Recording error: ${message}`);
+            new Notice(t().notices.recordingError(message));
 
 		this.updateScheduler();
     }
@@ -129,7 +130,7 @@ export default class SystemRecordingPlugin extends Plugin {
 
     private async startRecording() {
         if (this.recorder.isRecording) {
-            new Notice("Already recording");
+            new Notice(t().notices.alreadyRecording);
             return;
         }
 
@@ -139,7 +140,7 @@ export default class SystemRecordingPlugin extends Plugin {
         }
 
         if (!Platform.isMacOS) {
-            new Notice("System recording is only supported on macOS");
+            new Notice(t().notices.macOnly);
             return;
         }
 
@@ -151,7 +152,7 @@ export default class SystemRecordingPlugin extends Plugin {
                 binaryPath = await this.provisioner.ensure(
                     resolveBinaryPath(this),
                     this.manifest.version,
-                    () => new Notice("Downloading recorder helper…")
+                    () => new Notice(t().notices.downloadingHelper)
                 );
             } catch (e) {
                 new Notice(e instanceof Error ? e.message : String(e));
@@ -178,7 +179,7 @@ export default class SystemRecordingPlugin extends Plugin {
             this.startDurationTimer();
             this.updateRibbonIcon(true);
 
-            new Notice("Recording started");
+            new Notice(t().notices.recordingStarted);
         } finally {
             this.starting = false;
         }
@@ -186,12 +187,12 @@ export default class SystemRecordingPlugin extends Plugin {
 
     private stopRecording() {
         if (!this.recorder.isRecording) {
-            new Notice("Not recording");
+            new Notice(t().notices.notRecording);
             return;
         }
 
         this.recorder.stop();
-        new Notice("Stopping recording...");
+        new Notice(t().notices.stoppingRecording);
     }
 
 	// MARK: - Calendar integration
@@ -220,7 +221,7 @@ export default class SystemRecordingPlugin extends Plugin {
 					fetchEvents: (minMs, maxMs) => this.fetchCalendarEvents(minMs, maxMs),
 					onEventStart: (event) => this.handleEventStart(event),
 					onEventEnd: (event) => this.handleEventEnd(event),
-					onError: (message) => new Notice(`Calendar error: ${message}`),
+					onError: (message) => new Notice(t().notices.calendarError(message)),
 					registerInterval: (id) => this.registerInterval(id),
 				});
 			}
@@ -267,15 +268,23 @@ export default class SystemRecordingPlugin extends Plugin {
 		) {
 			window.open(event.meetLink, "_blank");
 		}
-		actionNotice(`「${event.summary}」が始まりました`, "録音開始", () => {
-			void this.startRecording();
-		});
+		actionNotice(
+			t().event.started(event.summary),
+			t().event.startRecordingAction,
+			() => {
+				void this.startRecording();
+			}
+		);
 	}
 
 	private handleEventEnd(event: ScheduledEvent): void {
-		actionNotice(`「${event.summary}」が終了しました`, "録音停止", () => {
-			this.stopRecording();
-		});
+		actionNotice(
+			t().event.ended(event.summary),
+			t().event.stopRecordingAction,
+			() => {
+				this.stopRecording();
+			}
+		);
 	}
 
     // MARK: - Status handling
@@ -289,12 +298,14 @@ export default class SystemRecordingPlugin extends Plugin {
             // Insert link into current note
             const fileName = path.basename(status.file);
             this.insertRecordingLink(fileName);
-            new Notice("Recording saved");
+            new Notice(t().notices.recordingSaved);
         } else if (status.status === "error") {
             this.clearDurationTimer();
             this.updateRibbonIcon(false);
             this.hideStatusBar();
-            new Notice(`Recording error: ${status.message ?? "Unknown error"}`);
+            new Notice(
+                t().notices.recordingError(status.message ?? t().notices.unknownError)
+            );
         }
     }
 
@@ -313,7 +324,7 @@ export default class SystemRecordingPlugin extends Plugin {
             const h = String(Math.floor(elapsed / 3600)).padStart(2, "0");
             const m = String(Math.floor((elapsed % 3600) / 60)).padStart(2, "0");
             const s = String(elapsed % 60).padStart(2, "0");
-            this.statusBarEl.setText(`Recording ${h}:${m}:${s}`);
+            this.statusBarEl.setText(t().statusBar.recording(`${h}:${m}:${s}`));
         }, 1000);
 
         this.registerInterval(this.durationInterval);
