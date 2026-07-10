@@ -234,7 +234,7 @@ export default class SystemRecordingPlugin extends Plugin {
                     await adapter.mkdir(folder);
                 }
                 const fileName = this.formatFileName(this.settings.fileNameTemplate);
-                relativePath = `${folder}/${fileName}.wav`;
+                relativePath = await this.uniqueWavPath(adapter, folder, fileName);
                 this.currentMeetingNotePath = null;
                 this.currentRecordingEventId = null;
             }
@@ -315,7 +315,8 @@ export default class SystemRecordingPlugin extends Plugin {
 			this.oauth,
 			this.settings.calendarId,
 			new Date(minMs),
-			new Date(maxMs)
+			new Date(maxMs),
+			250
 		);
 		const keywords = parseKeywords(this.settings.exclusionKeywords);
 		return events
@@ -395,6 +396,15 @@ export default class SystemRecordingPlugin extends Plugin {
 	}
 
 	private handleEventEnd(event: ScheduledEvent): void {
+		// Only offer to stop when *this* meeting's recording is the active one,
+		// so overlapping meetings can't stop the wrong recording (or prompt when
+		// nothing is being recorded).
+		if (
+			!this.recorder.isRecording ||
+			this.currentRecordingEventId !== event.id
+		) {
+			return;
+		}
 		actionNotice(
 			t().event.ended(event.summary),
 			t().event.stopRecordingAction,
@@ -531,8 +541,15 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     private async copyMeetingLink(url: string): Promise<void> {
-        await navigator.clipboard.writeText(url);
-        new Notice(t().agenda.notices.linkCopied);
+        try {
+            await navigator.clipboard.writeText(url);
+            new Notice(t().agenda.notices.linkCopied);
+        } catch (e) {
+            // Clipboard can be unavailable (permissions / non-secure context);
+            // fall back to opening the link rather than failing silently.
+            console.warn("[Meeting Copilot] clipboard write failed", e);
+            this.openMeetingLink(url);
+        }
     }
 
     private openPluginSettings(): void {
