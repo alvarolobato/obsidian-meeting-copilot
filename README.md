@@ -17,7 +17,11 @@ Calendar-driven meeting notes for Obsidian on macOS: reads your Google Calendar,
 - **Meeting agenda sidebar**: Granola-style "coming up / recent" list with per-row actions (create note + record, open note, transcribe, open recording, join link)
 - Creates a meeting note from the invite and colocates the recording with it
 - Recurring meetings organized into a per-series folder
-- Ribbon button / command palette control; elapsed-time indicator in the status bar
+- Transcript → note automation and **Granola-style AI enrichment** (any OpenAI-compatible endpoint) with a gray, collapsible AI-notes callout
+- **Action items → tasks**: enrichment lifts action items into `## Action items` checkboxes the [obsidian-tasks](https://github.com/obsidian-tasks-group/obsidian-tasks) plugin can track
+- **Recording retention**: recordings older than the configured number of days are moved to the trash automatically (the transcript stays in the note)
+- **Meetings dashboard**: one command generates a [Dataview](https://github.com/blacksmithgu/obsidian-dataview) dashboard of upcoming/past meetings and open action items
+- Ribbon button / command palette control; elapsed-time and action (transcribing / enriching) indicators in the status bar
 
 ## Installation (manual)
 
@@ -36,7 +40,11 @@ Calendar-driven meeting notes for Obsidian on macOS: reads your Google Calendar,
 
 - **Recording folder** / **File name template**: for ad-hoc recordings.
 - **Meetings folder**: where calendar meeting notes (and their recordings) are created.
-- **Retention (days)**: how long recordings are kept.
+- **Recording retention (days)**: recordings older than this are moved to the trash on startup and via the *Clean up old recordings* command; `0` keeps them forever.
+- **Action items as tasks**: lift enriched action items into `## Action items` checkboxes (preserving existing/completed tasks).
+- **AI enrichment**: enable it, then set an OpenAI-compatible base URL, API key, and model.
+
+Commands of note: *Clean up old recordings*, *Create/update meetings dashboard*, *Enrich meeting note (AI)*, *Toggle AI notes visibility*.
 
 ## Development
 

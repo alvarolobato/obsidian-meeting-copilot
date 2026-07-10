@@ -1,4 +1,4 @@
-import { FileSystemAdapter, MarkdownView, Menu, Notice, Platform, Plugin, setIcon, TFile } from "obsidian";
+import { FileSystemAdapter, MarkdownView, Menu, normalizePath, Notice, Platform, Plugin, setIcon, TFile } from "obsidian";
 import {
     DEFAULT_SETTINGS,
     SystemRecordingSettings,
@@ -20,6 +20,7 @@ import {
     linkRecording,
     MeetingEventInfo,
     MeetingNoteConfig,
+    upsertSection,
 } from "./notes/meetingNote";
 import {
     extractSection,
@@ -27,6 +28,12 @@ import {
     HIDE_AI_CLASS,
     withEnrichedBlock,
 } from "./notes/enrichedBlock";
+import { extractActionItems, mergeActionItems } from "./notes/actionItems";
+import { buildDashboardBlock, withDashboardBlock } from "./notes/dashboard";
+import { findExpiredRecordings } from "./recordings/retention";
+
+/** Note section that holds action-item checkboxes (obsidian-tasks compatible). */
+const ACTION_ITEMS_HEADING = "## Action items";
 import { chatComplete } from "./enrich/llm";
 import { ENRICH_SYSTEM_PROMPT, fillPrompt } from "./enrich/prompt";
 import { t } from "./i18n";
@@ -76,8 +83,14 @@ export default class SystemRecordingPlugin extends Plugin {
 	private currentMeetingNotePath: string | null = null;
 	/** Calendar event id of the in-progress meeting recording, for agenda state. */
 	private currentRecordingEventId: string | null = null;
+	/** Vault-relative path of the in-progress recording, protected from retention. */
+	private currentRecordingPath: string | null = null;
 	/** Note paths currently being enriched, to prevent overlapping LLM runs. */
 	private enrichingPaths = new Set<string>();
+	/** One-shot startup retention sweep, cleared on unload. */
+	private retentionTimeout: number | null = null;
+	/** Serializes retention sweeps so the startup timer and the command can't overlap. */
+	private cleanupRunning = false;
 	private agendaEvents = new TypedEventBus<AgendaViewEvents>();
 
     async onload() {
@@ -185,6 +198,24 @@ export default class SystemRecordingPlugin extends Plugin {
 			callback: () => void this.toggleAiNotes(),
 		});
 
+		this.addCommand({
+			id: "cleanup-old-recordings",
+			name: t().commands.cleanupRecordings,
+			callback: () => void this.cleanupOldRecordings(true),
+		});
+
+		this.addCommand({
+			id: "create-meetings-dashboard",
+			name: t().commands.createDashboard,
+			callback: () => void this.createDashboard(),
+		});
+
+		// Sweep expired recordings shortly after startup (never blocks load).
+		this.retentionTimeout = window.setTimeout(() => {
+			this.retentionTimeout = null;
+			void this.cleanupOldRecordings(false);
+		}, 15000);
+
 		// Restore the AI-notes visibility toggle from the last session.
 		document.body.toggleClass(HIDE_AI_CLASS, this.settings.hideAiNotes);
 
@@ -208,6 +239,10 @@ export default class SystemRecordingPlugin extends Plugin {
         }
         this.clearDurationTimer();
         this.clearActionStatus();
+        if (this.retentionTimeout !== null) {
+            window.clearTimeout(this.retentionTimeout);
+            this.retentionTimeout = null;
+        }
 		this.scheduler?.stop();
 		this.agendaEvents.clear();
     }
@@ -297,6 +332,7 @@ export default class SystemRecordingPlugin extends Plugin {
                 this.currentRecordingEventId = null;
             }
 
+            this.currentRecordingPath = relativePath;
             const vaultBasePath =
                 adapter instanceof FileSystemAdapter ? adapter.getBasePath() : "";
             const absolutePath = path.join(vaultBasePath, relativePath);
@@ -803,6 +839,7 @@ export default class SystemRecordingPlugin extends Plugin {
     private resetRecordingUi() {
         this.clearDurationTimer();
         this.updateRibbonIcon(false);
+        this.currentRecordingPath = null;
         this.hideStatusBar();
         this.currentMeetingNotePath = null;
         this.currentRecordingEventId = null;
@@ -1008,7 +1045,21 @@ export default class SystemRecordingPlugin extends Plugin {
             });
             // Re-read in case the note changed during the network call.
             const current = await this.app.vault.read(file);
-            await this.app.vault.modify(file, withEnrichedBlock(current, output));
+            let updated = current;
+            let calloutBody = output;
+            // Lift action items out of the summary into real obsidian-tasks
+            // checkboxes under "## Action items" (merged, never duplicated).
+            if (this.settings.actionItemsAsTasks) {
+                const { items, without } = extractActionItems(output);
+                if (items.length > 0) {
+                    const existing = extractSection(updated, ACTION_ITEMS_HEADING);
+                    const merged = mergeActionItems(existing, items);
+                    updated = upsertSection(updated, ACTION_ITEMS_HEADING, merged);
+                    calloutBody = without;
+                }
+            }
+            updated = withEnrichedBlock(updated, calloutBody);
+            await this.app.vault.modify(file, updated);
             await this.app.fileManager.processFrontMatter(file, (f) => {
                 (f as Record<string, unknown>).status = "enriched";
             });
@@ -1023,6 +1074,136 @@ export default class SystemRecordingPlugin extends Plugin {
         } finally {
             this.enrichingPaths.delete(file.path);
         }
+    }
+
+    /**
+     * Moves recordings older than `retentionDays` to the trash so they don't
+     * grow forever. Only touches audio files under the meetings/recordings
+     * folders; the transcript already lives in the note, so the audio is safe
+     * to prune. `retentionDays: 0` disables cleanup entirely.
+     */
+    private async cleanupOldRecordings(notify: boolean): Promise<number> {
+        if (this.settings.retentionDays <= 0) {
+            if (notify) new Notice(t().notices.retentionDisabled);
+            return 0;
+        }
+        if (this.cleanupRunning) return 0;
+        this.cleanupRunning = true;
+        try {
+            const files = this.app.vault.getFiles().map((f) => ({
+                path: f.path,
+                ext: f.extension,
+                mtime: f.stat.mtime,
+            }));
+            const expired = findExpiredRecordings(files, {
+                folders: [
+                    this.settings.meetingsFolder.trim() || "Meetings",
+                    this.settings.recordingFolder.trim() || "recordings",
+                ],
+                retentionDays: this.settings.retentionDays,
+                now: Date.now(),
+                protectedPaths: this.currentRecordingPath
+                    ? new Set([this.currentRecordingPath])
+                    : undefined,
+            });
+
+            let removed = 0;
+            for (const info of expired) {
+                const file = this.app.vault.getAbstractFileByPath(info.path);
+                if (!(file instanceof TFile)) continue;
+                // Resolve the note that actually links THIS audio (verified, so we
+                // never touch a note that points at a different/newer recording).
+                const note = this.noteOwningRecording(file);
+                // Protect audio linked to a note that hasn't captured its content
+                // yet: only prune once the meeting is transcribed/enriched.
+                if (note && !this.isTranscribedNote(note)) continue;
+                try {
+                    await this.app.fileManager.trashFile(file);
+                    removed++;
+                    // Drop the note's now-dangling link (transcript stays in the note).
+                    if (note) {
+                        await this.app.fileManager.processFrontMatter(note, (fm) => {
+                            const f = fm as Record<string, unknown>;
+                            delete f.recording;
+                            f.recording_pruned = new Date()
+                                .toISOString()
+                                .slice(0, 10);
+                        });
+                    }
+                } catch (e) {
+                    console.warn(
+                        `[Meeting Copilot] failed to trash ${info.path}`,
+                        e
+                    );
+                }
+            }
+
+            if (removed > 0) {
+                new Notice(t().notices.retentionCleaned(removed));
+                this.agendaEvents.emit("changed", undefined);
+            } else if (notify) {
+                new Notice(t().notices.retentionNothing);
+            }
+            return removed;
+        } finally {
+            this.cleanupRunning = false;
+        }
+    }
+
+    /** The note whose `recording` frontmatter link resolves to this audio file, if any. */
+    private noteOwningRecording(audio: TFile): TFile | null {
+        for (const f of this.app.vault.getMarkdownFiles()) {
+            const fm = this.app.metadataCache.getFileCache(f)?.frontmatter as
+                | Record<string, unknown>
+                | undefined;
+            const rec = fm?.["recording"];
+            if (typeof rec !== "string") continue;
+            const link = (
+                rec.replace(/^\[\[/, "").replace(/\]\]$/, "").split("|")[0] ?? ""
+            ).trim();
+            const dest = this.app.metadataCache.getFirstLinkpathDest(link, f.path);
+            if (dest instanceof TFile && dest.path === audio.path) return f;
+        }
+        return null;
+    }
+
+    /** True once a meeting note's content has been captured (transcribed or enriched). */
+    private isTranscribedNote(note: TFile): boolean {
+        const fm = this.app.metadataCache.getFileCache(note)?.frontmatter as
+            | Record<string, unknown>
+            | undefined;
+        const status = fm?.["status"];
+        return status === "transcribed" || status === "enriched";
+    }
+
+    /**
+     * Creates or refreshes a Dataview-powered meetings dashboard note. Only the
+     * plugin-managed block between markers is rewritten, so user edits around it
+     * survive re-runs.
+     */
+    private async createDashboard(): Promise<void> {
+        const folder = this.settings.meetingsFolder.trim().replace(/\/+$/, "") ||
+            "Meetings";
+        if (!(await this.app.vault.adapter.exists(folder))) {
+            await this.app.vault
+                .createFolder(folder)
+                .catch(() => {
+                    /* created concurrently */
+                });
+        }
+        const path = normalizePath(`${folder}/Meetings Dashboard.md`);
+        const block = buildDashboardBlock(folder);
+        const existing = this.app.vault.getAbstractFileByPath(path);
+        let file: TFile;
+        if (existing instanceof TFile) {
+            const content = await this.app.vault.read(existing);
+            await this.app.vault.modify(existing, withDashboardBlock(content, block));
+            file = existing;
+        } else {
+            file = await this.app.vault.create(path, `${block}\n`);
+        }
+        await this.app.workspace.getLeaf(false).openFile(file);
+        new Notice(t().notices.dashboardCreated);
     }
 
     /** Flips the vault-wide "hide AI notes" toggle and persists it. */
@@ -1041,6 +1222,7 @@ export default class SystemRecordingPlugin extends Plugin {
         const notePath = this.currentMeetingNotePath;
         this.currentMeetingNotePath = null;
         this.currentRecordingEventId = null;
+        this.currentRecordingPath = null;
         this.agendaEvents.emit("changed", undefined);
         if (notePath) {
             const file = this.app.vault.getAbstractFileByPath(notePath);
