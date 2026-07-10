@@ -15,6 +15,8 @@ export interface SystemRecordingSettings {
 	calendarId: string;
 	exclusionKeywords: string;
 	openMeetAutomatically: boolean;
+	agendaLookAheadDays: number;
+	agendaLookBackDays: number;
 }
 
 export const DEFAULT_SETTINGS: SystemRecordingSettings = {
@@ -29,6 +31,8 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	calendarId: "primary",
 	exclusionKeywords: "",
 	openMeetAutomatically: true,
+	agendaLookAheadDays: 7,
+	agendaLookBackDays: 7,
 };
 
 export class SystemRecordingSettingTab extends PluginSettingTab {
@@ -196,5 +200,37 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					})
 			);
+
+		new Setting(containerEl)
+			.setName(s.settings.agendaLookAhead.name)
+			.setDesc(s.settings.agendaLookAhead.desc)
+			.addText((text) => {
+				text.inputEl.type = "number";
+				text
+					.setValue(String(this.plugin.settings.agendaLookAheadDays))
+					.onChange(async (value) => {
+						const n = Number.parseInt(value, 10);
+						this.plugin.settings.agendaLookAheadDays =
+							Number.isFinite(n) && n >= 1 ? Math.min(n, 180) : 7;
+						await this.plugin.saveSettings();
+						this.plugin.refreshAgenda();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName(s.settings.agendaLookBack.name)
+			.setDesc(s.settings.agendaLookBack.desc)
+			.addText((text) => {
+				text.inputEl.type = "number";
+				text
+					.setValue(String(this.plugin.settings.agendaLookBackDays))
+					.onChange(async (value) => {
+						const n = Number.parseInt(value, 10);
+						this.plugin.settings.agendaLookBackDays =
+							Number.isFinite(n) && n >= 0 ? Math.min(n, 30) : 7;
+						await this.plugin.saveSettings();
+						this.plugin.refreshAgenda();
+					});
+			});
     }
 }

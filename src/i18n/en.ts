@@ -2,12 +2,14 @@
 export const en = {
 	ribbon: {
 		toggleRecording: "Toggle recording",
+		openAgenda: "Open meeting agenda",
 	},
 	commands: {
 		startRecording: "Start recording",
 		stopRecording: "Stop recording",
 		authenticateCalendar: "Authenticate calendar",
 		toggleCalendarAutoRecording: "Toggle calendar auto-recording",
+		openAgenda: "Open meeting agenda",
 	},
 	notices: {
 		autoRecordEnabled: "Calendar auto-recording enabled",
@@ -32,6 +34,52 @@ export const en = {
 		startRecordingAction: "Start recording",
 		createNoteAndRecord: "Create note and start recording",
 		stopRecordingAction: "Stop recording",
+	},
+	agenda: {
+		title: "Meetings",
+		notConnected: "Not connected",
+		loading: "Loading…",
+		lastRefreshed: (rel: string) => `Updated ${rel}`,
+		connectPrompt: "Connect your Google Calendar to see meetings here.",
+		connectCta: "Connect Google Calendar",
+		nothingScheduled: "Nothing scheduled.",
+		noMeetings: "No meetings",
+		nothingElse: "Nothing else scheduled",
+		earlierToday: "Earlier today",
+		todayLabel: "Today",
+		tomorrowLabel: "Tomorrow",
+		yesterdayLabel: "Yesterday",
+		daysWithoutEvents: (n: number) =>
+			`${n} ${n === 1 ? "day" : "days"} without events`,
+		now: "Now",
+		recording: "Recording",
+		startsIn: (min: number) => `Starts in ${min} min`,
+		allDay: "All-day",
+		attendeesCount: (n: number) => `${n} attendees`,
+		refresh: "Refresh calendar",
+		openSettings: "Open plugin settings",
+		daysShown: "Days shown",
+		previousDay: "Previous day",
+		nextDay: "Next day",
+		previousMonth: "Previous month",
+		nextMonth: "Next month",
+		actions: {
+			record: "Create note and record",
+			stop: "Stop recording",
+			openNote: "Open note",
+			createNote: "Create note",
+			openLink: "Open meeting link",
+			copyLink: "Copy meeting link",
+			openRecording: "Open recording",
+			transcribe: "Transcribe recording",
+			skipToday: "Hide for today",
+		},
+		notices: {
+			linkCopied: "Meeting link copied",
+			noRecording: "No recording for this meeting yet",
+			transcriberMissing:
+				"AI Transcriber not found. Open the recording and run it manually.",
+		},
 	},
 	settings: {
 		recordingFolder: {
@@ -84,6 +132,14 @@ export const en = {
 		openMeet: {
 			name: "Open Meet automatically",
 			desc: "If the event has a meeting link, open it in the browser at the start time.",
+		},
+		agendaLookAhead: {
+			name: "Agenda look-ahead (days)",
+			desc: "How many upcoming days the meeting agenda renders.",
+		},
+		agendaLookBack: {
+			name: "Agenda look-back (days)",
+			desc: "How many past days you can navigate back to in the agenda (0–30).",
 		},
 	},
 	oauth: {

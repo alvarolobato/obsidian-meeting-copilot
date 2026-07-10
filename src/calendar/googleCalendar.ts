@@ -1,6 +1,7 @@
 import { requestUrl } from "obsidian";
 import type { GoogleOAuth } from "../auth/googleOAuth";
 import { extractMeetLink, RawConferenceEvent } from "./meetLink";
+import { extractMeetingUrlFromText } from "./meetingUrl";
 
 export interface GCalEvent {
 	id: string;
@@ -39,6 +40,7 @@ interface RawEvent extends RawConferenceEvent {
 	id?: string;
 	summary?: string;
 	location?: string;
+	description?: string;
 	htmlLink?: string;
 	iCalUID?: string;
 	recurringEventId?: string;
@@ -114,7 +116,9 @@ export async function listEvents(
 			start,
 			end,
 			allDay: isAllDay,
-			meetLink: extractMeetLink(ev),
+			meetLink:
+				extractMeetLink(ev) ??
+				extractMeetingUrlFromText(ev.location, ev.description),
 			htmlLink: ev.htmlLink ?? "",
 			attendees: mapAttendees(ev.attendees),
 			organizer,

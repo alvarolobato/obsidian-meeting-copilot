@@ -100,28 +100,29 @@ export async function createMeetingNote(
 	const basename = meetingBasename(ev);
 	const notePath = normalizePath(`${folder}/${basename}.md`);
 
-	let file = app.vault.getAbstractFileByPath(notePath);
-	if (!(file instanceof TFile)) {
-		file = await app.vault.create(notePath, buildBody(ev));
-	}
-	const tFile = file as TFile;
+	const existing = app.vault.getAbstractFileByPath(notePath);
+	const file =
+		existing instanceof TFile
+			? existing
+			: await app.vault.create(notePath, buildBody(ev));
 
-	await app.fileManager.processFrontMatter(tFile, (fm) => {
-		fm.title = ev.summary;
-		fm.date = dateOnly(ev.start);
-		fm.start = localIso(ev.start);
-		fm.end = localIso(ev.end);
-		fm.event_id = ev.id;
-		if (ev.iCalUID) fm.ical_uid = ev.iCalUID;
-		if (ev.recurringEventId) fm.recurring_event_id = ev.recurringEventId;
-		if (ev.meetLink) fm.meeting_url = ev.meetLink;
-		if (ev.location) fm.location = ev.location;
-		if (ev.organizer) fm.organizer = ev.organizer;
-		fm.attendees = ev.attendees;
-		if (!fm.status) fm.status = "scheduled";
+	await app.fileManager.processFrontMatter(file, (fm) => {
+		const f = fm as Record<string, unknown>;
+		f.title = ev.summary;
+		f.date = dateOnly(ev.start);
+		f.start = localIso(ev.start);
+		f.end = localIso(ev.end);
+		f.event_id = ev.id;
+		if (ev.iCalUID) f.ical_uid = ev.iCalUID;
+		if (ev.recurringEventId) f.recurring_event_id = ev.recurringEventId;
+		if (ev.meetLink) f.meeting_url = ev.meetLink;
+		if (ev.location) f.location = ev.location;
+		if (ev.organizer) f.organizer = ev.organizer;
+		f.attendees = ev.attendees;
+		if (!f.status) f.status = "scheduled";
 	});
 
-	return { file: tFile, notePath, folder, basename };
+	return { file, notePath, folder, basename };
 }
 
 /** Links the saved recording into the note's frontmatter and marks it recorded. */
@@ -131,7 +132,8 @@ export async function linkRecording(
 	recordingFileName: string
 ): Promise<void> {
 	await app.fileManager.processFrontMatter(file, (fm) => {
-		fm.recording = `[[${recordingFileName}]]`;
-		fm.status = "recorded";
+		const f = fm as Record<string, unknown>;
+		f.recording = `[[${recordingFileName}]]`;
+		f.status = "recorded";
 	});
 }

@@ -4,12 +4,14 @@ import type { Messages } from "./en";
 export const ja: Messages = {
 	ribbon: {
 		toggleRecording: "Toggle recording",
+		openAgenda: "会議アジェンダを開く",
 	},
 	commands: {
 		startRecording: "Start recording",
 		stopRecording: "Stop recording",
 		authenticateCalendar: "Authenticate calendar",
 		toggleCalendarAutoRecording: "Toggle calendar auto-recording",
+		openAgenda: "会議アジェンダを開く",
 	},
 	notices: {
 		autoRecordEnabled: "カレンダー自動録音を有効化しました",
@@ -34,6 +36,51 @@ export const ja: Messages = {
 		startRecordingAction: "録音開始",
 		createNoteAndRecord: "ノートを作成して録音開始",
 		stopRecordingAction: "録音停止",
+	},
+	agenda: {
+		title: "会議",
+		notConnected: "未接続",
+		loading: "読み込み中…",
+		lastRefreshed: (rel: string) => `更新 ${rel}`,
+		connectPrompt: "Google カレンダーに接続すると、ここに会議が表示されます。",
+		connectCta: "Google カレンダーに接続",
+		nothingScheduled: "予定はありません。",
+		noMeetings: "会議なし",
+		nothingElse: "他に予定はありません",
+		earlierToday: "今日これまで",
+		todayLabel: "今日",
+		tomorrowLabel: "明日",
+		yesterdayLabel: "昨日",
+		daysWithoutEvents: (n: number) => `予定のない日が ${n} 日`,
+		now: "進行中",
+		recording: "録音中",
+		startsIn: (min: number) => `${min} 分後に開始`,
+		allDay: "終日",
+		attendeesCount: (n: number) => `参加者 ${n} 名`,
+		refresh: "カレンダーを更新",
+		openSettings: "プラグイン設定を開く",
+		daysShown: "表示日数",
+		previousDay: "前日",
+		nextDay: "翌日",
+		previousMonth: "前月",
+		nextMonth: "翌月",
+		actions: {
+			record: "ノートを作成して録音",
+			stop: "録音停止",
+			openNote: "ノートを開く",
+			createNote: "ノートを作成",
+			openLink: "会議リンクを開く",
+			copyLink: "会議リンクをコピー",
+			openRecording: "録音を開く",
+			transcribe: "録音を文字起こし",
+			skipToday: "今日は非表示",
+		},
+		notices: {
+			linkCopied: "会議リンクをコピーしました",
+			noRecording: "この会議の録音はまだありません",
+			transcriberMissing:
+				"AI Transcriber が見つかりません。録音を開いて手動で実行してください。",
+		},
 	},
 	settings: {
 		recordingFolder: {
@@ -86,6 +133,14 @@ export const ja: Messages = {
 		openMeet: {
 			name: "Meet を自動で開く",
 			desc: "予定に会議リンクがあれば開始時刻にブラウザで開きます。",
+		},
+		agendaLookAhead: {
+			name: "アジェンダの表示日数（先）",
+			desc: "会議アジェンダに表示する今後の日数。",
+		},
+		agendaLookBack: {
+			name: "アジェンダの表示日数（過去）",
+			desc: "アジェンダでさかのぼれる過去の日数（0〜30）。",
 		},
 	},
 	oauth: {
