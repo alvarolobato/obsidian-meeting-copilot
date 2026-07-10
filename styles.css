@@ -2,6 +2,44 @@
     display: none;
 }
 
+/* Transient action status shown in the status bar (enriching, transcribing…). */
+.mc-status-icon {
+    display: inline-flex;
+    align-items: center;
+    margin-right: 4px;
+    vertical-align: middle;
+}
+
+.mc-status-icon svg {
+    width: 14px;
+    height: 14px;
+}
+
+.mc-status-busy .mc-status-icon {
+    color: var(--text-muted);
+}
+
+.mc-status-busy .mc-status-icon svg {
+    animation: mc-status-spin 1s linear infinite;
+}
+
+.mc-status-success .mc-status-icon {
+    color: var(--text-success);
+}
+
+.mc-status-error .mc-status-icon {
+    color: var(--text-error);
+}
+
+@keyframes mc-status-spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
 .side-dock-ribbon-action.is-recording,
 .clickable-icon.is-recording {
     color: var(--text-error);

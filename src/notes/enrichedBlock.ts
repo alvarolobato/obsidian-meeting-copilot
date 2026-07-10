@@ -80,17 +80,23 @@ export function extractSection(content: string, heading: string): string {
 	return lines.slice(start + 1, end).join("\n").trim();
 }
 
-/** Returns the transcript text from its callout (un-quoted), or "". */
+/**
+ * Returns the transcript text, un-quoted. Handles both the collapsed
+ * `> [!quote]- Transcript` callout and a legacy `## Transcript` section.
+ */
 export function extractTranscript(content: string): string {
 	const lines = content.split("\n");
 	const marker = /^>\s*\[![\w-]+\][+-]?\s*Transcript\s*$/;
 	const start = lines.findIndex((l) => marker.test(l));
-	if (start === -1) return "";
-	const body: string[] = [];
-	for (let i = start + 1; i < lines.length; i++) {
-		const l = lines[i] ?? "";
-		if (!/^>/.test(l)) break;
-		body.push(l.replace(/^>\s?/, ""));
+	if (start !== -1) {
+		const body: string[] = [];
+		for (let i = start + 1; i < lines.length; i++) {
+			const l = lines[i] ?? "";
+			if (!/^>/.test(l)) break;
+			body.push(l.replace(/^>\s?/, ""));
+		}
+		return body.join("\n").trim();
 	}
-	return body.join("\n").trim();
+	// Fallback: a plain "## Transcript" section (older notes).
+	return extractSection(content, "## Transcript");
 }

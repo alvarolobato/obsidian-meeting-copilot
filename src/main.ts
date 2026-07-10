@@ -1,4 +1,4 @@
-import { FileSystemAdapter, MarkdownView, Notice, Platform, Plugin, TFile } from "obsidian";
+import { FileSystemAdapter, MarkdownView, Menu, Notice, Platform, Plugin, setIcon, TFile } from "obsidian";
 import {
     DEFAULT_SETTINGS,
     SystemRecordingSettings,
@@ -44,6 +44,10 @@ import {
     VIEW_TYPE_AGENDA,
     AGENDA_ICON,
 } from "./ui/agenda/MeetingAgendaView";
+import {
+    populateMeetingMenu,
+    RowHandlers,
+} from "./ui/agenda/components/meetingRow";
 
 export default class SystemRecordingPlugin extends Plugin {
     settings: SystemRecordingSettings;
@@ -51,6 +55,7 @@ export default class SystemRecordingPlugin extends Plugin {
     private provisioner = new BinaryProvisioner(nodeDeps());
     private starting = false;
     private statusBarEl: HTMLElement | null = null;
+    private statusTimeout: number | null = null;
     private durationInterval: number | null = null;
     private recordingStartTime: number | null = null;
     private ribbonIconEl: HTMLElement | null = null;
@@ -105,6 +110,24 @@ export default class SystemRecordingPlugin extends Plugin {
                 (payload: unknown) =>
                     void this.handleTranscriptionCompleted(payload)
             )
+        );
+
+        // Expose the same actions as the agenda list (record, transcribe,
+        // enrich, links, …) from the note's editor and file context menus.
+        this.registerEvent(
+            this.app.workspace.on("editor-menu", (menu, _editor, info) => {
+                const file = info.file;
+                if (file instanceof TFile && this.isMeetingNote(file)) {
+                    this.addNoteMeetingMenu(menu, file);
+                }
+            })
+        );
+        this.registerEvent(
+            this.app.workspace.on("file-menu", (menu, file) => {
+                if (file instanceof TFile && this.isMeetingNote(file)) {
+                    this.addNoteMeetingMenu(menu, file);
+                }
+            })
         );
 
         // Status bar
@@ -497,6 +520,100 @@ export default class SystemRecordingPlugin extends Plugin {
         };
     }
 
+    /** True when a note carries meeting frontmatter we can act on. */
+    private isMeetingNote(file: TFile): boolean {
+        if (file.extension !== "md") return false;
+        const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as
+            | Record<string, unknown>
+            | undefined;
+        if (!fm) return false;
+        return (
+            typeof fm["event_id"] === "string" ||
+            typeof fm["recording"] === "string" ||
+            typeof fm["meeting_url"] === "string"
+        );
+    }
+
+    /** Adds the shared meeting actions (record/transcribe/enrich/links) to a menu. */
+    private addNoteMeetingMenu(menu: Menu, file: TFile): void {
+        menu.addSeparator();
+        populateMeetingMenu(
+            menu,
+            this.agendaMeetingFromNote(file),
+            this.noteRowHandlers(),
+            { includeNavigation: false }
+        );
+    }
+
+    /** Builds an AgendaMeeting view-model from a meeting note's frontmatter. */
+    private agendaMeetingFromNote(file: TFile): AgendaMeeting {
+        const fm = (this.app.metadataCache.getFileCache(file)?.frontmatter ??
+            {}) as Record<string, unknown>;
+        const str = (k: string): string => {
+            const v = fm[k];
+            return typeof v === "string" ? v : "";
+        };
+        const toDate = (v: unknown): Date =>
+            new Date(typeof v === "string" ? v : NaN);
+
+        let recording: TFile | null = null;
+        const rec = fm["recording"];
+        if (typeof rec === "string") {
+            const link = rec.replace(/^\[\[/, "").replace(/\]\]$/, "").trim();
+            const dest = this.app.metadataCache.getFirstLinkpathDest(
+                link,
+                file.path
+            );
+            if (dest instanceof TFile) recording = dest;
+        }
+
+        return {
+            id: str("event_id"),
+            title: str("title") || file.basename,
+            start: toDate(fm["start"] ?? fm["date"]),
+            end: toDate(fm["end"] ?? fm["start"] ?? fm["date"]),
+            allDay: false,
+            meetingUrl: str("meeting_url") || null,
+            location: str("location"),
+            htmlLink: "",
+            attendees: Array.isArray(fm["attendees"])
+                ? (fm["attendees"] as unknown[]).map((x) => String(x))
+                : [],
+            organizer: str("organizer") || null,
+            iCalUID: str("ical_uid") || null,
+            recurringEventId: str("recurring_event_id") || null,
+            note: file,
+            recording,
+            status: str("status") || null,
+        };
+    }
+
+    /** Row handlers wired to the plugin, for menus shown outside the agenda view. */
+    private noteRowHandlers(): RowHandlers {
+        return {
+            onOpenOrCreate: (m) => void this.openOrCreateNote(m),
+            onCreateAndRecord: (m) =>
+                void this.startMeetingRecording(agendaToMeetingInfo(m)),
+            onCreateNote: (m) => void this.createNoteOnly(m),
+            onStop: () => this.stopRecording(),
+            onOpenRecording: (m) => void this.openRecording(m),
+            onTranscribe: (m) => void this.transcribeRecording(m),
+            onEnrich: (m) => {
+                if (m.note) void this.enrichMeetingNote(m.note);
+            },
+            onOpenLink: (m) => {
+                if (m.meetingUrl) this.openMeetingLink(m.meetingUrl);
+            },
+            onCopyLink: (m) => {
+                if (m.meetingUrl) void this.copyMeetingLink(m.meetingUrl);
+            },
+            onSkip: () => {},
+            isRecordingThis: (m) =>
+                this.recorder.isRecording &&
+                this.currentRecordingEventId === m.id,
+        };
+    }
+
     private async fetchAgendaMeetings(
         fromMs: number,
         toMs: number
@@ -569,6 +686,7 @@ export default class SystemRecordingPlugin extends Plugin {
         );
         if (id && commands?.executeCommandById) {
             commands.executeCommandById(id);
+            this.setActionStatus(t().statusBar.transcribing, "busy");
         } else {
             new Notice(t().agenda.notices.transcriberMissing);
         }
@@ -671,10 +789,63 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     private hideStatusBar() {
+        if (this.statusTimeout !== null) {
+            window.clearTimeout(this.statusTimeout);
+            this.statusTimeout = null;
+        }
         if (this.statusBarEl) {
             this.statusBarEl.addClass("system-recording-hidden");
-            this.statusBarEl.setText("");
+            this.statusBarEl.removeClasses([
+                "mc-status-busy",
+                "mc-status-success",
+                "mc-status-error",
+            ]);
+            this.statusBarEl.empty();
         }
+    }
+
+    /**
+     * Shows a transient action state (enriching, transcribing, …) in the status
+     * bar. `state` "busy" shows a spinner; "success"/"error" auto-clear after a
+     * few seconds. Skipped while recording, whose duration display owns the bar.
+     */
+    private setActionStatus(
+        text: string,
+        state: "busy" | "success" | "error"
+    ): void {
+        const el = this.statusBarEl;
+        if (!el) return;
+        // Don't clobber the live recording timer.
+        if (this.recorder.isRecording) return;
+
+        if (this.statusTimeout !== null) {
+            window.clearTimeout(this.statusTimeout);
+            this.statusTimeout = null;
+        }
+        el.empty();
+        el.removeClasses(["mc-status-busy", "mc-status-success", "mc-status-error"]);
+        el.removeClass("system-recording-hidden");
+        el.addClass(`mc-status-${state}`);
+
+        const icon = el.createSpan({ cls: "mc-status-icon" });
+        setIcon(
+            icon,
+            state === "busy"
+                ? "loader-2"
+                : state === "success"
+                ? "check"
+                : "alert-triangle"
+        );
+        el.createSpan({ cls: "mc-status-text", text });
+
+        // Success/error clear quickly; a busy state clears on a long safety
+        // timeout so a spinner can never get stuck if a completion event is missed.
+        const clearAfter =
+            state === "busy" ? 15 * 60 * 1000 : state === "error" ? 6000 : 4000;
+        this.statusTimeout = window.setTimeout(() => {
+            this.statusTimeout = null;
+            if (!this.recorder.isRecording) this.hideStatusBar();
+        }, clearAfter);
     }
 
     private updateRibbonIcon(recording: boolean) {
@@ -712,6 +883,9 @@ export default class SystemRecordingPlugin extends Plugin {
                         new Notice(t().notices.transcriptAdded(note.basename));
                     }
                     enrichTarget = note;
+                    // Clears the "Transcribing…" spinner; enrichment (if enabled)
+                    // replaces this with its own status right after.
+                    this.setActionStatus(t().statusBar.transcriptAdded, "success");
                 }
             }
         } catch (e) {
@@ -774,6 +948,7 @@ export default class SystemRecordingPlugin extends Plugin {
         };
 
         new Notice(t().notices.enriching);
+        this.setActionStatus(t().statusBar.enriching, "busy");
         try {
             const output = await chatComplete({
                 baseUrl: enrichBaseUrl,
@@ -789,11 +964,13 @@ export default class SystemRecordingPlugin extends Plugin {
                 (f as Record<string, unknown>).status = "enriched";
             });
             new Notice(t().notices.enrichDone(file.basename));
+            this.setActionStatus(t().statusBar.enriched, "success");
             this.agendaEvents.emit("changed", undefined);
         } catch (e) {
             new Notice(
                 t().notices.enrichError(e instanceof Error ? e.message : String(e))
             );
+            this.setActionStatus(t().statusBar.enrichFailed, "error");
         }
     }
 

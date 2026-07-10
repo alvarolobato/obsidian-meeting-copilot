@@ -20,6 +20,19 @@ interface ChatResponse {
  */
 export async function chatComplete(p: ChatParams): Promise<string> {
 	const url = `${p.baseUrl.replace(/\/+$/, "")}/chat/completions`;
+	// Only send `temperature` when explicitly requested. Several newer models
+	// (Claude Sonnet 5, GPT-5 / o-series, …) reject it with a 400, so the
+	// default is to omit it and let the model use its own default.
+	const payload: Record<string, unknown> = {
+		model: p.model,
+		messages: [
+			{ role: "system", content: p.system },
+			{ role: "user", content: p.user },
+		],
+	};
+	if (typeof p.temperature === "number") {
+		payload.temperature = p.temperature;
+	}
 	const res = await requestUrl({
 		url,
 		method: "POST",
@@ -27,14 +40,7 @@ export async function chatComplete(p: ChatParams): Promise<string> {
 			"Content-Type": "application/json",
 			Authorization: `Bearer ${p.apiKey}`,
 		},
-		body: JSON.stringify({
-			model: p.model,
-			temperature: p.temperature ?? 0.3,
-			messages: [
-				{ role: "system", content: p.system },
-				{ role: "user", content: p.user },
-			],
-		}),
+		body: JSON.stringify(payload),
 		throw: false,
 	});
 

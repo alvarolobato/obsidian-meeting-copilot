@@ -40,6 +40,12 @@ export const en = {
 	},
 	statusBar: {
 		recording: (hms: string) => `Recording ${hms}`,
+		enriching: "Enriching notes…",
+		enriched: "Notes enriched",
+		enrichFailed: "Enrichment failed",
+		transcribing: "Transcribing…",
+		transcriptAdded: "Transcript added",
+		creatingNote: "Creating note…",
 	},
 	event: {
 		started: (title: string) => `"${title}" has started`,

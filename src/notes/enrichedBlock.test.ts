@@ -57,6 +57,12 @@ describe("extractTranscript", () => {
 		expect(extractTranscript(content)).toBe("Ann: hi\n\nBob: yo");
 	});
 
+	it("falls back to a legacy '## Transcript' section", () => {
+		const content =
+			"# M\n\n## Notes\n\n- a note\n\n## Transcript\n\nAnn: hi\nBob: yo\n";
+		expect(extractTranscript(content)).toBe("Ann: hi\nBob: yo");
+	});
+
 	it("returns empty string when there is no transcript", () => {
 		expect(extractTranscript("# M\n\n## Notes\n\nn")).toBe("");
 	});
