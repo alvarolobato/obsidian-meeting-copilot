@@ -723,28 +723,67 @@ export default class SystemRecordingPlugin extends Plugin {
         await this.launchTranscriber(m.recording);
     }
 
-    /** Opens an audio file and asks the AI Transcriber plugin to transcribe it. */
+    /**
+     * Transcribes an audio file by driving the AI Transcriber plugin's engine
+     * directly (Option C: headless bridge — no modal, no cost dialog, no
+     * separate transcript file). The returned text is routed through the same
+     * insert+enrich path as the plugin's own completion event.
+     */
     private async launchTranscriber(recording: TFile): Promise<void> {
-        await this.app.workspace.getLeaf(false).openFile(recording);
-        const commands = (
-            this.app as unknown as {
-                commands?: {
-                    commands?: Record<string, unknown>;
-                    executeCommandById?: (id: string) => boolean;
-                };
-            }
-        ).commands;
-        const ids = Object.keys(commands?.commands ?? {});
-        // Prefer the explicit "transcribe current audio" command; fall back to any.
-        const id =
-            ids.find((k) => k === "ai-transcriber:api-transcribe-audio") ??
-            ids.find((k) => k.startsWith("ai-transcriber:"));
-        if (id && commands?.executeCommandById) {
-            commands.executeCommandById(id);
-            this.setActionStatus(t().statusBar.transcribing, "busy");
-        } else {
+        const engine = this.aiTranscriberEngine();
+        if (!engine) {
             new Notice(t().agenda.notices.transcriberMissing);
+            return;
         }
+        this.setActionStatus(t().statusBar.transcribing, "busy");
+        try {
+            const result = await engine.transcribe(recording);
+            const text =
+                typeof result === "string" ? result : (result?.text ?? "");
+            if (!text.trim()) {
+                new Notice(t().notices.transcribeEmpty);
+                if (!this.recorder.isRecording) this.clearActionStatus();
+                return;
+            }
+            await this.handleTranscriptionCompleted({
+                audioFile: recording,
+                transcription: text,
+                file: null,
+            });
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            new Notice(t().notices.transcribeError(msg));
+            this.setActionStatus(t().statusBar.transcribeFailed, "error");
+        }
+    }
+
+    /**
+     * The AI Transcriber plugin's transcription engine, if the plugin is
+     * installed and enabled. This reaches into a non-public API shape; when we
+     * vendor the engine (Option A) this bridge goes away.
+     */
+    private aiTranscriberEngine(): {
+        transcribe(
+            file: TFile
+        ): Promise<string | { text: string; modelUsed?: string }>;
+    } | null {
+        const plugins = (
+            this.app as unknown as {
+                plugins?: { plugins?: Record<string, unknown> };
+            }
+        ).plugins?.plugins;
+        const tp = plugins?.["ai-transcriber"] as
+            | {
+                  transcriber?: {
+                      transcribe(
+                          file: TFile
+                      ): Promise<
+                          string | { text: string; modelUsed?: string }
+                      >;
+                  };
+              }
+            | undefined;
+        return tp?.transcriber ?? null;
     }
 
     private openMeetingLink(url: string): void {

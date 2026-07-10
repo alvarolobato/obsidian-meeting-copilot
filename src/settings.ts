@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import SystemRecordingPlugin from "./main";
 import type { StoredTokens } from "./auth/googleOAuth";
 import {
@@ -6,6 +6,7 @@ import {
 	DEFAULT_TITLE_PATTERN,
 } from "./notes/meetingNote";
 import { DEFAULT_ENRICH_PROMPT } from "./enrich/prompt";
+import { listModels } from "./enrich/models";
 import { t } from "./i18n";
 
 export interface SystemRecordingSettings {
@@ -66,6 +67,8 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 
 export class SystemRecordingSettingTab extends PluginSettingTab {
     plugin: SystemRecordingPlugin;
+    /** Model ids fetched from the endpoint (populated by "Test connection"). */
+    private enrichModels: string[] = [];
 
     constructor(app: App, plugin: SystemRecordingPlugin) {
         super(app, plugin);
@@ -361,17 +364,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					});
 			});
 
-		new Setting(containerEl)
-			.setName(s.settings.enrichModel.name)
-			.setDesc(s.settings.enrichModel.desc)
-			.addText((text) =>
-				text
-					.setValue(this.plugin.settings.enrichModel)
-					.onChange(async (value) => {
-						this.plugin.settings.enrichModel = value.trim();
-						await this.plugin.saveSettings();
-					})
-			);
+		this.renderEnrichModelSetting(containerEl);
 
 		new Setting(containerEl)
 			.setName(s.settings.enrichOnTranscribe.name)
@@ -410,5 +403,77 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					})
 			);
+    }
+
+    /**
+     * Model picker for enrichment. Shows a dropdown once models have been
+     * fetched from the endpoint, otherwise a free-text field so the user can
+     * type a model id even while offline. A "Test connection" button doubles as
+     * "load models".
+     */
+    private renderEnrichModelSetting(containerEl: HTMLElement): void {
+        const s = t();
+        const setting = new Setting(containerEl)
+            .setName(s.settings.enrichModel.name)
+            .setDesc(s.settings.enrichModel.desc);
+
+        const current = this.plugin.settings.enrichModel;
+        if (this.enrichModels.length > 0) {
+            const options: Record<string, string> = {};
+            for (const m of this.enrichModels) options[m] = m;
+            // Keep the current value selectable even if the endpoint didn't list it.
+            if (current && !options[current]) options[current] = current;
+            setting.addDropdown((dd) =>
+                dd
+                    .addOptions(options)
+                    .setValue(current)
+                    .onChange(async (value) => {
+                        this.plugin.settings.enrichModel = value;
+                        await this.plugin.saveSettings();
+                    })
+            );
+        } else {
+            setting.addText((text) =>
+                text.setValue(current).onChange(async (value) => {
+                    this.plugin.settings.enrichModel = value.trim();
+                    await this.plugin.saveSettings();
+                })
+            );
+        }
+
+        setting.addButton((button) =>
+            button
+                .setButtonText(s.settings.testConnection.button)
+                .onClick(async () => {
+                    const { enrichBaseUrl, enrichApiKey } =
+                        this.plugin.settings;
+                    if (!enrichBaseUrl) {
+                        new Notice(s.settings.testConnection.noBaseUrl);
+                        return;
+                    }
+                    button.setButtonText(s.settings.testConnection.testing);
+                    button.setDisabled(true);
+                    try {
+                        this.enrichModels = await listModels(
+                            enrichBaseUrl,
+                            enrichApiKey
+                        );
+                        new Notice(
+                            s.settings.testConnection.success(
+                                this.enrichModels.length
+                            )
+                        );
+                        this.display();
+                    } catch (e) {
+                        new Notice(
+                            s.settings.testConnection.failure(
+                                e instanceof Error ? e.message : String(e)
+                            )
+                        );
+                        button.setButtonText(s.settings.testConnection.button);
+                        button.setDisabled(false);
+                    }
+                })
+        );
     }
 }
