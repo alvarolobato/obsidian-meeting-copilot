@@ -879,8 +879,9 @@ export default class SystemRecordingPlugin extends Plugin {
                 file?: unknown;
             };
             const audio = p.audioFile;
-            const transcript =
+            const raw =
                 typeof p.transcription === "string" ? p.transcription : null;
+            const transcript = raw && raw.trim().length > 0 ? raw : null;
             if (audio instanceof TFile && transcript) {
                 transcriptText = transcript;
                 const note = findMeetingNoteForAudio(this.app, audio);
@@ -903,20 +904,21 @@ export default class SystemRecordingPlugin extends Plugin {
         }
         this.agendaEvents.emit("changed", undefined);
 
-        const willEnrich = !!(
+        // Resolve the "Transcribing…" spinner deterministically here, before
+        // enrichment runs: success only if we actually inserted, otherwise
+        // clear it (never touching the recording timer). Enrichment then manages
+        // its own status when it proceeds, and if it bails early the transcription
+        // status is already settled, so the spinner can't linger.
+        if (inserted) {
+            this.setActionStatus(t().statusBar.transcriptAdded, "success");
+        } else if (!this.recorder.isRecording) {
+            this.hideStatusBar();
+        }
+        if (
             enrichTarget &&
             this.settings.enableEnrichment &&
             this.settings.enrichOnTranscribe
-        );
-        // Only claim success when we actually wrote the transcript. If nothing
-        // was inserted and no enrichment will follow, clear the "Transcribing…"
-        // spinner so it doesn't linger (but never touch the recording timer).
-        if (inserted) {
-            this.setActionStatus(t().statusBar.transcriptAdded, "success");
-        } else if (!willEnrich && !this.recorder.isRecording) {
-            this.hideStatusBar();
-        }
-        if (willEnrich && enrichTarget) {
+        ) {
             // Pass the fresh transcript so enrichment works even when
             // insertTranscript is off and the note has no transcript yet.
             await this.enrichMeetingNote(enrichTarget, transcriptText ?? undefined);
