@@ -1,9 +1,10 @@
 {
-	"id": "system-recording",
-	"name": "System Recording",
+	"id": "meeting-copilot",
+	"name": "Meeting Copilot",
 	"version": "1.0.4",
 	"minAppVersion": "0.15.0",
-	"description": "Record system audio (Zoom, Meet, Teams) and microphone, saving the mix as a WAV file in your vault.",
-	"author": "Yuto Takagi",
+	"description": "Calendar-driven meeting notes with dual-channel (system + mic) recording for Zoom, Meet, and Teams. Based on System Recording by Yuto Takagi.",
+	"author": "Alvaro Lobato",
+	"authorUrl": "https://github.com/alvarolobato",
 	"isDesktopOnly": true
 }

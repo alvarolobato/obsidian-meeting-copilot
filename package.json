@@ -1,7 +1,7 @@
 {
-	"name": "obsidian-system-recording",
+	"name": "obsidian-meeting-copilot",
 	"version": "1.0.4",
-	"description": "Record system audio (Zoom, Meet, Teams) and microphone, saving the mix as a WAV file in your vault.",
+	"description": "Calendar-driven meeting notes with dual-channel (system + mic) recording for Zoom, Meet, and Teams.",
 	"main": "main.js",
 	"type": "module",
 	"scripts": {
