@@ -209,7 +209,7 @@ export const en = {
 		},
 		enrichOnTranscribe: {
 			name: "Enrich automatically after transcription",
-			desc: "Run enrichment as soon as a transcript is inserted. Off by default to avoid unexpected API calls.",
+			desc: "Run enrichment as soon as a transcript is inserted. On by default; turn it off if you want to trigger enrichment manually.",
 		},
 		enrichPrompt: {
 			name: "Enrichment prompt",

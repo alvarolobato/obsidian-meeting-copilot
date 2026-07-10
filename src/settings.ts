@@ -42,7 +42,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	meetingsFolder: "Meetings",
 	noteTitlePattern: DEFAULT_TITLE_PATTERN,
 	noteTemplate: DEFAULT_NOTE_TEMPLATE,
-	retentionDays: 30,
+	retentionDays: 90,
 	insertTranscript: true,
 	autoTranscribe: true,
 	actionItemsAsTasks: true,
@@ -55,12 +55,12 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	openMeetAutomatically: true,
 	agendaLookAheadDays: 7,
 	agendaLookBackDays: 7,
-	enableEnrichment: false,
+	enableEnrichment: true,
 	enrichBaseUrl: "https://api.openai.com/v1",
 	enrichApiKey: "",
 	enrichModel: "gpt-4o",
 	enrichPrompt: DEFAULT_ENRICH_PROMPT,
-	enrichOnTranscribe: false,
+	enrichOnTranscribe: true,
 	hideAiNotes: false,
 };
 
