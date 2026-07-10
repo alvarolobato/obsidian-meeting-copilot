@@ -76,6 +76,8 @@ export default class SystemRecordingPlugin extends Plugin {
 	private currentMeetingNotePath: string | null = null;
 	/** Calendar event id of the in-progress meeting recording, for agenda state. */
 	private currentRecordingEventId: string | null = null;
+	/** Note paths currently being enriched, to prevent overlapping LLM runs. */
+	private enrichingPaths = new Set<string>();
 	private agendaEvents = new TypedEventBus<AgendaViewEvents>();
 
     async onload() {
@@ -868,6 +870,8 @@ export default class SystemRecordingPlugin extends Plugin {
     /** Inserts a finished transcription into its meeting note, then refreshes the agenda. */
     private async handleTranscriptionCompleted(payload: unknown): Promise<void> {
         let enrichTarget: TFile | null = null;
+        let transcriptText: string | null = null;
+        let inserted = false;
         try {
             const p = (payload ?? {}) as {
                 audioFile?: unknown;
@@ -878,6 +882,7 @@ export default class SystemRecordingPlugin extends Plugin {
             const transcript =
                 typeof p.transcription === "string" ? p.transcription : null;
             if (audio instanceof TFile && transcript) {
+                transcriptText = transcript;
                 const note = findMeetingNoteForAudio(this.app, audio);
                 // Skip if the transcriber already wrote into the meeting note.
                 const already =
@@ -888,11 +893,9 @@ export default class SystemRecordingPlugin extends Plugin {
                     if (this.settings.insertTranscript && !already) {
                         await insertTranscript(this.app, note, transcript);
                         new Notice(t().notices.transcriptAdded(note.basename));
+                        inserted = true;
                     }
                     enrichTarget = note;
-                    // Clears the "Transcribing…" spinner; enrichment (if enabled)
-                    // replaces this with its own status right after.
-                    this.setActionStatus(t().statusBar.transcriptAdded, "success");
                 }
             }
         } catch (e) {
@@ -900,12 +903,23 @@ export default class SystemRecordingPlugin extends Plugin {
         }
         this.agendaEvents.emit("changed", undefined);
 
-        if (
+        const willEnrich = !!(
             enrichTarget &&
             this.settings.enableEnrichment &&
             this.settings.enrichOnTranscribe
-        ) {
-            await this.enrichMeetingNote(enrichTarget);
+        );
+        // Only claim success when we actually wrote the transcript. If nothing
+        // was inserted and no enrichment will follow, clear the "Transcribing…"
+        // spinner so it doesn't linger (but never touch the recording timer).
+        if (inserted) {
+            this.setActionStatus(t().statusBar.transcriptAdded, "success");
+        } else if (!willEnrich && !this.recorder.isRecording) {
+            this.hideStatusBar();
+        }
+        if (willEnrich && enrichTarget) {
+            // Pass the fresh transcript so enrichment works even when
+            // insertTranscript is off and the note has no transcript yet.
+            await this.enrichMeetingNote(enrichTarget, transcriptText ?? undefined);
         }
     }
 
@@ -920,7 +934,10 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /** Generates AI notes from the note's manual notes + transcript and inserts a gray callout. */
-    private async enrichMeetingNote(file: TFile): Promise<void> {
+    private async enrichMeetingNote(
+        file: TFile,
+        transcriptOverride?: string
+    ): Promise<void> {
         if (!this.settings.enableEnrichment) {
             new Notice(t().notices.enrichDisabled);
             return;
@@ -930,33 +947,42 @@ export default class SystemRecordingPlugin extends Plugin {
             new Notice(t().notices.enrichNotConfigured);
             return;
         }
-
-        const content = await this.app.vault.read(file);
-        const notes = extractSection(content, "## Notes");
-        const transcript = extractTranscript(content);
-        if (!notes && !transcript) {
-            new Notice(t().notices.nothingToEnrich);
+        // Guard against overlapping runs on the same note (double-click, agenda
+        // + command, or auto-enrich racing a manual enrich).
+        if (this.enrichingPaths.has(file.path)) {
+            new Notice(t().notices.enrichInProgress);
             return;
         }
-
-        const fm = (this.app.metadataCache.getFileCache(file)?.frontmatter ??
-            {}) as Record<string, unknown>;
-        const attendeesVal = fm["attendees"];
-        const titleVal = fm["title"];
-        const dateVal = fm["date"];
-        const ctx = {
-            title: typeof titleVal === "string" ? titleVal : file.basename,
-            date: typeof dateVal === "string" ? dateVal : "",
-            attendees: Array.isArray(attendeesVal)
-                ? attendeesVal.map((x) => String(x)).join(", ")
-                : "",
-            notes,
-            transcript,
-        };
-
-        new Notice(t().notices.enriching);
-        this.setActionStatus(t().statusBar.enriching, "busy");
+        this.enrichingPaths.add(file.path);
         try {
+            const content = await this.app.vault.read(file);
+            const notes = extractSection(content, "## Notes");
+            const transcript =
+                transcriptOverride && transcriptOverride.trim().length > 0
+                    ? transcriptOverride
+                    : extractTranscript(content);
+            if (!notes && !transcript) {
+                new Notice(t().notices.nothingToEnrich);
+                return;
+            }
+
+            const fm = (this.app.metadataCache.getFileCache(file)?.frontmatter ??
+                {}) as Record<string, unknown>;
+            const attendeesVal = fm["attendees"];
+            const titleVal = fm["title"];
+            const dateVal = fm["date"];
+            const ctx = {
+                title: typeof titleVal === "string" ? titleVal : file.basename,
+                date: typeof dateVal === "string" ? dateVal : "",
+                attendees: Array.isArray(attendeesVal)
+                    ? attendeesVal.map((x) => String(x)).join(", ")
+                    : "",
+                notes,
+                transcript,
+            };
+
+            new Notice(t().notices.enriching);
+            this.setActionStatus(t().statusBar.enriching, "busy");
             const output = await chatComplete({
                 baseUrl: enrichBaseUrl,
                 apiKey: enrichApiKey,
@@ -978,6 +1004,8 @@ export default class SystemRecordingPlugin extends Plugin {
                 t().notices.enrichError(e instanceof Error ? e.message : String(e))
             );
             this.setActionStatus(t().statusBar.enrichFailed, "error");
+        } finally {
+            this.enrichingPaths.delete(file.path);
         }
     }
 

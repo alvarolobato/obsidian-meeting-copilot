@@ -33,6 +33,7 @@ export const en = {
 		enrichNotConfigured:
 			"Set the enrichment base URL, API key and model in settings first.",
 		enrichDisabled: "AI enrichment is disabled in settings.",
+		enrichInProgress: "This note is already being enriched…",
 		nothingToEnrich: "No notes or transcript to enrich in this note.",
 		notAMeetingNote: "Open a meeting note to enrich it.",
 		aiNotesHidden: "AI notes hidden",
