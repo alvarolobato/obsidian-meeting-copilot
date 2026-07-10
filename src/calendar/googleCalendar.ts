@@ -2,6 +2,7 @@ import { requestUrl } from "obsidian";
 import type { GoogleOAuth } from "../auth/googleOAuth";
 import { extractMeetLink, RawConferenceEvent } from "./meetLink";
 import { extractMeetingUrlFromText } from "./meetingUrl";
+import { isMeetingEventType } from "./eventFilter";
 
 export interface GCalEvent {
 	id: string;
@@ -39,6 +40,7 @@ interface RawAttendee {
 interface RawEvent extends RawConferenceEvent {
 	id?: string;
 	summary?: string;
+	eventType?: string;
 	location?: string;
 	description?: string;
 	htmlLink?: string;
@@ -99,7 +101,9 @@ export async function listEvents(
 	}).toString();
 	const url = `${API}/calendars/${encodeURIComponent(calendarId)}/events?${params}`;
 	const json = (await authedGet(oauth, url)) as { items?: RawEvent[] };
-	return (json.items ?? []).map((ev) => {
+	return (json.items ?? [])
+		.filter((ev) => isMeetingEventType(ev.eventType))
+		.map((ev) => {
 		const isAllDay = !!ev.start?.date;
 		const start = isAllDay
 			? new Date((ev.start?.date ?? "") + "T00:00:00")

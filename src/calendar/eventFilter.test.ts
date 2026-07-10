@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { shouldRecord, parseKeywords } from "./eventFilter";
+import { shouldRecord, parseKeywords, isMeetingEventType } from "./eventFilter";
 
 describe("shouldRecord", () => {
 	it("records a normal timed event when there are no keywords", () => {
@@ -20,6 +20,18 @@ describe("shouldRecord", () => {
 
 	it("ignores blank keywords", () => {
 		expect(shouldRecord({ summary: "anything", allDay: false }, ["", "  "])).toBe(true);
+	});
+});
+
+describe("isMeetingEventType", () => {
+	it("drops Google working-location events", () => {
+		expect(isMeetingEventType("workingLocation")).toBe(false);
+	});
+
+	it("keeps regular meetings and unknown/undefined types", () => {
+		expect(isMeetingEventType("default")).toBe(true);
+		expect(isMeetingEventType(undefined)).toBe(true);
+		expect(isMeetingEventType("focusTime")).toBe(true);
 	});
 });
 
