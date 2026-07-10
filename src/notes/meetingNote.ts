@@ -208,3 +208,82 @@ export async function linkRecording(
 		f.status = "recorded";
 	});
 }
+
+export const TRANSCRIPT_HEADING = "## Transcript";
+
+/**
+ * Inserts or replaces a `heading`-delimited section in a markdown body.
+ * The section runs from its heading line to the next top-or-second-level
+ * heading (or end of file); if absent, the block is appended. Pure/testable.
+ */
+export function upsertSection(
+	content: string,
+	heading: string,
+	body: string
+): string {
+	const lines = content.split("\n");
+	const headingTrim = heading.trim();
+	const block = `${headingTrim}\n\n${body.trim()}`;
+	const start = lines.findIndex((l) => l.trim() === headingTrim);
+
+	if (start === -1) {
+		const trimmed = content.replace(/\s+$/, "");
+		return `${trimmed.length ? `${trimmed}\n\n` : ""}${block}\n`;
+	}
+
+	let end = lines.length;
+	for (let i = start + 1; i < lines.length; i++) {
+		if (/^#{1,2}\s/.test(lines[i] ?? "")) {
+			end = i;
+			break;
+		}
+	}
+	const before = lines.slice(0, start).join("\n").replace(/\s+$/, "");
+	const after = lines.slice(end).join("\n").replace(/^\s+/, "");
+	const parts: string[] = [];
+	if (before.length) parts.push(before);
+	parts.push(block);
+	if (after.length) parts.push(after);
+	return `${parts.join("\n\n")}\n`;
+}
+
+/**
+ * Finds the meeting note a recording belongs to: first the colocated note
+ * (same folder + basename — how this plugin saves recordings), otherwise any
+ * note whose `recording` frontmatter links the audio file.
+ */
+export function findMeetingNoteForAudio(app: App, audio: TFile): TFile | null {
+	const dir = audio.parent?.path ?? "";
+	const colocated = normalizePath(
+		`${dir && dir !== "/" ? `${dir}/` : ""}${audio.basename}.md`
+	);
+	const direct = app.vault.getAbstractFileByPath(colocated);
+	if (direct instanceof TFile) return direct;
+
+	for (const file of app.vault.getMarkdownFiles()) {
+		const fm = app.metadataCache.getFileCache(file)?.frontmatter as
+			| Record<string, unknown>
+			| undefined;
+		const rec = fm?.["recording"];
+		if (typeof rec !== "string") continue;
+		const link = rec.replace(/^\[\[/, "").replace(/\]\]$/, "").trim();
+		const dest = app.metadataCache.getFirstLinkpathDest(link, file.path);
+		if (dest instanceof TFile && dest.path === audio.path) return file;
+	}
+	return null;
+}
+
+/** Writes the transcript into the note's `## Transcript` section and marks it transcribed. */
+export async function insertTranscript(
+	app: App,
+	file: TFile,
+	transcript: string
+): Promise<void> {
+	const content = await app.vault.read(file);
+	const next = upsertSection(content, TRANSCRIPT_HEADING, transcript);
+	if (next !== content) await app.vault.modify(file, next);
+	await app.fileManager.processFrontMatter(file, (fm) => {
+		const f = fm as Record<string, unknown>;
+		f.status = "transcribed";
+	});
+}

@@ -15,6 +15,8 @@ import { CalendarScheduler, ScheduledEvent } from "./calendar/scheduler";
 import { actionNotice } from "./ui/actionNotice";
 import {
     createMeetingNote,
+    findMeetingNoteForAudio,
+    insertTranscript,
     linkRecording,
     MeetingEventInfo,
     MeetingNoteConfig,
@@ -87,12 +89,13 @@ export default class SystemRecordingPlugin extends Plugin {
             callback: () => void this.openAgenda(),
         });
 
-        // Refresh the agenda when a transcription finishes (ai-transcriber emits this).
+        // When a transcription finishes, drop it into the matching meeting note
+        // and refresh the agenda (ai-transcriber emits this custom event).
         this.registerEvent(
             this.app.workspace.on(
-                // Custom event from the AI Transcriber plugin.
                 "transcription:completed" as never,
-                () => this.agendaEvents.emit("changed", undefined)
+                (payload: unknown) =>
+                    void this.handleTranscriptionCompleted(payload)
             )
         );
 
@@ -656,6 +659,37 @@ export default class SystemRecordingPlugin extends Plugin {
                 this.ribbonIconEl.removeClass("is-recording");
             }
         }
+    }
+
+    /** Inserts a finished transcription into its meeting note, then refreshes the agenda. */
+    private async handleTranscriptionCompleted(payload: unknown): Promise<void> {
+        try {
+            if (this.settings.insertTranscript) {
+                const p = (payload ?? {}) as {
+                    audioFile?: unknown;
+                    transcription?: unknown;
+                    file?: unknown;
+                };
+                const audio = p.audioFile;
+                const transcript =
+                    typeof p.transcription === "string" ? p.transcription : null;
+                if (audio instanceof TFile && transcript) {
+                    const note = findMeetingNoteForAudio(this.app, audio);
+                    // Skip if the transcriber already wrote into the meeting note.
+                    const already =
+                        p.file instanceof TFile &&
+                        note !== null &&
+                        p.file.path === note.path;
+                    if (note && !already) {
+                        await insertTranscript(this.app, note, transcript);
+                        new Notice(t().notices.transcriptAdded(note.basename));
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn("Meeting Copilot: failed to insert transcript", e);
+        }
+        this.agendaEvents.emit("changed", undefined);
     }
 
     private async attachRecording(fileName: string) {

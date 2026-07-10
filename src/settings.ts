@@ -14,6 +14,7 @@ export interface SystemRecordingSettings {
 	noteTitlePattern: string;
 	noteTemplate: string;
 	retentionDays: number;
+	insertTranscript: boolean;
 	googleClientId: string;
 	googleClientSecret: string;
 	googleTokens: StoredTokens | null;
@@ -32,6 +33,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	noteTitlePattern: DEFAULT_TITLE_PATTERN,
 	noteTemplate: DEFAULT_NOTE_TEMPLATE,
 	retentionDays: 30,
+	insertTranscript: true,
 	googleClientId: "",
 	googleClientSecret: "",
 	googleTokens: null,
@@ -122,6 +124,18 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                 ta.inputEl.rows = 12;
                 ta.inputEl.addClass("meeting-copilot-template-input");
             });
+
+        new Setting(containerEl)
+            .setName(s.settings.insertTranscript.name)
+            .setDesc(s.settings.insertTranscript.desc)
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.insertTranscript)
+                    .onChange(async (value) => {
+                        this.plugin.settings.insertTranscript = value;
+                        await this.plugin.saveSettings();
+                    })
+            );
 
         new Setting(containerEl)
             .setName(s.settings.retentionDays.name)

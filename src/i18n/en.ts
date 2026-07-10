@@ -24,6 +24,7 @@ export const en = {
 		calendarError: (msg: string) => `Calendar error: ${msg}`,
 		recordingSaved: "Recording saved",
 		unknownError: "Unknown error",
+		transcriptAdded: (note: string) => `Transcript added to ${note}`,
 	},
 	statusBar: {
 		recording: (hms: string) => `Recording ${hms}`,
@@ -103,6 +104,10 @@ export const en = {
 		noteTemplate: {
 			name: "Note template",
 			desc: "Body of new meeting notes. Placeholders: {{title}}, {{date}}, {{start:FMT}}, {{end:FMT}}, {{duration}}, {{location}}, {{meeting_url}}, {{organizer}}, {{attendees}}, {{attendees_list}}, {{attendees_wikilinks}}, {{event_link}}. Frontmatter (attendees, status, recording, …) is managed automatically.",
+		},
+		insertTranscript: {
+			name: "Insert transcript into meeting note",
+			desc: "When AI Transcriber finishes, write the transcript into the matching meeting note's ## Transcript section and mark it transcribed.",
 		},
 		retentionDays: {
 			name: "Recording retention (days)",
