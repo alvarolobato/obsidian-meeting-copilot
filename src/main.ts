@@ -672,7 +672,12 @@ export default class SystemRecordingPlugin extends Plugin {
             new Notice(t().agenda.notices.noRecording);
             return;
         }
-        await this.app.workspace.getLeaf(false).openFile(m.recording);
+        await this.launchTranscriber(m.recording);
+    }
+
+    /** Opens an audio file and asks the AI Transcriber plugin to transcribe it. */
+    private async launchTranscriber(recording: TFile): Promise<void> {
+        await this.app.workspace.getLeaf(false).openFile(recording);
         const commands = (
             this.app as unknown as {
                 commands?: {
@@ -681,9 +686,11 @@ export default class SystemRecordingPlugin extends Plugin {
                 };
             }
         ).commands;
-        const id = Object.keys(commands?.commands ?? {}).find((k) =>
-            k.startsWith("ai-transcriber:")
-        );
+        const ids = Object.keys(commands?.commands ?? {});
+        // Prefer the explicit "transcribe current audio" command; fall back to any.
+        const id =
+            ids.find((k) => k === "ai-transcriber:api-transcribe-audio") ??
+            ids.find((k) => k.startsWith("ai-transcriber:"));
         if (id && commands?.executeCommandById) {
             commands.executeCommandById(id);
             this.setActionStatus(t().statusBar.transcribing, "busy");
@@ -1010,6 +1017,13 @@ export default class SystemRecordingPlugin extends Plugin {
                     );
                 } finally {
                     this.agendaEvents.emit("changed", undefined);
+                }
+                // Close the loop: hand the fresh recording to the transcriber.
+                if (this.settings.autoTranscribe) {
+                    const audio = this.app.vault.getAbstractFileByPath(link);
+                    if (audio instanceof TFile) {
+                        void this.launchTranscriber(audio);
+                    }
                 }
                 return;
             }

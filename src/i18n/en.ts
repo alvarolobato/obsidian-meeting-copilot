@@ -128,6 +128,10 @@ export const en = {
 			name: "Insert transcript into meeting note",
 			desc: "When AI Transcriber finishes, write the transcript into the matching meeting note's ## Transcript section and mark it transcribed.",
 		},
+		autoTranscribe: {
+			name: "Auto-transcribe when recording stops",
+			desc: "When a meeting recording finishes, automatically open AI Transcriber for it (you still confirm in the transcriber dialog). Requires the AI Transcriber plugin.",
+		},
 		retentionDays: {
 			name: "Recording retention (days)",
 			desc: "Planned — not yet enforced. Intended to clean up recordings older than this many days. 0 keeps them forever.",

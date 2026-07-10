@@ -16,6 +16,7 @@ export interface SystemRecordingSettings {
 	noteTemplate: string;
 	retentionDays: number;
 	insertTranscript: boolean;
+	autoTranscribe: boolean;
 	googleClientId: string;
 	googleClientSecret: string;
 	googleTokens: StoredTokens | null;
@@ -42,6 +43,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	noteTemplate: DEFAULT_NOTE_TEMPLATE,
 	retentionDays: 30,
 	insertTranscript: true,
+	autoTranscribe: true,
 	googleClientId: "",
 	googleClientSecret: "",
 	googleTokens: null,
@@ -148,6 +150,18 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     .setValue(this.plugin.settings.insertTranscript)
                     .onChange(async (value) => {
                         this.plugin.settings.insertTranscript = value;
+                        await this.plugin.saveSettings();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName(s.settings.autoTranscribe.name)
+            .setDesc(s.settings.autoTranscribe.desc)
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.autoTranscribe)
+                    .onChange(async (value) => {
+                        this.plugin.settings.autoTranscribe = value;
                         await this.plugin.saveSettings();
                     })
             );
