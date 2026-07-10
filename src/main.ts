@@ -259,13 +259,27 @@ export default class SystemRecordingPlugin extends Plugin {
               })
             | null;
         this.settings = Object.assign({}, DEFAULT_SETTINGS, raw ?? {});
-        // Migrate the previously enrichment-only endpoint into the shared fields.
-        if (raw?.enrichBaseUrl && this.settings.apiBaseUrl === DEFAULT_SETTINGS.apiBaseUrl) {
-            this.settings.apiBaseUrl = raw.enrichBaseUrl;
+        // Normalize the shared endpoint (tolerate hand-edited data.json).
+        this.settings.apiBaseUrl = (this.settings.apiBaseUrl ?? "").trim();
+        this.settings.apiKey = (this.settings.apiKey ?? "").trim();
+        // Migrate the previously enrichment-only endpoint into the shared fields
+        // when the shared ones are still unset or at the default.
+        const legacyBase = raw?.enrichBaseUrl?.trim();
+        const legacyKey = raw?.enrichApiKey?.trim();
+        if (
+            legacyBase &&
+            (!this.settings.apiBaseUrl ||
+                this.settings.apiBaseUrl === DEFAULT_SETTINGS.apiBaseUrl)
+        ) {
+            this.settings.apiBaseUrl = legacyBase;
         }
-        if (raw?.enrichApiKey && !this.settings.apiKey) {
-            this.settings.apiKey = raw.enrichApiKey;
+        if (legacyKey && !this.settings.apiKey) {
+            this.settings.apiKey = legacyKey;
         }
+        // Don't persist the retired keys back into data.json.
+        const bag = this.settings as unknown as Record<string, unknown>;
+        delete bag.enrichBaseUrl;
+        delete bag.enrichApiKey;
         // Guard against corrupt/old data selecting an unknown STT model, which
         // would silently fall through to the GPT-4o path in the engine.
         if (!(STT_MODELS as readonly string[]).includes(this.settings.sttModel)) {
@@ -753,6 +767,7 @@ export default class SystemRecordingPlugin extends Plugin {
             apiKey: s.apiKey,
             model: s.sttModel as TranscriptionModel,
             modelOverride: s.sttModelId,
+            chatModel: s.enrichModel,
             language: s.sttLanguage || "auto",
             vadMode: s.vadMode,
             postProcessingEnabled: s.postProcessingEnabled,

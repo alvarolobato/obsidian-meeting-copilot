@@ -8,6 +8,7 @@ import {
 	type VADMode,
 } from "./vendor/ApiSettings";
 import {
+	setChatModelOverride,
 	setTranscribeBaseUrl,
 	setTranscribeModelOverride,
 } from "./endpointConfig";
@@ -16,6 +17,7 @@ import {
 	initializeTranslations,
 } from "./vendor/i18n/index";
 import { PathUtils } from "./vendor/utils/PathUtils";
+import { createSerialQueue } from "../util/serialize";
 import en from "./vendor/i18n/translations/en";
 import ja from "./vendor/i18n/translations/ja";
 import ko from "./vendor/i18n/translations/ko";
@@ -44,6 +46,8 @@ export interface TranscribeConfig {
 	model: TranscriptionModel;
 	/** Wire model id override for renaming gateways; "" uses the canonical model. */
 	modelOverride: string;
+	/** Chat model for GPT-assisted dictionary correction; "" uses the engine default. */
+	chatModel: string;
 	language: string;
 	/** Only "server" | "disabled" are wired; local VAD needs a WASM asset we don't ship. */
 	vadMode: VADMode;
@@ -58,7 +62,7 @@ export interface TranscribeConfig {
 // awaits. Serialize runs so a second transcription can't overwrite the globals
 // mid-flight. Meetings are transcribed one at a time in practice, so a queue is
 // cheaper than threading config through the (pristine) vendored constructors.
-let queue: Promise<unknown> = Promise.resolve();
+const serial = createSerialQueue();
 
 async function runTranscription(
 	app: App,
@@ -68,6 +72,7 @@ async function runTranscription(
 ): Promise<string> {
 	setTranscribeBaseUrl(cfg.baseUrl);
 	setTranscribeModelOverride(cfg.modelOverride);
+	setChatModelOverride(cfg.chatModel);
 	const settings: APITranscriptionSettings = {
 		...DEFAULT_API_SETTINGS,
 		openaiApiKey: cfg.apiKey ? `PLAIN::${cfg.apiKey}` : "",
@@ -96,8 +101,5 @@ export function transcribeAudio(
 	cfg: TranscribeConfig,
 	signal?: AbortSignal
 ): Promise<string> {
-	const run = queue.then(() => runTranscription(app, file, cfg, signal));
-	// Keep the chain alive regardless of this run's outcome.
-	queue = run.catch(() => undefined);
-	return run;
+	return serial(() => runTranscription(app, file, cfg, signal));
 }

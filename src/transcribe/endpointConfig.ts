@@ -12,6 +12,7 @@ const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 
 let baseUrl = DEFAULT_BASE_URL;
 let modelOverride = "";
+let chatModelOverride = "";
 
 /** Sets the `/v1` base URL used by the vendored transcription HTTP clients. */
 export function setTranscribeBaseUrl(url: string): void {
@@ -37,4 +38,18 @@ export function setTranscribeModelOverride(id: string): void {
 /** Returns the wire model id override, or "" when the canonical id should be used. */
 export function getTranscribeModelOverride(): string {
 	return modelOverride;
+}
+
+/**
+ * Overrides the chat model id used by the vendored GPT dictionary-correction
+ * service (its default `gpt-4o-mini` won't exist on a renaming gateway). Empty
+ * string = keep the vendored default.
+ */
+export function setChatModelOverride(id: string): void {
+	chatModelOverride = (id ?? "").trim();
+}
+
+/** Returns the chat model id override, or "" for the vendored default. */
+export function getChatModelOverride(): string {
+	return chatModelOverride;
 }

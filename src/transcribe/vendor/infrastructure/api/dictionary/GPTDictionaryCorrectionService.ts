@@ -7,7 +7,7 @@ import { DICTIONARY_CORRECTION_CONFIG } from '../../../config/DictionaryCorrecti
 import { ResourceManager } from '../../../core/resources/ResourceManager';
 import { Logger } from '../../../utils/Logger';
 import { ApiClient } from '../ApiClient';
-import { getTranscribeBaseUrl } from '../../../../endpointConfig';
+import { getChatModelOverride, getTranscribeBaseUrl } from '../../../../endpointConfig';
 
 import type { IGPTCorrectionService } from '../../../core/transcription/DictionaryCorrector';
 import type { OpenAIChatResponse } from '../openai/OpenAIChatTypes';
@@ -46,7 +46,9 @@ export class GPTDictionaryCorrectionService extends ApiClient implements IGPTCor
 		const userPrompt = this.getUserPrompt(language, text);
 
 		const requestBody = {
-			model: DICTIONARY_CORRECTION_CONFIG.gpt.model,
+			// MEETING-COPILOT PATCH: use the owned chat model override when set
+			// (renaming gateways don't have the default gpt-4o-mini). See VENDOR.md.
+			model: getChatModelOverride() || DICTIONARY_CORRECTION_CONFIG.gpt.model,
 			messages: [
 				{ role: 'system', content: systemPrompt },
 				{ role: 'user', content: userPrompt }

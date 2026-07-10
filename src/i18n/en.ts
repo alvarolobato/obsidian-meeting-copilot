@@ -33,7 +33,7 @@ export const en = {
 		enrichDone: (note: string) => `Enriched ${note}`,
 		enrichError: (msg: string) => `Enrichment failed: ${msg}`,
 		enrichNotConfigured:
-			"Set the enrichment base URL, API key and model in settings first.",
+			"Set the AI endpoint (base URL + API key) and an enrichment model in settings first.",
 		enrichDisabled: "AI enrichment is disabled in settings.",
 		enrichInProgress: "This note is already being enriched…",
 		nothingToEnrich: "No notes or transcript to enrich in this note.",
