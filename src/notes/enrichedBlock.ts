@@ -36,7 +36,7 @@ export function stripEnriched(content: string): string {
 	return out.join("\n");
 }
 
-const FRONTMATTER = /^(---\n[\s\S]*?\n---\n)/;
+const FRONTMATTER = /^(---\r?\n[\s\S]*?\r?\n---\r?\n)/;
 
 /**
  * Places the enriched callout near the top of the body — after any YAML

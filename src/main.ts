@@ -207,6 +207,7 @@ export default class SystemRecordingPlugin extends Plugin {
             this.recorder.stop();
         }
         this.clearDurationTimer();
+        this.clearActionStatus();
 		this.scheduler?.stop();
 		this.agendaEvents.clear();
     }
@@ -529,10 +530,12 @@ export default class SystemRecordingPlugin extends Plugin {
             | Record<string, unknown>
             | undefined;
         if (!fm) return false;
+        const nonEmpty = (k: string): boolean => {
+            const v = fm[k];
+            return typeof v === "string" && v.trim().length > 0;
+        };
         return (
-            typeof fm["event_id"] === "string" ||
-            typeof fm["recording"] === "string" ||
-            typeof fm["meeting_url"] === "string"
+            nonEmpty("event_id") || nonEmpty("recording") || nonEmpty("meeting_url")
         );
     }
 
@@ -555,13 +558,20 @@ export default class SystemRecordingPlugin extends Plugin {
             const v = fm[k];
             return typeof v === "string" ? v : "";
         };
-        const toDate = (v: unknown): Date =>
-            new Date(typeof v === "string" ? v : NaN);
+        // Fall back to "now" for missing/invalid dates so time-based actions
+        // (e.g. create-and-record path templates) don't produce "Invalid Date".
+        const toDate = (v: unknown): Date => {
+            const d = new Date(typeof v === "string" ? v : NaN);
+            return isNaN(d.getTime()) ? new Date() : d;
+        };
 
         let recording: TFile | null = null;
         const rec = fm["recording"];
         if (typeof rec === "string") {
-            const link = rec.replace(/^\[\[/, "").replace(/\]\]$/, "").trim();
+            // Strip [[ ]] and any |alias so getFirstLinkpathDest gets the target.
+            const link = (
+                rec.replace(/^\[\[/, "").replace(/\]\]$/, "").split("|")[0] ?? ""
+            ).trim();
             const dest = this.app.metadataCache.getFirstLinkpathDest(
                 link,
                 file.path
@@ -762,6 +772,8 @@ export default class SystemRecordingPlugin extends Plugin {
     // MARK: - UI helpers
 
     private startDurationTimer() {
+        // Drop any leftover action-status spinner/styling before the timer owns the bar.
+        this.clearActionStatus();
         if (this.statusBarEl) {
             this.statusBarEl.removeClass("system-recording-hidden");
         }
@@ -797,19 +809,26 @@ export default class SystemRecordingPlugin extends Plugin {
         this.agendaEvents.emit("changed", undefined);
     }
 
-    private hideStatusBar() {
+    /** Clears any action-status timeout, styling, and DOM (shared teardown). */
+    private clearActionStatus() {
         if (this.statusTimeout !== null) {
             window.clearTimeout(this.statusTimeout);
             this.statusTimeout = null;
         }
         if (this.statusBarEl) {
-            this.statusBarEl.addClass("system-recording-hidden");
             this.statusBarEl.removeClasses([
                 "mc-status-busy",
                 "mc-status-success",
                 "mc-status-error",
             ]);
             this.statusBarEl.empty();
+        }
+    }
+
+    private hideStatusBar() {
+        this.clearActionStatus();
+        if (this.statusBarEl) {
+            this.statusBarEl.addClass("system-recording-hidden");
         }
     }
 
@@ -827,12 +846,7 @@ export default class SystemRecordingPlugin extends Plugin {
         // Don't clobber the live recording timer.
         if (this.recorder.isRecording) return;
 
-        if (this.statusTimeout !== null) {
-            window.clearTimeout(this.statusTimeout);
-            this.statusTimeout = null;
-        }
-        el.empty();
-        el.removeClasses(["mc-status-busy", "mc-status-success", "mc-status-error"]);
+        this.clearActionStatus();
         el.removeClass("system-recording-hidden");
         el.addClass(`mc-status-${state}`);
 
@@ -1052,7 +1066,13 @@ export default class SystemRecordingPlugin extends Plugin {
                 if (this.settings.autoTranscribe) {
                     const audio = this.app.vault.getAbstractFileByPath(link);
                     if (audio instanceof TFile) {
-                        void this.launchTranscriber(audio);
+                        void this.launchTranscriber(audio).catch((e) => {
+                            console.warn(
+                                "[Meeting Copilot] auto-transcribe failed",
+                                e
+                            );
+                            if (!this.recorder.isRecording) this.hideStatusBar();
+                        });
                     }
                 }
                 return;

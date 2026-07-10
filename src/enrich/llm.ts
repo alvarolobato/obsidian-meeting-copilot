@@ -7,6 +7,8 @@ export interface ChatParams {
 	system: string;
 	user: string;
 	temperature?: number;
+	/** Abort the request after this many ms (default 120s). */
+	timeoutMs?: number;
 }
 
 interface ChatResponse {
@@ -14,9 +16,14 @@ interface ChatResponse {
 	error?: { message?: string };
 }
 
+const DEFAULT_TIMEOUT_MS = 120_000;
+
 /**
  * Calls an OpenAI-compatible `/chat/completions` endpoint (OpenAI, Azure,
  * LiteLLM proxy, Ollama, …) via Obsidian's requestUrl to avoid CORS.
+ *
+ * Note: requestUrl can't be aborted, but racing it against a timeout ensures
+ * the caller's promise always settles, so callers can release locks/UI state.
  */
 export async function chatComplete(p: ChatParams): Promise<string> {
 	const url = `${p.baseUrl.replace(/\/+$/, "")}/chat/completions`;
@@ -33,7 +40,20 @@ export async function chatComplete(p: ChatParams): Promise<string> {
 	if (typeof p.temperature === "number") {
 		payload.temperature = p.temperature;
 	}
-	const res = await requestUrl({
+	const timeoutMs = p.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<never>((_, reject) => {
+		timer = setTimeout(
+			() =>
+				reject(
+					new Error(
+						`LLM request timed out after ${Math.round(timeoutMs / 1000)}s`
+					)
+				),
+			timeoutMs
+		);
+	});
+	const request = requestUrl({
 		url,
 		method: "POST",
 		headers: {
@@ -43,6 +63,12 @@ export async function chatComplete(p: ChatParams): Promise<string> {
 		body: JSON.stringify(payload),
 		throw: false,
 	});
+	let res;
+	try {
+		res = await Promise.race([request, timeout]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
 
 	const data = res.json as ChatResponse | undefined;
 	if (res.status < 200 || res.status >= 300) {
