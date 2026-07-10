@@ -209,7 +209,7 @@ export async function linkRecording(
 	});
 }
 
-export const TRANSCRIPT_HEADING = "## Transcript";
+export const TRANSCRIPT_CALLOUT_TITLE = "Transcript";
 
 /**
  * Inserts or replaces a `heading`-delimited section in a markdown body.
@@ -273,14 +273,63 @@ export function findMeetingNoteForAudio(app: App, audio: TFile): TFile | null {
 	return null;
 }
 
-/** Writes the transcript into the note's `## Transcript` section and marks it transcribed. */
+/**
+ * Formats the transcript as a **collapsed** Obsidian callout (folded by
+ * default, since you rarely want to read it), each line quoted so blank lines
+ * stay inside the callout.
+ */
+export function formatTranscriptCallout(transcript: string): string {
+	const body = transcript
+		.trim()
+		.split("\n")
+		.map((l) => (l.length ? `> ${l}` : ">"))
+		.join("\n");
+	return `> [!quote]- ${TRANSCRIPT_CALLOUT_TITLE}\n${body}`;
+}
+
+/** Removes a previously-inserted transcript (collapsed callout or legacy `## Transcript` heading). */
+export function stripTranscript(content: string): string {
+	const lines = content.split("\n");
+	const out: string[] = [];
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i] ?? "";
+		// Legacy "## Transcript" heading section: drop to the next heading / EOF.
+		if (line.trim() === `## ${TRANSCRIPT_CALLOUT_TITLE}`) {
+			i++;
+			while (i < lines.length && !/^#{1,2}\s/.test(lines[i] ?? "")) i++;
+			i--;
+			continue;
+		}
+		// Collapsed transcript callout: drop the marker + its ">" continuation.
+		const marker = new RegExp(
+			`^>\\s*\\[![\\w-]+\\][+-]?\\s*${TRANSCRIPT_CALLOUT_TITLE}\\s*$`
+		);
+		if (marker.test(line)) {
+			i++;
+			while (i < lines.length && /^>/.test(lines[i] ?? "")) i++;
+			i--;
+			continue;
+		}
+		out.push(line);
+	}
+	return out.join("\n");
+}
+
+/** Places the transcript as a collapsed callout at the very bottom of the note body. Pure/testable. */
+export function transcriptAtBottom(content: string, transcript: string): string {
+	const stripped = stripTranscript(content).replace(/\s+$/, "");
+	const block = formatTranscriptCallout(transcript);
+	return `${stripped.length ? `${stripped}\n\n` : ""}${block}\n`;
+}
+
+/** Writes the transcript into a collapsed callout at the note's bottom and marks it transcribed. */
 export async function insertTranscript(
 	app: App,
 	file: TFile,
 	transcript: string
 ): Promise<void> {
 	const content = await app.vault.read(file);
-	const next = upsertSection(content, TRANSCRIPT_HEADING, transcript);
+	const next = transcriptAtBottom(content, transcript);
 	if (next !== content) await app.vault.modify(file, next);
 	await app.fileManager.processFrontMatter(file, (fm) => {
 		const f = fm as Record<string, unknown>;
