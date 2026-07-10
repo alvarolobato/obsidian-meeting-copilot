@@ -17,6 +17,7 @@ export interface SystemRecordingSettings {
 	retentionDays: number;
 	insertTranscript: boolean;
 	autoTranscribe: boolean;
+	actionItemsAsTasks: boolean;
 	googleClientId: string;
 	googleClientSecret: string;
 	googleTokens: StoredTokens | null;
@@ -44,6 +45,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	retentionDays: 30,
 	insertTranscript: true,
 	autoTranscribe: true,
+	actionItemsAsTasks: true,
 	googleClientId: "",
 	googleClientSecret: "",
 	googleTokens: null,
@@ -396,5 +398,17 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 				);
 				ta.inputEl.addClass("meeting-copilot-template-input");
 			});
+
+		new Setting(containerEl)
+			.setName(s.settings.actionItemsAsTasks.name)
+			.setDesc(s.settings.actionItemsAsTasks.desc)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.actionItemsAsTasks)
+					.onChange(async (value) => {
+						this.plugin.settings.actionItemsAsTasks = value;
+						await this.plugin.saveSettings();
+					})
+			);
     }
 }

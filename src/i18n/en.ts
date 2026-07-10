@@ -12,6 +12,8 @@ export const en = {
 		openAgenda: "Open meeting agenda",
 		enrichNote: "Enrich meeting note (AI)",
 		toggleAiNotes: "Toggle AI notes visibility",
+		cleanupRecordings: "Clean up old recordings",
+		createDashboard: "Create/update meetings dashboard",
 	},
 	notices: {
 		autoRecordEnabled: "Calendar auto-recording enabled",
@@ -38,6 +40,12 @@ export const en = {
 		notAMeetingNote: "Open a meeting note to enrich it.",
 		aiNotesHidden: "AI notes hidden",
 		aiNotesShown: "AI notes shown",
+		retentionDisabled:
+			"Recording retention is off. Set a positive number of days in settings.",
+		retentionCleaned: (n: number) =>
+			`Trashed ${n} old recording${n === 1 ? "" : "s"}`,
+		retentionNothing: "No recordings past the retention window.",
+		dashboardCreated: "Meetings dashboard updated",
 	},
 	statusBar: {
 		recording: (hms: string) => `Recording ${hms}`,
@@ -135,7 +143,11 @@ export const en = {
 		},
 		retentionDays: {
 			name: "Recording retention (days)",
-			desc: "Planned — not yet enforced. Intended to clean up recordings older than this many days. 0 keeps them forever.",
+			desc: "Move recordings older than this many days to the trash (audio only — the transcript stays in the note). Runs on startup and via the 'Clean up old recordings' command. 0 keeps recordings forever.",
+		},
+		actionItemsAsTasks: {
+			name: "Action items as tasks",
+			desc: "When enriching, lift the AI's action items into checkboxes under '## Action items' so the obsidian-tasks plugin can track them. Existing and completed tasks are preserved.",
 		},
 		calendarHeading: "Google Calendar integration",
 		clientId: {
