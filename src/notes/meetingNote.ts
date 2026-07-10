@@ -1,6 +1,18 @@
 import { App, normalizePath, TFile } from "obsidian";
 import { renderTemplate } from "./template";
 
+/**
+ * Extracts the link target from a `recording` frontmatter value, stripping the
+ * `[[ ]]` wrapper and any `|alias` so it can be passed to
+ * `getFirstLinkpathDest`. Returns "" for a non-string / empty value.
+ */
+export function recordingLinkTarget(rec: unknown): string {
+	if (typeof rec !== "string") return "";
+	return (
+		rec.replace(/^\[\[/, "").replace(/\]\]$/, "").split("|")[0] ?? ""
+	).trim();
+}
+
 /** Everything the note builder needs, decoupled from the calendar/scheduler types. */
 export interface MeetingEventInfo {
 	id: string;
@@ -264,12 +276,8 @@ export function findMeetingNoteForAudio(app: App, audio: TFile): TFile | null {
 		const fm = app.metadataCache.getFileCache(file)?.frontmatter as
 			| Record<string, unknown>
 			| undefined;
-		const rec = fm?.["recording"];
-		if (typeof rec !== "string") continue;
-		// Strip [[ ]] and any |alias so getFirstLinkpathDest gets the target.
-		const link = (
-			rec.replace(/^\[\[/, "").replace(/\]\]$/, "").split("|")[0] ?? ""
-		).trim();
+		const link = recordingLinkTarget(fm?.["recording"]);
+		if (!link) continue;
 		const dest = app.metadataCache.getFirstLinkpathDest(link, file.path);
 		if (dest instanceof TFile && dest.path === audio.path) return file;
 	}

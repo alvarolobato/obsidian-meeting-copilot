@@ -1,6 +1,9 @@
 import { App, TFile } from "obsidian";
 import type { GCalEvent } from "../../calendar/googleCalendar";
-import type { MeetingEventInfo } from "../../notes/meetingNote";
+import {
+	recordingLinkTarget,
+	type MeetingEventInfo,
+} from "../../notes/meetingNote";
 
 /**
  * A calendar event enriched with the state of its meeting note/recording in the
@@ -49,12 +52,8 @@ export function buildNoteIndex(app: App): Map<string, NoteIndexEntry> {
 		if (typeof eventId !== "string" || eventId.length === 0) continue;
 
 		let recording: TFile | null = null;
-		const rec = fm["recording"];
-		if (typeof rec === "string") {
-			// Strip [[ ]] and any |alias so getFirstLinkpathDest gets the target.
-			const link = (
-				rec.replace(/^\[\[/, "").replace(/\]\]$/, "").split("|")[0] ?? ""
-			).trim();
+		const link = recordingLinkTarget(fm["recording"]);
+		if (link) {
 			const dest = app.metadataCache.getFirstLinkpathDest(link, file.path);
 			if (dest instanceof TFile) recording = dest;
 		}

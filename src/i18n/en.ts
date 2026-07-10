@@ -50,6 +50,7 @@ export const en = {
 		transcribeEmpty: "Transcription produced no text.",
 		transcribePartial:
 			"Transcription only partially succeeded — not inserted. Try again.",
+		transcribeInProgress: "This recording is already being transcribed…",
 		transcribeNoNote: (audio: string) =>
 			`Transcribed "${audio}" but found no meeting note to add it to.`,
 	},
@@ -146,7 +147,7 @@ export const en = {
 		},
 		autoTranscribe: {
 			name: "Auto-transcribe when recording stops",
-			desc: "When a meeting recording finishes, automatically open AI Transcriber for it (you still confirm in the transcriber dialog). Requires the AI Transcriber plugin.",
+			desc: "When a meeting recording finishes, transcribe it automatically (no dialog) and add the transcript to the meeting note. Requires the AI Transcriber plugin with an API key configured.",
 		},
 		retentionDays: {
 			name: "Recording retention (days)",

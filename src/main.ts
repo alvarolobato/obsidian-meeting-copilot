@@ -20,6 +20,7 @@ import {
     linkRecording,
     MeetingEventInfo,
     MeetingNoteConfig,
+    recordingLinkTarget,
     upsertSection,
 } from "./notes/meetingNote";
 import {
@@ -34,22 +35,8 @@ import { findExpiredRecordings } from "./recordings/retention";
 
 /** Note section that holds action-item checkboxes (obsidian-tasks compatible). */
 const ACTION_ITEMS_HEADING = "## Action items";
-
-/**
- * The AI Transcriber returns a marker-prefixed string for partial/failed runs
- * (see its `modal.transcription.partialResult` localization) instead of throwing,
- * so we detect those prefixes to avoid inserting error text as a transcript.
- */
-const PARTIAL_TRANSCRIPT_MARKERS = [
-    "Partial transcription result",
-    "[部分的な文字起こし結果]",
-    "（部分结果）",
-    "[부분 전사 결과]",
-];
-function isPartialTranscript(text: string): boolean {
-    return PARTIAL_TRANSCRIPT_MARKERS.some((m) => text.startsWith(m));
-}
 import { chatComplete } from "./enrich/llm";
+import { isPartialTranscript } from "./transcribe/partial";
 import { ENRICH_SYSTEM_PROMPT, fillPrompt } from "./enrich/prompt";
 import { t } from "./i18n";
 import { TypedEventBus } from "./util/events";
@@ -102,6 +89,8 @@ export default class SystemRecordingPlugin extends Plugin {
 	private currentRecordingPath: string | null = null;
 	/** Note paths currently being enriched, to prevent overlapping LLM runs. */
 	private enrichingPaths = new Set<string>();
+	/** Audio paths currently being transcribed, to prevent overlapping runs. */
+	private transcribingPaths = new Set<string>();
 	/** One-shot startup retention sweep, cleared on unload. */
 	private retentionTimeout: number | null = null;
 	/** Serializes retention sweeps so the startup timer and the command can't overlap. */
@@ -617,12 +606,8 @@ export default class SystemRecordingPlugin extends Plugin {
         };
 
         let recording: TFile | null = null;
-        const rec = fm["recording"];
-        if (typeof rec === "string") {
-            // Strip [[ ]] and any |alias so getFirstLinkpathDest gets the target.
-            const link = (
-                rec.replace(/^\[\[/, "").replace(/\]\]$/, "").split("|")[0] ?? ""
-            ).trim();
+        const link = recordingLinkTarget(fm["recording"]);
+        if (link) {
             const dest = this.app.metadataCache.getFirstLinkpathDest(
                 link,
                 file.path
@@ -750,6 +735,13 @@ export default class SystemRecordingPlugin extends Plugin {
             new Notice(t().agenda.notices.transcriberMissing);
             return;
         }
+        // Guard against overlapping runs (double-click, or auto-transcribe
+        // racing a manual trigger) — each would cost an API call and write.
+        if (this.transcribingPaths.has(recording.path)) {
+            new Notice(t().notices.transcribeInProgress);
+            return;
+        }
+        this.transcribingPaths.add(recording.path);
         this.setActionStatus(t().statusBar.transcribing, "busy");
         try {
             const result = await engine.transcribe(recording);
@@ -780,6 +772,8 @@ export default class SystemRecordingPlugin extends Plugin {
             const msg = e instanceof Error ? e.message : String(e);
             new Notice(t().notices.transcribeError(msg));
             this.setActionStatus(t().statusBar.transcribeFailed, "error");
+        } finally {
+            this.transcribingPaths.delete(recording.path);
         }
     }
 
@@ -801,15 +795,24 @@ export default class SystemRecordingPlugin extends Plugin {
         const tp = plugins?.["ai-transcriber"] as
             | {
                   transcriber?: {
-                      transcribe(
+                      transcribe?: (
                           file: TFile
-                      ): Promise<
+                      ) => Promise<
                           string | { text: string; modelUsed?: string }
                       >;
                   };
               }
             | undefined;
-        return tp?.transcriber ?? null;
+        const engine = tp?.transcriber;
+        // Guard against the plugin being present but not yet initialized, or a
+        // future refactor that changes this internal shape.
+        return engine && typeof engine.transcribe === "function"
+            ? (engine as {
+                  transcribe(
+                      file: TFile
+                  ): Promise<string | { text: string; modelUsed?: string }>;
+              })
+            : null;
     }
 
     private openMeetingLink(url: string): void {
@@ -1010,12 +1013,14 @@ export default class SystemRecordingPlugin extends Plugin {
                     note !== null &&
                     p.file.path === note.path;
                 if (note) {
+                    // Record the note first so a failed insert still reports
+                    // "note found" (not the misleading "no meeting note" notice).
+                    enrichTarget = note;
                     if (this.settings.insertTranscript && !already) {
                         await insertTranscript(this.app, note, transcript);
                         new Notice(t().notices.transcriptAdded(note.basename));
                         inserted = true;
                     }
-                    enrichTarget = note;
                 }
             }
         } catch (e) {
