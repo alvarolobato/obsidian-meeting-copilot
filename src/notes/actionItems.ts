@@ -62,26 +62,31 @@ function normalizeTask(line: string): string {
 
 /**
  * Merges freshly generated task lines into an existing "Action items" section
- * body. Existing tasks (done or not) are preserved so re-enriching never loses
- * user edits or completed work; new items are appended only when not already
- * present (matched by normalized text).
+ * body. The entire existing body is preserved verbatim (tasks, prose, and
+ * sub-bullets), so re-enriching never loses user edits or completed work; new
+ * items are appended only when not already present as a task (matched by
+ * normalized text).
  */
 export function mergeActionItems(
 	existingSection: string,
 	newItems: string[]
 ): string {
-	const existingTasks = existingSection
-		.split("\n")
-		.map((l) => l.replace(/\s+$/, ""))
-		.filter((l) => TASK_LINE.test(l));
-	const seen = new Set(existingTasks.map(normalizeTask));
-	const merged = [...existingTasks];
+	const existing = existingSection.replace(/\s+$/, "");
+	const seen = new Set(
+		existing
+			.split("\n")
+			.filter((l) => TASK_LINE.test(l))
+			.map(normalizeTask)
+	);
+	const toAdd: string[] = [];
 	for (const item of newItems) {
 		const key = normalizeTask(item);
 		if (key && !seen.has(key)) {
 			seen.add(key);
-			merged.push(item);
+			toAdd.push(item);
 		}
 	}
-	return merged.join("\n");
+	if (existing.length === 0) return toAdd.join("\n");
+	if (toAdd.length === 0) return existing;
+	return `${existing}\n${toAdd.join("\n")}`;
 }

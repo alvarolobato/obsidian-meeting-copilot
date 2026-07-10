@@ -43,6 +43,16 @@ describe("findExpiredRecordings", () => {
 		).toEqual([]);
 	});
 
+	it("never sweeps when no valid folder scope is given", () => {
+		expect(
+			findExpiredRecordings(files, {
+				folders: ["", "  "],
+				retentionDays: 30,
+				now: NOW,
+			})
+		).toEqual([]);
+	});
+
 	it("never returns protected paths", () => {
 		const expired = findExpiredRecordings(files, {
 			folders: ["Meetings"],

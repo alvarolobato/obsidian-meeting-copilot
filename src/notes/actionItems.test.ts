@@ -50,4 +50,12 @@ describe("mergeActionItems", () => {
 		]);
 		expect(merged).toBe("- [ ] Ship the thing");
 	});
+
+	it("preserves non-task text under the section", () => {
+		const existing = "Some manual note\n- [ ] existing task";
+		const merged = mergeActionItems(existing, ["- [ ] brand new task"]);
+		expect(merged).toBe(
+			"Some manual note\n- [ ] existing task\n- [ ] brand new task"
+		);
+	});
 });

@@ -8,7 +8,8 @@ export interface AudioFileInfo {
 }
 
 export interface RetentionConfig {
-	/** Only files under one of these folders are eligible (empty = whole vault). */
+	/** Only files under one of these folders are eligible. If none resolve to a
+	 *  real folder name, nothing is swept (retention is scoped, never vault-wide). */
 	folders: string[];
 	/** Recordings older than this many days are expired. 0/negative disables cleanup. */
 	retentionDays: number;
@@ -47,14 +48,15 @@ export function findExpiredRecordings(
 	cfg: RetentionConfig
 ): AudioFileInfo[] {
 	if (cfg.retentionDays <= 0) return [];
-	const cutoff = cfg.now - cfg.retentionDays * DAY_MS;
 	const folders = cfg.folders.map(normalizeFolder).filter(Boolean);
+	// No valid scope → never sweep (avoid trashing unrelated vault audio).
+	if (folders.length === 0) return [];
+	const cutoff = cfg.now - cfg.retentionDays * DAY_MS;
 	return files.filter(
 		(f) =>
 			isAudioExt(f.ext) &&
 			f.mtime < cutoff &&
-			(folders.length === 0 ||
-				folders.some((folder) => underFolder(f.path, folder))) &&
+			folders.some((folder) => underFolder(f.path, folder)) &&
 			!cfg.protectedPaths?.has(f.path)
 	);
 }

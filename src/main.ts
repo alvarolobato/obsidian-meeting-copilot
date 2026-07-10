@@ -1091,7 +1091,10 @@ export default class SystemRecordingPlugin extends Plugin {
             mtime: f.stat.mtime,
         }));
         const expired = findExpiredRecordings(files, {
-            folders: [this.settings.meetingsFolder, this.settings.recordingFolder],
+            folders: [
+                this.settings.meetingsFolder.trim() || "Meetings",
+                this.settings.recordingFolder.trim() || "recordings",
+            ],
             retentionDays: this.settings.retentionDays,
             now: Date.now(),
             protectedPaths: this.currentRecordingPath
@@ -1103,8 +1106,8 @@ export default class SystemRecordingPlugin extends Plugin {
         for (const info of expired) {
             const file = this.app.vault.getAbstractFileByPath(info.path);
             if (!(file instanceof TFile)) continue;
-            // Drop the note's link to the audio before trashing so it doesn't
-            // dangle; the transcript already lives in the note.
+            // Resolve the owning note before trashing; afterwards drop its now
+            // dangling `recording` link (the transcript already lives in the note).
             const note = findMeetingNoteForAudio(this.app, file);
             try {
                 await this.app.fileManager.trashFile(file);
