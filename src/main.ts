@@ -271,6 +271,14 @@ export default class SystemRecordingPlugin extends Plugin {
         if (!(STT_MODELS as readonly string[]).includes(this.settings.sttModel)) {
             this.settings.sttModel = DEFAULT_SETTINGS.sttModel;
         }
+        // We ship no local-VAD WASM, so only server/disabled are valid; keep
+        // hand-edited data from sending the engine down the local VAD path.
+        if (
+            this.settings.vadMode !== "server" &&
+            this.settings.vadMode !== "disabled"
+        ) {
+            this.settings.vadMode = DEFAULT_SETTINGS.vadMode;
+        }
     }
 
     async saveSettings() {

@@ -53,12 +53,14 @@ export interface TranscribeConfig {
 	debugMode: boolean;
 }
 
-/**
- * Runs the vendored transcription engine headlessly and returns the transcript
- * text. The endpoint is injected via {@link setTranscribeBaseUrl}; the key is
- * stored plaintext (prefixed so the vendored SafeStorage passes it through).
- */
-export async function transcribeAudio(
+// The endpoint seam (base URL + wire model id) is a process-wide singleton the
+// vendored clients read lazily at construction time — after this function's
+// awaits. Serialize runs so a second transcription can't overwrite the globals
+// mid-flight. Meetings are transcribed one at a time in practice, so a queue is
+// cheaper than threading config through the (pristine) vendored constructors.
+let queue: Promise<unknown> = Promise.resolve();
+
+async function runTranscription(
 	app: App,
 	file: TFile,
 	cfg: TranscribeConfig,
@@ -80,4 +82,22 @@ export async function transcribeAudio(
 	const controller = new TranscriptionController(app, settings);
 	const result = await controller.transcribe(file, undefined, undefined, signal);
 	return typeof result === "string" ? result : result.text;
+}
+
+/**
+ * Runs the vendored transcription engine headlessly and returns the transcript
+ * text. The endpoint is injected via {@link setTranscribeBaseUrl}; the key is
+ * stored plaintext (prefixed so the vendored SafeStorage passes it through).
+ * Runs are serialized (see note above).
+ */
+export function transcribeAudio(
+	app: App,
+	file: TFile,
+	cfg: TranscribeConfig,
+	signal?: AbortSignal
+): Promise<string> {
+	const run = queue.then(() => runTranscription(app, file, cfg, signal));
+	// Keep the chain alive regardless of this run's outcome.
+	queue = run.catch(() => undefined);
+	return run;
 }
