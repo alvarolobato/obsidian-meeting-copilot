@@ -579,16 +579,22 @@ export default class SystemRecordingPlugin extends Plugin {
     // MARK: - Status handling
 
     private handleStatus(status: RecorderStatus) {
-        if (status.status === "stopped" && status.file) {
-            this.clearDurationTimer();
-            this.updateRibbonIcon(false);
-            this.hideStatusBar();
+        if (status.status === "stopped") {
+            if (status.file) {
+                this.clearDurationTimer();
+                this.updateRibbonIcon(false);
+                this.hideStatusBar();
 
-            const fileName = path.basename(status.file);
-            // Meeting recordings are linked into their own note; ad-hoc ones go
-            // to the active note as before.
-            void this.attachRecording(fileName);
-            new Notice(t().notices.recordingSaved);
+                const fileName = path.basename(status.file);
+                // Meeting recordings are linked into their own note; ad-hoc ones
+                // go to the active note as before.
+                void this.attachRecording(fileName);
+                new Notice(t().notices.recordingSaved);
+            } else {
+                // Stopped without a reported file (e.g. a clean helper exit with
+                // no terminal payload); reset so the UI doesn't stay stuck.
+                this.resetRecordingUi();
+            }
         } else if (status.status === "error") {
             this.resetRecordingUi();
             new Notice(
