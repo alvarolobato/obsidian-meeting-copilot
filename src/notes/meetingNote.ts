@@ -208,3 +208,131 @@ export async function linkRecording(
 		f.status = "recorded";
 	});
 }
+
+export const TRANSCRIPT_CALLOUT_TITLE = "Transcript";
+
+/**
+ * Inserts or replaces a `heading`-delimited section in a markdown body.
+ * The section runs from its heading line to the next top-or-second-level
+ * heading (or end of file); if absent, the block is appended. Pure/testable.
+ */
+export function upsertSection(
+	content: string,
+	heading: string,
+	body: string
+): string {
+	const lines = content.split("\n");
+	const headingTrim = heading.trim();
+	const block = `${headingTrim}\n\n${body.trim()}`;
+	const start = lines.findIndex((l) => l.trim() === headingTrim);
+
+	if (start === -1) {
+		const trimmed = content.replace(/\s+$/, "");
+		return `${trimmed.length ? `${trimmed}\n\n` : ""}${block}\n`;
+	}
+
+	let end = lines.length;
+	for (let i = start + 1; i < lines.length; i++) {
+		if (/^#{1,2}\s/.test(lines[i] ?? "")) {
+			end = i;
+			break;
+		}
+	}
+	const before = lines.slice(0, start).join("\n").replace(/\s+$/, "");
+	const after = lines.slice(end).join("\n").replace(/^\s+/, "");
+	const parts: string[] = [];
+	if (before.length) parts.push(before);
+	parts.push(block);
+	if (after.length) parts.push(after);
+	return `${parts.join("\n\n")}\n`;
+}
+
+/**
+ * Finds the meeting note a recording belongs to: first the colocated note
+ * (same folder + basename — how this plugin saves recordings), otherwise any
+ * note whose `recording` frontmatter links the audio file.
+ */
+export function findMeetingNoteForAudio(app: App, audio: TFile): TFile | null {
+	const dir = audio.parent?.path ?? "";
+	const colocated = normalizePath(
+		`${dir && dir !== "/" ? `${dir}/` : ""}${audio.basename}.md`
+	);
+	const direct = app.vault.getAbstractFileByPath(colocated);
+	if (direct instanceof TFile) return direct;
+
+	for (const file of app.vault.getMarkdownFiles()) {
+		const fm = app.metadataCache.getFileCache(file)?.frontmatter as
+			| Record<string, unknown>
+			| undefined;
+		const rec = fm?.["recording"];
+		if (typeof rec !== "string") continue;
+		const link = rec.replace(/^\[\[/, "").replace(/\]\]$/, "").trim();
+		const dest = app.metadataCache.getFirstLinkpathDest(link, file.path);
+		if (dest instanceof TFile && dest.path === audio.path) return file;
+	}
+	return null;
+}
+
+/**
+ * Formats the transcript as a **collapsed** Obsidian callout (folded by
+ * default, since you rarely want to read it), each line quoted so blank lines
+ * stay inside the callout.
+ */
+export function formatTranscriptCallout(transcript: string): string {
+	const body = transcript
+		.trim()
+		.split("\n")
+		.map((l) => (l.length ? `> ${l}` : ">"))
+		.join("\n");
+	return `> [!quote]- ${TRANSCRIPT_CALLOUT_TITLE}\n${body}`;
+}
+
+/** Removes a previously-inserted transcript (collapsed callout or legacy `## Transcript` heading). */
+export function stripTranscript(content: string): string {
+	const lines = content.split("\n");
+	const out: string[] = [];
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i] ?? "";
+		// Legacy "## Transcript" heading section: drop to the next heading / EOF.
+		if (line.trim() === `## ${TRANSCRIPT_CALLOUT_TITLE}`) {
+			i++;
+			while (i < lines.length && !/^#{1,2}\s/.test(lines[i] ?? "")) i++;
+			i--;
+			continue;
+		}
+		// Collapsed transcript callout: drop the marker + its ">" continuation.
+		const marker = new RegExp(
+			`^>\\s*\\[![\\w-]+\\][+-]?\\s*${TRANSCRIPT_CALLOUT_TITLE}\\s*$`
+		);
+		if (marker.test(line)) {
+			i++;
+			while (i < lines.length && /^>/.test(lines[i] ?? "")) i++;
+			i--;
+			continue;
+		}
+		out.push(line);
+	}
+	return out.join("\n");
+}
+
+/** Places the transcript as a collapsed callout at the very bottom of the note body. Pure/testable. */
+export function transcriptAtBottom(content: string, transcript: string): string {
+	const stripped = stripTranscript(content).replace(/\s+$/, "");
+	const block = formatTranscriptCallout(transcript);
+	return `${stripped.length ? `${stripped}\n\n` : ""}${block}\n`;
+}
+
+/** Writes the transcript into a collapsed callout at the note's bottom and marks it transcribed. */
+export async function insertTranscript(
+	app: App,
+	file: TFile,
+	transcript: string
+): Promise<void> {
+	const content = await app.vault.read(file);
+	const next = transcriptAtBottom(content, transcript);
+	if (next !== content) await app.vault.modify(file, next);
+	await app.fileManager.processFrontMatter(file, (fm) => {
+		const f = fm as Record<string, unknown>;
+		f.status = "transcribed";
+	});
+}

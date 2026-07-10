@@ -1,4 +1,4 @@
-import { FileSystemAdapter, MarkdownView, Notice, Platform, Plugin, TFile } from "obsidian";
+import { FileSystemAdapter, MarkdownView, Menu, Notice, Platform, Plugin, setIcon, TFile } from "obsidian";
 import {
     DEFAULT_SETTINGS,
     SystemRecordingSettings,
@@ -15,10 +15,20 @@ import { CalendarScheduler, ScheduledEvent } from "./calendar/scheduler";
 import { actionNotice } from "./ui/actionNotice";
 import {
     createMeetingNote,
+    findMeetingNoteForAudio,
+    insertTranscript,
     linkRecording,
     MeetingEventInfo,
     MeetingNoteConfig,
 } from "./notes/meetingNote";
+import {
+    extractSection,
+    extractTranscript,
+    HIDE_AI_CLASS,
+    withEnrichedBlock,
+} from "./notes/enrichedBlock";
+import { chatComplete } from "./enrich/llm";
+import { ENRICH_SYSTEM_PROMPT, fillPrompt } from "./enrich/prompt";
 import { t } from "./i18n";
 import { TypedEventBus } from "./util/events";
 import {
@@ -34,6 +44,10 @@ import {
     VIEW_TYPE_AGENDA,
     AGENDA_ICON,
 } from "./ui/agenda/MeetingAgendaView";
+import {
+    populateMeetingMenu,
+    RowHandlers,
+} from "./ui/agenda/components/meetingRow";
 
 export default class SystemRecordingPlugin extends Plugin {
     settings: SystemRecordingSettings;
@@ -41,6 +55,7 @@ export default class SystemRecordingPlugin extends Plugin {
     private provisioner = new BinaryProvisioner(nodeDeps());
     private starting = false;
     private statusBarEl: HTMLElement | null = null;
+    private statusTimeout: number | null = null;
     private durationInterval: number | null = null;
     private recordingStartTime: number | null = null;
     private ribbonIconEl: HTMLElement | null = null;
@@ -61,6 +76,8 @@ export default class SystemRecordingPlugin extends Plugin {
 	private currentMeetingNotePath: string | null = null;
 	/** Calendar event id of the in-progress meeting recording, for agenda state. */
 	private currentRecordingEventId: string | null = null;
+	/** Note paths currently being enriched, to prevent overlapping LLM runs. */
+	private enrichingPaths = new Set<string>();
 	private agendaEvents = new TypedEventBus<AgendaViewEvents>();
 
     async onload() {
@@ -87,13 +104,32 @@ export default class SystemRecordingPlugin extends Plugin {
             callback: () => void this.openAgenda(),
         });
 
-        // Refresh the agenda when a transcription finishes (ai-transcriber emits this).
+        // When a transcription finishes, drop it into the matching meeting note
+        // and refresh the agenda (ai-transcriber emits this custom event).
         this.registerEvent(
             this.app.workspace.on(
-                // Custom event from the AI Transcriber plugin.
                 "transcription:completed" as never,
-                () => this.agendaEvents.emit("changed", undefined)
+                (payload: unknown) =>
+                    void this.handleTranscriptionCompleted(payload)
             )
+        );
+
+        // Expose the same actions as the agenda list (record, transcribe,
+        // enrich, links, …) from the note's editor and file context menus.
+        this.registerEvent(
+            this.app.workspace.on("editor-menu", (menu, _editor, info) => {
+                const file = info.file;
+                if (file instanceof TFile && this.isMeetingNote(file)) {
+                    this.addNoteMeetingMenu(menu, file);
+                }
+            })
+        );
+        this.registerEvent(
+            this.app.workspace.on("file-menu", (menu, file) => {
+                if (file instanceof TFile && this.isMeetingNote(file)) {
+                    this.addNoteMeetingMenu(menu, file);
+                }
+            })
         );
 
         // Status bar
@@ -137,6 +173,21 @@ export default class SystemRecordingPlugin extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: "enrich-meeting-note",
+			name: t().commands.enrichNote,
+			callback: () => void this.enrichActiveNote(),
+		});
+
+		this.addCommand({
+			id: "toggle-ai-notes",
+			name: t().commands.toggleAiNotes,
+			callback: () => void this.toggleAiNotes(),
+		});
+
+		// Restore the AI-notes visibility toggle from the last session.
+		document.body.toggleClass(HIDE_AI_CLASS, this.settings.hideAiNotes);
+
         // Recorder callbacks
         this.recorder.onStatus = (status: RecorderStatus) =>
             this.handleStatus(status);
@@ -156,6 +207,7 @@ export default class SystemRecordingPlugin extends Plugin {
             this.recorder.stop();
         }
         this.clearDurationTimer();
+        this.clearActionStatus();
 		this.scheduler?.stop();
 		this.agendaEvents.clear();
     }
@@ -461,10 +513,116 @@ export default class SystemRecordingPlugin extends Plugin {
             onStop: () => this.stopRecording(),
             onOpenRecording: (m) => void this.openRecording(m),
             onTranscribe: (m) => void this.transcribeRecording(m),
+            onEnrich: (m) => {
+                if (m.note) void this.enrichMeetingNote(m.note);
+            },
             onOpenLink: (url) => this.openMeetingLink(url),
             onCopyLink: (url) => void this.copyMeetingLink(url),
             openSettings: () => this.openPluginSettings(),
             events: this.agendaEvents,
+        };
+    }
+
+    /** True when a note carries meeting frontmatter we can act on. */
+    private isMeetingNote(file: TFile): boolean {
+        if (file.extension !== "md") return false;
+        const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as
+            | Record<string, unknown>
+            | undefined;
+        if (!fm) return false;
+        const nonEmpty = (k: string): boolean => {
+            const v = fm[k];
+            return typeof v === "string" && v.trim().length > 0;
+        };
+        return (
+            nonEmpty("event_id") || nonEmpty("recording") || nonEmpty("meeting_url")
+        );
+    }
+
+    /** Adds the shared meeting actions (record/transcribe/enrich/links) to a menu. */
+    private addNoteMeetingMenu(menu: Menu, file: TFile): void {
+        menu.addSeparator();
+        populateMeetingMenu(
+            menu,
+            this.agendaMeetingFromNote(file),
+            this.noteRowHandlers(),
+            { includeNavigation: false }
+        );
+    }
+
+    /** Builds an AgendaMeeting view-model from a meeting note's frontmatter. */
+    private agendaMeetingFromNote(file: TFile): AgendaMeeting {
+        const fm = (this.app.metadataCache.getFileCache(file)?.frontmatter ??
+            {}) as Record<string, unknown>;
+        const str = (k: string): string => {
+            const v = fm[k];
+            return typeof v === "string" ? v : "";
+        };
+        // Fall back to "now" for missing/invalid dates so time-based actions
+        // (e.g. create-and-record path templates) don't produce "Invalid Date".
+        const toDate = (v: unknown): Date => {
+            const d = new Date(typeof v === "string" ? v : NaN);
+            return isNaN(d.getTime()) ? new Date() : d;
+        };
+
+        let recording: TFile | null = null;
+        const rec = fm["recording"];
+        if (typeof rec === "string") {
+            // Strip [[ ]] and any |alias so getFirstLinkpathDest gets the target.
+            const link = (
+                rec.replace(/^\[\[/, "").replace(/\]\]$/, "").split("|")[0] ?? ""
+            ).trim();
+            const dest = this.app.metadataCache.getFirstLinkpathDest(
+                link,
+                file.path
+            );
+            if (dest instanceof TFile) recording = dest;
+        }
+
+        return {
+            id: str("event_id"),
+            title: str("title") || file.basename,
+            start: toDate(fm["start"] ?? fm["date"]),
+            end: toDate(fm["end"] ?? fm["start"] ?? fm["date"]),
+            allDay: false,
+            meetingUrl: str("meeting_url") || null,
+            location: str("location"),
+            htmlLink: "",
+            attendees: Array.isArray(fm["attendees"])
+                ? (fm["attendees"] as unknown[]).map((x) => String(x))
+                : [],
+            organizer: str("organizer") || null,
+            iCalUID: str("ical_uid") || null,
+            recurringEventId: str("recurring_event_id") || null,
+            note: file,
+            recording,
+            status: str("status") || null,
+        };
+    }
+
+    /** Row handlers wired to the plugin, for menus shown outside the agenda view. */
+    private noteRowHandlers(): RowHandlers {
+        return {
+            onOpenOrCreate: (m) => void this.openOrCreateNote(m),
+            onCreateAndRecord: (m) =>
+                void this.startMeetingRecording(agendaToMeetingInfo(m)),
+            onCreateNote: (m) => void this.createNoteOnly(m),
+            onStop: () => this.stopRecording(),
+            onOpenRecording: (m) => void this.openRecording(m),
+            onTranscribe: (m) => void this.transcribeRecording(m),
+            onEnrich: (m) => {
+                if (m.note) void this.enrichMeetingNote(m.note);
+            },
+            onOpenLink: (m) => {
+                if (m.meetingUrl) this.openMeetingLink(m.meetingUrl);
+            },
+            onCopyLink: (m) => {
+                if (m.meetingUrl) void this.copyMeetingLink(m.meetingUrl);
+            },
+            onSkip: () => {},
+            isRecordingThis: (m) =>
+                this.recorder.isRecording &&
+                this.currentRecordingEventId === m.id,
         };
     }
 
@@ -526,7 +684,12 @@ export default class SystemRecordingPlugin extends Plugin {
             new Notice(t().agenda.notices.noRecording);
             return;
         }
-        await this.app.workspace.getLeaf(false).openFile(m.recording);
+        await this.launchTranscriber(m.recording);
+    }
+
+    /** Opens an audio file and asks the AI Transcriber plugin to transcribe it. */
+    private async launchTranscriber(recording: TFile): Promise<void> {
+        await this.app.workspace.getLeaf(false).openFile(recording);
         const commands = (
             this.app as unknown as {
                 commands?: {
@@ -535,11 +698,14 @@ export default class SystemRecordingPlugin extends Plugin {
                 };
             }
         ).commands;
-        const id = Object.keys(commands?.commands ?? {}).find((k) =>
-            k.startsWith("ai-transcriber:")
-        );
+        const ids = Object.keys(commands?.commands ?? {});
+        // Prefer the explicit "transcribe current audio" command; fall back to any.
+        const id =
+            ids.find((k) => k === "ai-transcriber:api-transcribe-audio") ??
+            ids.find((k) => k.startsWith("ai-transcriber:"));
         if (id && commands?.executeCommandById) {
             commands.executeCommandById(id);
+            this.setActionStatus(t().statusBar.transcribing, "busy");
         } else {
             new Notice(t().agenda.notices.transcriberMissing);
         }
@@ -606,6 +772,8 @@ export default class SystemRecordingPlugin extends Plugin {
     // MARK: - UI helpers
 
     private startDurationTimer() {
+        // Drop any leftover action-status spinner/styling before the timer owns the bar.
+        this.clearActionStatus();
         if (this.statusBarEl) {
             this.statusBarEl.removeClass("system-recording-hidden");
         }
@@ -641,11 +809,66 @@ export default class SystemRecordingPlugin extends Plugin {
         this.agendaEvents.emit("changed", undefined);
     }
 
+    /** Clears any action-status timeout, styling, and DOM (shared teardown). */
+    private clearActionStatus() {
+        if (this.statusTimeout !== null) {
+            window.clearTimeout(this.statusTimeout);
+            this.statusTimeout = null;
+        }
+        if (this.statusBarEl) {
+            this.statusBarEl.removeClasses([
+                "mc-status-busy",
+                "mc-status-success",
+                "mc-status-error",
+            ]);
+            this.statusBarEl.empty();
+        }
+    }
+
     private hideStatusBar() {
+        this.clearActionStatus();
         if (this.statusBarEl) {
             this.statusBarEl.addClass("system-recording-hidden");
-            this.statusBarEl.setText("");
         }
+    }
+
+    /**
+     * Shows a transient action state (enriching, transcribing, …) in the status
+     * bar. `state` "busy" shows a spinner; "success"/"error" auto-clear after a
+     * few seconds. Skipped while recording, whose duration display owns the bar.
+     */
+    private setActionStatus(
+        text: string,
+        state: "busy" | "success" | "error"
+    ): void {
+        const el = this.statusBarEl;
+        if (!el) return;
+        // Don't clobber the live recording timer.
+        if (this.recorder.isRecording) return;
+
+        this.clearActionStatus();
+        el.removeClass("system-recording-hidden");
+        el.addClass(`mc-status-${state}`);
+
+        const icon = el.createSpan({ cls: "mc-status-icon" });
+        setIcon(
+            icon,
+            state === "busy"
+                ? "loader-2"
+                : state === "success"
+                ? "check"
+                : "alert-triangle"
+        );
+        el.createSpan({ cls: "mc-status-text", text });
+
+        // Success/error clear quickly; a busy state clears on a long safety
+        // timeout so a spinner can never get stuck if a completion event is missed.
+        const clearAfter =
+            state === "busy" ? 15 * 60 * 1000 : state === "error" ? 6000 : 4000;
+        this.statusTimeout = window.setTimeout(() => {
+            this.statusTimeout = null;
+            if (!this.recorder.isRecording) this.hideStatusBar();
+        }, clearAfter);
     }
 
     private updateRibbonIcon(recording: boolean) {
@@ -656,6 +879,162 @@ export default class SystemRecordingPlugin extends Plugin {
                 this.ribbonIconEl.removeClass("is-recording");
             }
         }
+    }
+
+    /** Inserts a finished transcription into its meeting note, then refreshes the agenda. */
+    private async handleTranscriptionCompleted(payload: unknown): Promise<void> {
+        let enrichTarget: TFile | null = null;
+        let transcriptText: string | null = null;
+        let inserted = false;
+        try {
+            const p = (payload ?? {}) as {
+                audioFile?: unknown;
+                transcription?: unknown;
+                file?: unknown;
+            };
+            const audio = p.audioFile;
+            const raw =
+                typeof p.transcription === "string" ? p.transcription : null;
+            const transcript = raw && raw.trim().length > 0 ? raw : null;
+            if (audio instanceof TFile && transcript) {
+                transcriptText = transcript;
+                const note = findMeetingNoteForAudio(this.app, audio);
+                // Skip if the transcriber already wrote into the meeting note.
+                const already =
+                    p.file instanceof TFile &&
+                    note !== null &&
+                    p.file.path === note.path;
+                if (note) {
+                    if (this.settings.insertTranscript && !already) {
+                        await insertTranscript(this.app, note, transcript);
+                        new Notice(t().notices.transcriptAdded(note.basename));
+                        inserted = true;
+                    }
+                    enrichTarget = note;
+                }
+            }
+        } catch (e) {
+            console.warn("Meeting Copilot: failed to insert transcript", e);
+        }
+        this.agendaEvents.emit("changed", undefined);
+
+        // Resolve the "Transcribing…" spinner deterministically here, before
+        // enrichment runs: success only if we actually inserted, otherwise
+        // clear it (never touching the recording timer). Enrichment then manages
+        // its own status when it proceeds, and if it bails early the transcription
+        // status is already settled, so the spinner can't linger.
+        if (inserted) {
+            this.setActionStatus(t().statusBar.transcriptAdded, "success");
+        } else if (!this.recorder.isRecording) {
+            this.hideStatusBar();
+        }
+        if (
+            enrichTarget &&
+            this.settings.enableEnrichment &&
+            this.settings.enrichOnTranscribe
+        ) {
+            // Pass the fresh transcript so enrichment works even when
+            // insertTranscript is off and the note has no transcript yet.
+            await this.enrichMeetingNote(enrichTarget, transcriptText ?? undefined);
+        }
+    }
+
+    /** Enriches the active markdown note, if it is one. */
+    private async enrichActiveNote(): Promise<void> {
+        const file = this.app.workspace.getActiveFile();
+        if (!(file instanceof TFile) || file.extension !== "md") {
+            new Notice(t().notices.notAMeetingNote);
+            return;
+        }
+        await this.enrichMeetingNote(file);
+    }
+
+    /** Generates AI notes from the note's manual notes + transcript and inserts a gray callout. */
+    private async enrichMeetingNote(
+        file: TFile,
+        transcriptOverride?: string
+    ): Promise<void> {
+        if (!this.settings.enableEnrichment) {
+            new Notice(t().notices.enrichDisabled);
+            return;
+        }
+        const { enrichBaseUrl, enrichApiKey, enrichModel } = this.settings;
+        if (!enrichBaseUrl || !enrichApiKey || !enrichModel) {
+            new Notice(t().notices.enrichNotConfigured);
+            return;
+        }
+        // Guard against overlapping runs on the same note (double-click, agenda
+        // + command, or auto-enrich racing a manual enrich).
+        if (this.enrichingPaths.has(file.path)) {
+            new Notice(t().notices.enrichInProgress);
+            return;
+        }
+        this.enrichingPaths.add(file.path);
+        try {
+            const content = await this.app.vault.read(file);
+            const notes = extractSection(content, "## Notes");
+            const transcript =
+                transcriptOverride && transcriptOverride.trim().length > 0
+                    ? transcriptOverride
+                    : extractTranscript(content);
+            if (!notes && !transcript) {
+                new Notice(t().notices.nothingToEnrich);
+                return;
+            }
+
+            const fm = (this.app.metadataCache.getFileCache(file)?.frontmatter ??
+                {}) as Record<string, unknown>;
+            const attendeesVal = fm["attendees"];
+            const titleVal = fm["title"];
+            const dateVal = fm["date"];
+            const ctx = {
+                title: typeof titleVal === "string" ? titleVal : file.basename,
+                date: typeof dateVal === "string" ? dateVal : "",
+                attendees: Array.isArray(attendeesVal)
+                    ? attendeesVal.map((x) => String(x)).join(", ")
+                    : "",
+                notes,
+                transcript,
+            };
+
+            new Notice(t().notices.enriching);
+            this.setActionStatus(t().statusBar.enriching, "busy");
+            const output = await chatComplete({
+                baseUrl: enrichBaseUrl,
+                apiKey: enrichApiKey,
+                model: enrichModel,
+                system: ENRICH_SYSTEM_PROMPT,
+                user: fillPrompt(this.settings.enrichPrompt, ctx),
+            });
+            // Re-read in case the note changed during the network call.
+            const current = await this.app.vault.read(file);
+            await this.app.vault.modify(file, withEnrichedBlock(current, output));
+            await this.app.fileManager.processFrontMatter(file, (f) => {
+                (f as Record<string, unknown>).status = "enriched";
+            });
+            new Notice(t().notices.enrichDone(file.basename));
+            this.setActionStatus(t().statusBar.enriched, "success");
+            this.agendaEvents.emit("changed", undefined);
+        } catch (e) {
+            new Notice(
+                t().notices.enrichError(e instanceof Error ? e.message : String(e))
+            );
+            this.setActionStatus(t().statusBar.enrichFailed, "error");
+        } finally {
+            this.enrichingPaths.delete(file.path);
+        }
+    }
+
+    /** Flips the vault-wide "hide AI notes" toggle and persists it. */
+    private async toggleAiNotes(): Promise<void> {
+        this.settings.hideAiNotes = !this.settings.hideAiNotes;
+        document.body.toggleClass(HIDE_AI_CLASS, this.settings.hideAiNotes);
+        await this.saveSettings();
+        new Notice(
+            this.settings.hideAiNotes
+                ? t().notices.aiNotesHidden
+                : t().notices.aiNotesShown
+        );
     }
 
     private async attachRecording(fileName: string) {
@@ -682,6 +1061,19 @@ export default class SystemRecordingPlugin extends Plugin {
                     );
                 } finally {
                     this.agendaEvents.emit("changed", undefined);
+                }
+                // Close the loop: hand the fresh recording to the transcriber.
+                if (this.settings.autoTranscribe) {
+                    const audio = this.app.vault.getAbstractFileByPath(link);
+                    if (audio instanceof TFile) {
+                        void this.launchTranscriber(audio).catch((e) => {
+                            console.warn(
+                                "[Meeting Copilot] auto-transcribe failed",
+                                e
+                            );
+                            if (!this.recorder.isRecording) this.hideStatusBar();
+                        });
+                    }
                 }
                 return;
             }

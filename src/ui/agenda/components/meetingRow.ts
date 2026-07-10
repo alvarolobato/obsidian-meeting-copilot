@@ -14,6 +14,7 @@ export interface RowHandlers {
 	onStop: () => void;
 	onOpenRecording: (m: AgendaMeeting) => void;
 	onTranscribe: (m: AgendaMeeting) => void;
+	onEnrich: (m: AgendaMeeting) => void;
 	onOpenLink: ((m: AgendaMeeting) => void) | null;
 	onCopyLink: ((m: AgendaMeeting) => void) | null;
 	onSkip: (m: AgendaMeeting) => void;
@@ -108,6 +109,12 @@ export function renderMeetingRow(opts: MeetingRowOptions): void {
 		);
 	}
 
+	if (meeting.note && (meeting.status === "transcribed" || meeting.recording)) {
+		iconButton(trail, "sparkles", a.actions.enrich, () =>
+			handlers.onEnrich(meeting)
+		);
+	}
+
 	if (meeting.meetingUrl && handlers.onOpenLink) {
 		iconButton(trail, "video", a.actions.openLink, () =>
 			handlers.onOpenLink!(meeting)
@@ -121,27 +128,43 @@ export function renderMeetingRow(opts: MeetingRowOptions): void {
 	});
 }
 
-export function buildRowContextMenu(
-	meeting: AgendaMeeting,
-	handlers: RowHandlers
-): Menu {
-	const a = t().agenda;
-	const menu = new Menu();
+export interface MeetingMenuOptions {
+	/**
+	 * Include agenda-list-only navigation items (open/create note, skip today).
+	 * Off when the menu is shown from inside a note, where those don't apply.
+	 */
+	includeNavigation?: boolean;
+}
 
-	if (meeting.note) {
-		menu.addItem((item) =>
-			item
-				.setTitle(a.actions.openNote)
-				.setIcon("file-text")
-				.onClick(() => handlers.onOpenOrCreate(meeting))
-		);
-	} else {
-		menu.addItem((item) =>
-			item
-				.setTitle(a.actions.createNote)
-				.setIcon("file-plus-2")
-				.onClick(() => handlers.onCreateNote(meeting))
-		);
+/**
+ * Adds the contextual meeting actions to an existing menu. Shared by the agenda
+ * row's right-click menu and the note editor/file context menus, so both stay
+ * in sync.
+ */
+export function populateMeetingMenu(
+	menu: Menu,
+	meeting: AgendaMeeting,
+	handlers: RowHandlers,
+	opts: MeetingMenuOptions = {}
+): void {
+	const a = t().agenda;
+
+	if (opts.includeNavigation) {
+		if (meeting.note) {
+			menu.addItem((item) =>
+				item
+					.setTitle(a.actions.openNote)
+					.setIcon("file-text")
+					.onClick(() => handlers.onOpenOrCreate(meeting))
+			);
+		} else {
+			menu.addItem((item) =>
+				item
+					.setTitle(a.actions.createNote)
+					.setIcon("file-plus-2")
+					.onClick(() => handlers.onCreateNote(meeting))
+			);
+		}
 	}
 
 	if (!handlers.isRecordingThis(meeting) && !meeting.recording) {
@@ -177,6 +200,15 @@ export function buildRowContextMenu(
 		);
 	}
 
+	if (meeting.note) {
+		menu.addItem((item) =>
+			item
+				.setTitle(a.actions.enrich)
+				.setIcon("sparkles")
+				.onClick(() => handlers.onEnrich(meeting))
+		);
+	}
+
 	if (meeting.meetingUrl && handlers.onOpenLink) {
 		menu.addItem((item) =>
 			item
@@ -194,12 +226,22 @@ export function buildRowContextMenu(
 		);
 	}
 
-	menu.addSeparator();
-	menu.addItem((item) =>
-		item
-			.setTitle(a.actions.skipToday)
-			.setIcon("eye-off")
-			.onClick(() => handlers.onSkip(meeting))
-	);
+	if (opts.includeNavigation) {
+		menu.addSeparator();
+		menu.addItem((item) =>
+			item
+				.setTitle(a.actions.skipToday)
+				.setIcon("eye-off")
+				.onClick(() => handlers.onSkip(meeting))
+		);
+	}
+}
+
+export function buildRowContextMenu(
+	meeting: AgendaMeeting,
+	handlers: RowHandlers
+): Menu {
+	const menu = new Menu();
+	populateMeetingMenu(menu, meeting, handlers, { includeNavigation: true });
 	return menu;
 }
