@@ -14,12 +14,11 @@ function sourceFolder(meetingsFolder: string): string {
 export function buildDashboardBlock(meetingsFolder: string): string {
 	const folder = sourceFolder(meetingsFolder);
 	const cols =
-		'TABLE WITHOUT ID file.link AS Meeting, date AS Date, status AS Status, ' +
+		"TABLE WITHOUT ID file.link AS Meeting, " +
+		'dateformat(start, "yyyy-MM-dd HH:mm") AS Date, status AS Status, ' +
 		'choice(recording, "🎙️", "") AS Rec';
 	return [
 		DASHBOARD_START,
-		"> [!info] This dashboard needs the Dataview community plugin enabled.",
-		"",
 		"## Upcoming meetings",
 		"```dataview",
 		cols,

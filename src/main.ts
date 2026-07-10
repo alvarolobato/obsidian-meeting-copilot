@@ -1200,10 +1200,7 @@ export default class SystemRecordingPlugin extends Plugin {
             await this.app.vault.modify(existing, withDashboardBlock(content, block));
             file = existing;
         } else {
-            file = await this.app.vault.create(
-                path,
-                `# Meetings Dashboard\n\n${block}\n`
-            );
+            file = await this.app.vault.create(path, `${block}\n`);
         }
         await this.app.workspace.getLeaf(false).openFile(file);
         new Notice(t().notices.dashboardCreated);
