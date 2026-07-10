@@ -10,7 +10,7 @@ import { nodeDeps, resolveBinaryPath } from "./binary-runtime";
 import * as path from "path";
 import { GoogleOAuth } from "./auth/googleOAuth";
 import { listEvents } from "./calendar/googleCalendar";
-import { shouldRecord, parseKeywords } from "./calendar/eventFilter";
+import { parseKeywords } from "./calendar/eventFilter";
 import { CalendarScheduler, ScheduledEvent } from "./calendar/scheduler";
 import { actionNotice } from "./ui/actionNotice";
 import {
@@ -317,24 +317,22 @@ export default class SystemRecordingPlugin extends Plugin {
 			this.settings.calendarId,
 			new Date(minMs),
 			new Date(maxMs),
-			250
+			250,
+			parseKeywords(this.settings.exclusionKeywords)
 		);
-		const keywords = parseKeywords(this.settings.exclusionKeywords);
-		return events
-			.filter((e) => shouldRecord({ summary: e.summary, allDay: e.allDay }, keywords))
-			.map((e) => ({
-				id: e.id,
-				summary: e.summary,
-				start: e.start.getTime(),
-				end: e.end.getTime(),
-				meetLink: e.meetLink,
-				location: e.location,
-				htmlLink: e.htmlLink,
-				attendees: e.attendees,
-				organizer: e.organizer,
-				iCalUID: e.iCalUID,
-				recurringEventId: e.recurringEventId,
-			}));
+		return events.map((e) => ({
+			id: e.id,
+			summary: e.summary,
+			start: e.start.getTime(),
+			end: e.end.getTime(),
+			meetLink: e.meetLink,
+			location: e.location,
+			htmlLink: e.htmlLink,
+			attendees: e.attendees,
+			organizer: e.organizer,
+			iCalUID: e.iCalUID,
+			recurringEventId: e.recurringEventId,
+		}));
 	}
 
 	private handleEventStart(event: ScheduledEvent): void {
@@ -474,7 +472,8 @@ export default class SystemRecordingPlugin extends Plugin {
             this.settings.calendarId,
             new Date(fromMs),
             new Date(toMs),
-            250
+            250,
+            parseKeywords(this.settings.exclusionKeywords)
         );
         const index = buildNoteIndex(this.app);
         return events

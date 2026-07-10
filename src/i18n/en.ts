@@ -135,7 +135,7 @@ export const en = {
 		},
 		exclusionKeywords: {
 			name: "Exclusion keywords",
-			desc: "Events whose title contains any of these words are not recorded (separate by newline or comma; case-insensitive).",
+			desc: "Events whose title contains any of these words are excluded from the calendar entirely — not shown in the agenda and not recorded (separate by newline or comma; case-insensitive).",
 		},
 		openMeet: {
 			name: "Open Meet automatically",

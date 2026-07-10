@@ -2,7 +2,7 @@ import { requestUrl } from "obsidian";
 import type { GoogleOAuth } from "../auth/googleOAuth";
 import { extractMeetLink, RawConferenceEvent } from "./meetLink";
 import { extractMeetingUrlFromText } from "./meetingUrl";
-import { isMeetingEventType } from "./eventFilter";
+import { isMeetingEventType, matchesExclusionKeyword } from "./eventFilter";
 
 export interface GCalEvent {
 	id: string;
@@ -90,7 +90,8 @@ export async function listEvents(
 	calendarId: string,
 	timeMin: Date,
 	timeMax: Date,
-	maxResults = 50
+	maxResults = 50,
+	exclusionKeywords: string[] = []
 ): Promise<GCalEvent[]> {
 	const params = new URLSearchParams({
 		timeMin: timeMin.toISOString(),
@@ -104,6 +105,7 @@ export async function listEvents(
 	return (json.items ?? [])
 		.filter((ev) => isMeetingEventType(ev.eventType))
 		.filter((ev) => !ev.start?.date) // drop all-day events (date-only start)
+		.filter((ev) => !matchesExclusionKeyword(ev.summary ?? "", exclusionKeywords))
 		.map((ev) => {
 		const isAllDay = !!ev.start?.date;
 		const start = isAllDay

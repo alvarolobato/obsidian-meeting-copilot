@@ -29,15 +29,23 @@ export function parseKeywords(raw: string): string[] {
 		.filter((k) => k.length > 0);
 }
 
+/** True if the title contains any of the (non-blank) exclusion keywords, case-insensitively. */
+export function matchesExclusionKeyword(
+	summary: string,
+	exclusionKeywords: string[]
+): boolean {
+	const title = summary.toLowerCase();
+	return exclusionKeywords.some((k) => {
+		const kw = k.trim().toLowerCase();
+		return kw.length > 0 && title.includes(kw);
+	});
+}
+
 /**
  * Records every timed event whose title does NOT contain any exclusion keyword.
  * All-day events are never recorded.
  */
 export function shouldRecord(event: FilterableEvent, exclusionKeywords: string[]): boolean {
 	if (event.allDay) return false;
-	const title = event.summary.toLowerCase();
-	return !exclusionKeywords.some((k) => {
-		const kw = k.trim().toLowerCase();
-		return kw.length > 0 && title.includes(kw);
-	});
+	return !matchesExclusionKeyword(event.summary, exclusionKeywords);
 }

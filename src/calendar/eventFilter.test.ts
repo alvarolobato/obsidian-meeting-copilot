@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { shouldRecord, parseKeywords, isMeetingEventType } from "./eventFilter";
+import {
+	shouldRecord,
+	parseKeywords,
+	isMeetingEventType,
+	matchesExclusionKeyword,
+} from "./eventFilter";
 
 describe("shouldRecord", () => {
 	it("records a normal timed event when there are no keywords", () => {
@@ -20,6 +25,24 @@ describe("shouldRecord", () => {
 
 	it("ignores blank keywords", () => {
 		expect(shouldRecord({ summary: "anything", allDay: false }, ["", "  "])).toBe(true);
+	});
+});
+
+describe("matchesExclusionKeyword", () => {
+	it("matches case-insensitively on substrings", () => {
+		expect(matchesExclusionKeyword("Weekly LUNCH", ["lunch"])).toBe(true);
+		expect(matchesExclusionKeyword("1on1 with Bob", ["1ON1"])).toBe(true);
+	});
+
+	it("does not match when no keyword is present", () => {
+		expect(matchesExclusionKeyword("Design review", ["lunch", "1on1"])).toBe(
+			false
+		);
+	});
+
+	it("ignores blank keywords and empty lists", () => {
+		expect(matchesExclusionKeyword("anything", ["", "  "])).toBe(false);
+		expect(matchesExclusionKeyword("anything", [])).toBe(false);
 	});
 });
 
