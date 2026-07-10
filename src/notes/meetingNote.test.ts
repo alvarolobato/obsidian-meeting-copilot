@@ -1,10 +1,30 @@
 import { describe, expect, it } from "vitest";
 import {
 	formatTranscriptCallout,
+	recordingLinkTarget,
 	stripTranscript,
 	transcriptAtBottom,
 	upsertSection,
 } from "./meetingNote";
+
+describe("recordingLinkTarget", () => {
+	it("strips the [[ ]] wrapper", () => {
+		expect(recordingLinkTarget("[[Meetings/foo.wav]]")).toBe(
+			"Meetings/foo.wav"
+		);
+	});
+	it("strips a |alias", () => {
+		expect(recordingLinkTarget("[[foo.wav|Jan meeting]]")).toBe("foo.wav");
+	});
+	it("handles a bare path", () => {
+		expect(recordingLinkTarget("foo.wav")).toBe("foo.wav");
+	});
+	it("returns '' for non-string / empty", () => {
+		expect(recordingLinkTarget(undefined)).toBe("");
+		expect(recordingLinkTarget(42)).toBe("");
+		expect(recordingLinkTarget("")).toBe("");
+	});
+});
 
 describe("upsertSection", () => {
 	it("appends the section when it is missing", () => {

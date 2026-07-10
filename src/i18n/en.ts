@@ -46,6 +46,13 @@ export const en = {
 			`Trashed ${n} old recording${n === 1 ? "" : "s"}`,
 		retentionNothing: "No recordings past the retention window.",
 		dashboardCreated: "Meetings dashboard updated",
+		transcribeError: (msg: string) => `Transcription failed: ${msg}`,
+		transcribeEmpty: "Transcription produced no text.",
+		transcribePartial:
+			"Transcription only partially succeeded — not inserted. Try again.",
+		transcribeInProgress: "This recording is already being transcribed…",
+		transcribeNoNote: (audio: string) =>
+			`Transcribed "${audio}" but found no meeting note to add it to.`,
 	},
 	statusBar: {
 		recording: (hms: string) => `Recording ${hms}`,
@@ -54,6 +61,7 @@ export const en = {
 		enrichFailed: "Enrichment failed",
 		transcribing: "Transcribing…",
 		transcriptAdded: "Transcript added",
+		transcribeFailed: "Transcription failed",
 		creatingNote: "Creating note…",
 	},
 	event: {
@@ -139,7 +147,7 @@ export const en = {
 		},
 		autoTranscribe: {
 			name: "Auto-transcribe when recording stops",
-			desc: "When a meeting recording finishes, automatically open AI Transcriber for it (you still confirm in the transcriber dialog). Requires the AI Transcriber plugin.",
+			desc: "When a meeting recording finishes, transcribe it automatically (no dialog) and add the transcript to the meeting note. Requires the AI Transcriber plugin with an API key configured.",
 		},
 		retentionDays: {
 			name: "Recording retention (days)",
@@ -205,7 +213,16 @@ export const en = {
 		},
 		enrichModel: {
 			name: "Model",
-			desc: "Chat model name, e.g. gpt-4o.",
+			desc: "Chat model used for enrichment. Use 'Test connection' to load the models your endpoint exposes, then pick one from the dropdown.",
+		},
+		testConnection: {
+			button: "Test connection",
+			testing: "Testing…",
+			noBaseUrl: "Set the enrichment base URL first.",
+			success: (n: number) =>
+				`Connected. Loaded ${n} model${n === 1 ? "" : "s"}.`,
+			empty: "Connected, but the endpoint returned no models.",
+			failure: (msg: string) => `Connection failed: ${msg}`,
 		},
 		enrichOnTranscribe: {
 			name: "Enrich automatically after transcription",

@@ -20,6 +20,7 @@ import {
     linkRecording,
     MeetingEventInfo,
     MeetingNoteConfig,
+    recordingLinkTarget,
     upsertSection,
 } from "./notes/meetingNote";
 import {
@@ -35,6 +36,7 @@ import { findExpiredRecordings } from "./recordings/retention";
 /** Note section that holds action-item checkboxes (obsidian-tasks compatible). */
 const ACTION_ITEMS_HEADING = "## Action items";
 import { chatComplete } from "./enrich/llm";
+import { isPartialTranscript } from "./transcribe/partial";
 import { ENRICH_SYSTEM_PROMPT, fillPrompt } from "./enrich/prompt";
 import { t } from "./i18n";
 import { TypedEventBus } from "./util/events";
@@ -87,6 +89,8 @@ export default class SystemRecordingPlugin extends Plugin {
 	private currentRecordingPath: string | null = null;
 	/** Note paths currently being enriched, to prevent overlapping LLM runs. */
 	private enrichingPaths = new Set<string>();
+	/** Audio paths currently being transcribed, to prevent overlapping runs. */
+	private transcribingPaths = new Set<string>();
 	/** One-shot startup retention sweep, cleared on unload. */
 	private retentionTimeout: number | null = null;
 	/** Serializes retention sweeps so the startup timer and the command can't overlap. */
@@ -602,12 +606,8 @@ export default class SystemRecordingPlugin extends Plugin {
         };
 
         let recording: TFile | null = null;
-        const rec = fm["recording"];
-        if (typeof rec === "string") {
-            // Strip [[ ]] and any |alias so getFirstLinkpathDest gets the target.
-            const link = (
-                rec.replace(/^\[\[/, "").replace(/\]\]$/, "").split("|")[0] ?? ""
-            ).trim();
+        const link = recordingLinkTarget(fm["recording"]);
+        if (link) {
             const dest = this.app.metadataCache.getFirstLinkpathDest(
                 link,
                 file.path
@@ -723,28 +723,96 @@ export default class SystemRecordingPlugin extends Plugin {
         await this.launchTranscriber(m.recording);
     }
 
-    /** Opens an audio file and asks the AI Transcriber plugin to transcribe it. */
+    /**
+     * Transcribes an audio file by driving the AI Transcriber plugin's engine
+     * directly (Option C: headless bridge — no modal, no cost dialog, no
+     * separate transcript file). The returned text is routed through the same
+     * insert+enrich path as the plugin's own completion event.
+     */
     private async launchTranscriber(recording: TFile): Promise<void> {
-        await this.app.workspace.getLeaf(false).openFile(recording);
-        const commands = (
-            this.app as unknown as {
-                commands?: {
-                    commands?: Record<string, unknown>;
-                    executeCommandById?: (id: string) => boolean;
-                };
-            }
-        ).commands;
-        const ids = Object.keys(commands?.commands ?? {});
-        // Prefer the explicit "transcribe current audio" command; fall back to any.
-        const id =
-            ids.find((k) => k === "ai-transcriber:api-transcribe-audio") ??
-            ids.find((k) => k.startsWith("ai-transcriber:"));
-        if (id && commands?.executeCommandById) {
-            commands.executeCommandById(id);
-            this.setActionStatus(t().statusBar.transcribing, "busy");
-        } else {
+        const engine = this.aiTranscriberEngine();
+        if (!engine) {
             new Notice(t().agenda.notices.transcriberMissing);
+            return;
         }
+        // Guard against overlapping runs (double-click, or auto-transcribe
+        // racing a manual trigger) — each would cost an API call and write.
+        if (this.transcribingPaths.has(recording.path)) {
+            new Notice(t().notices.transcribeInProgress);
+            return;
+        }
+        this.transcribingPaths.add(recording.path);
+        this.setActionStatus(t().statusBar.transcribing, "busy");
+        try {
+            const result = await engine.transcribe(recording);
+            const text =
+                typeof result === "string" ? result : (result?.text ?? "");
+            const trimmed = text.trim();
+            if (!trimmed) {
+                new Notice(t().notices.transcribeEmpty);
+                if (!this.recorder.isRecording) this.clearActionStatus();
+                return;
+            }
+            // A partial/failed run comes back as a marker-prefixed string
+            // (not clean transcript text), so don't insert it as the transcript.
+            if (isPartialTranscript(trimmed)) {
+                new Notice(t().notices.transcribePartial);
+                this.setActionStatus(t().statusBar.transcribeFailed, "error");
+                return;
+            }
+            const noteFound = await this.handleTranscriptionCompleted({
+                audioFile: recording,
+                transcription: text,
+                file: null,
+            });
+            if (!noteFound) {
+                new Notice(t().notices.transcribeNoNote(recording.basename));
+            }
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            new Notice(t().notices.transcribeError(msg));
+            this.setActionStatus(t().statusBar.transcribeFailed, "error");
+        } finally {
+            this.transcribingPaths.delete(recording.path);
+        }
+    }
+
+    /**
+     * The AI Transcriber plugin's transcription engine, if the plugin is
+     * installed and enabled. This reaches into a non-public API shape; when we
+     * vendor the engine (Option A) this bridge goes away.
+     */
+    private aiTranscriberEngine(): {
+        transcribe(
+            file: TFile
+        ): Promise<string | { text: string; modelUsed?: string }>;
+    } | null {
+        const plugins = (
+            this.app as unknown as {
+                plugins?: { plugins?: Record<string, unknown> };
+            }
+        ).plugins?.plugins;
+        const tp = plugins?.["ai-transcriber"] as
+            | {
+                  transcriber?: {
+                      transcribe?: (
+                          file: TFile
+                      ) => Promise<
+                          string | { text: string; modelUsed?: string }
+                      >;
+                  };
+              }
+            | undefined;
+        const engine = tp?.transcriber;
+        // Guard against the plugin being present but not yet initialized, or a
+        // future refactor that changes this internal shape.
+        return engine && typeof engine.transcribe === "function"
+            ? (engine as {
+                  transcribe(
+                      file: TFile
+                  ): Promise<string | { text: string; modelUsed?: string }>;
+              })
+            : null;
     }
 
     private openMeetingLink(url: string): void {
@@ -919,7 +987,10 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /** Inserts a finished transcription into its meeting note, then refreshes the agenda. */
-    private async handleTranscriptionCompleted(payload: unknown): Promise<void> {
+    /** Returns true when a matching meeting note was found (regardless of insert). */
+    private async handleTranscriptionCompleted(
+        payload: unknown
+    ): Promise<boolean> {
         let enrichTarget: TFile | null = null;
         let transcriptText: string | null = null;
         let inserted = false;
@@ -942,12 +1013,14 @@ export default class SystemRecordingPlugin extends Plugin {
                     note !== null &&
                     p.file.path === note.path;
                 if (note) {
+                    // Record the note first so a failed insert still reports
+                    // "note found" (not the misleading "no meeting note" notice).
+                    enrichTarget = note;
                     if (this.settings.insertTranscript && !already) {
                         await insertTranscript(this.app, note, transcript);
                         new Notice(t().notices.transcriptAdded(note.basename));
                         inserted = true;
                     }
-                    enrichTarget = note;
                 }
             }
         } catch (e) {
@@ -974,6 +1047,7 @@ export default class SystemRecordingPlugin extends Plugin {
             // insertTranscript is off and the note has no transcript yet.
             await this.enrichMeetingNote(enrichTarget, transcriptText ?? undefined);
         }
+        return enrichTarget !== null;
     }
 
     /** Enriches the active markdown note, if it is one. */
