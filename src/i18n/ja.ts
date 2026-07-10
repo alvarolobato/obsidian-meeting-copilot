@@ -97,6 +97,14 @@ export const ja: Messages = {
 			desc: "会議ノートと録音の保存先フォルダ。繰り返しの予定は専用のサブフォルダに保存します。",
 			placeholder: "Meetings",
 		},
+		noteTitlePattern: {
+			name: "ノートのタイトルパターン",
+			desc: "会議ノートのファイル名パターン。プレースホルダー: {{title}}, {{date}}, {{start:FMT}}, {{end:FMT}}。",
+		},
+		noteTemplate: {
+			name: "ノートテンプレート",
+			desc: "新規会議ノートの本文。プレースホルダー: {{title}}, {{date}}, {{start:FMT}}, {{end:FMT}}, {{duration}}, {{location}}, {{meeting_url}}, {{organizer}}, {{attendees}}, {{attendees_list}}, {{attendees_wikilinks}}, {{event_link}}。フロントマター（attendees, status, recording など）は自動管理されます。",
+		},
 		retentionDays: {
 			name: "録音の保持日数",
 			desc: "文字起こし後、録音は m4a に圧縮され、この日数を過ぎると削除されます。0 で無期限に保持します。",

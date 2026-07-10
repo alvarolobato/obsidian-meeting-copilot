@@ -96,6 +96,14 @@ export const en = {
 			desc: "Folder for meeting notes and their recordings. Recurring meetings get their own subfolder.",
 			placeholder: "Meetings",
 		},
+		noteTitlePattern: {
+			name: "Note title pattern",
+			desc: "Filename pattern for meeting notes. Placeholders: {{title}}, {{date}}, {{start:FMT}}, {{end:FMT}}.",
+		},
+		noteTemplate: {
+			name: "Note template",
+			desc: "Body of new meeting notes. Placeholders: {{title}}, {{date}}, {{start:FMT}}, {{end:FMT}}, {{duration}}, {{location}}, {{meeting_url}}, {{organizer}}, {{attendees}}, {{attendees_list}}, {{attendees_wikilinks}}, {{event_link}}. Frontmatter (attendees, status, recording, …) is managed automatically.",
+		},
 		retentionDays: {
 			name: "Recording retention (days)",
 			desc: "After transcription, recordings are compressed to m4a and deleted once older than this. 0 keeps them forever.",

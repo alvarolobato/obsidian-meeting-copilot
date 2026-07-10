@@ -5,10 +5,16 @@ export interface FilterableEvent {
 
 /**
  * Google Calendar `eventType` values that are not real meetings and should be
- * dropped from the sync entirely (agenda + auto-record). "workingLocation" is
- * Google's home/office indicator, surfaced with titles like "Home Location: Home".
+ * dropped from the sync entirely (agenda + auto-record):
+ * - "workingLocation" — home/office indicator, e.g. "Home Location: Home"
+ * - "outOfOffice" — OOO blocks
+ * - "focusTime" — focus-time blocks
  */
-const IGNORED_EVENT_TYPES = new Set(["workingLocation"]);
+const IGNORED_EVENT_TYPES = new Set([
+	"workingLocation",
+	"outOfOffice",
+	"focusTime",
+]);
 
 /** True for event types we treat as meetings; unknown/undefined types are kept. */
 export function isMeetingEventType(eventType: string | undefined): boolean {

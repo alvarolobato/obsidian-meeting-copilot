@@ -1,4 +1,5 @@
 import { App, normalizePath, TFile } from "obsidian";
+import { renderTemplate } from "./template";
 
 /** Everything the note builder needs, decoupled from the calendar/scheduler types. */
 export interface MeetingEventInfo {
@@ -14,6 +15,35 @@ export interface MeetingEventInfo {
 	iCalUID: string | null;
 	recurringEventId: string | null;
 }
+
+/** How the note's path/name and body are produced from a meeting. */
+export interface MeetingNoteConfig {
+	/** Base folder for meeting notes. */
+	baseFolder: string;
+	/** `{{placeholder}}` pattern for the note title / filename. */
+	titlePattern: string;
+	/** `{{placeholder}}` template for the note body. */
+	template: string;
+}
+
+export const DEFAULT_TITLE_PATTERN = "{{date}} {{start:HHmm}} {{title}}";
+
+export const DEFAULT_NOTE_TEMPLATE = `# {{title}}
+
+- **When:** {{start:YYYY-MM-DD HH:mm}} – {{end:HH:mm}} ({{duration}} min)
+- **Where:** {{location}}
+- **Link:** {{meeting_url}}
+- **Attendees:** {{attendees}}
+
+## Notes
+
+
+## Summary
+
+
+## Action items
+
+`;
 
 export interface MeetingNoteRef {
 	file: TFile;
@@ -59,8 +89,13 @@ export function meetingFolder(baseFolder: string, ev: MeetingEventInfo): string 
 	return normalizePath(base);
 }
 
-/** `YYYY-MM-DD HHmm <Title>` — shared basename for the note and its recording. */
-export function meetingBasename(ev: MeetingEventInfo): string {
+/**
+ * Shared basename for the note and its recording, from the title pattern.
+ * Falls back to `YYYY-MM-DD HHmm <Title>` if the pattern renders empty.
+ */
+export function meetingBasename(ev: MeetingEventInfo, titlePattern: string): string {
+	const rendered = sanitizeName(renderTemplate(titlePattern, ev));
+	if (rendered && rendered !== "Untitled") return rendered;
 	return `${dateTimePrefix(ev.start)} ${sanitizeName(ev.summary)}`;
 }
 
@@ -76,35 +111,29 @@ async function ensureFolder(app: App, folder: string): Promise<void> {
 	}
 }
 
-function buildBody(ev: MeetingEventInfo): string {
-	const parts: string[] = [`# ${ev.summary}`, ""];
-	if (ev.meetLink) parts.push(`[Join meeting](${ev.meetLink})`, "");
-	if (ev.attendees.length) parts.push(`**Attendees:** ${ev.attendees.join(", ")}`, "");
-	parts.push("## Notes", "", "## Summary", "", "## Action items", "");
-	return parts.join("\n");
-}
-
 /**
  * Creates (or reuses) the meeting note and writes its frontmatter. Idempotent:
  * a note at the same path is reused rather than overwritten, so pressing the
- * start button twice for one occurrence is safe.
+ * start button twice for one occurrence is safe. The body comes from the
+ * user's template; the frontmatter below is always managed here so the agenda
+ * and recording-linking keep working regardless of the template.
  */
 export async function createMeetingNote(
 	app: App,
-	baseFolder: string,
-	ev: MeetingEventInfo
+	ev: MeetingEventInfo,
+	cfg: MeetingNoteConfig
 ): Promise<MeetingNoteRef> {
-	const folder = meetingFolder(baseFolder, ev);
+	const folder = meetingFolder(cfg.baseFolder, ev);
 	await ensureFolder(app, folder);
 
-	const basename = meetingBasename(ev);
+	const basename = meetingBasename(ev, cfg.titlePattern);
 	const notePath = normalizePath(`${folder}/${basename}.md`);
 
 	const existing = app.vault.getAbstractFileByPath(notePath);
 	const file =
 		existing instanceof TFile
 			? existing
-			: await app.vault.create(notePath, buildBody(ev));
+			: await app.vault.create(notePath, renderTemplate(cfg.template, ev));
 
 	await app.fileManager.processFrontMatter(file, (fm) => {
 		const f = fm as Record<string, unknown>;

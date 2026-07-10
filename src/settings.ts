@@ -1,12 +1,18 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import SystemRecordingPlugin from "./main";
 import type { StoredTokens } from "./auth/googleOAuth";
+import {
+	DEFAULT_NOTE_TEMPLATE,
+	DEFAULT_TITLE_PATTERN,
+} from "./notes/meetingNote";
 import { t } from "./i18n";
 
 export interface SystemRecordingSettings {
 	recordingFolder: string;
 	fileNameTemplate: string;
 	meetingsFolder: string;
+	noteTitlePattern: string;
+	noteTemplate: string;
 	retentionDays: number;
 	googleClientId: string;
 	googleClientSecret: string;
@@ -23,6 +29,8 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	recordingFolder: "recordings",
 	fileNameTemplate: "recording-YYYY-MM-DD-HHmmss",
 	meetingsFolder: "Meetings",
+	noteTitlePattern: DEFAULT_TITLE_PATTERN,
+	noteTemplate: DEFAULT_NOTE_TEMPLATE,
 	retentionDays: 30,
 	googleClientId: "",
 	googleClientSecret: "",
@@ -85,6 +93,35 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     })
             );
+
+        new Setting(containerEl)
+            .setName(s.settings.noteTitlePattern.name)
+            .setDesc(s.settings.noteTitlePattern.desc)
+            .addText((text) =>
+                text
+                    .setPlaceholder(DEFAULT_TITLE_PATTERN)
+                    .setValue(this.plugin.settings.noteTitlePattern)
+                    .onChange(async (value) => {
+                        this.plugin.settings.noteTitlePattern =
+                            value.trim() || DEFAULT_TITLE_PATTERN;
+                        await this.plugin.saveSettings();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName(s.settings.noteTemplate.name)
+            .setDesc(s.settings.noteTemplate.desc)
+            .addTextArea((ta) => {
+                ta.setValue(this.plugin.settings.noteTemplate).onChange(
+                    async (value) => {
+                        this.plugin.settings.noteTemplate =
+                            value || DEFAULT_NOTE_TEMPLATE;
+                        await this.plugin.saveSettings();
+                    }
+                );
+                ta.inputEl.rows = 12;
+                ta.inputEl.addClass("meeting-copilot-template-input");
+            });
 
         new Setting(containerEl)
             .setName(s.settings.retentionDays.name)

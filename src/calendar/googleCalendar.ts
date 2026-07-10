@@ -103,6 +103,7 @@ export async function listEvents(
 	const json = (await authedGet(oauth, url)) as { items?: RawEvent[] };
 	return (json.items ?? [])
 		.filter((ev) => isMeetingEventType(ev.eventType))
+		.filter((ev) => !ev.start?.date) // drop all-day events (date-only start)
 		.map((ev) => {
 		const isAllDay = !!ev.start?.date;
 		const start = isAllDay

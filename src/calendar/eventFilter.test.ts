@@ -24,14 +24,16 @@ describe("shouldRecord", () => {
 });
 
 describe("isMeetingEventType", () => {
-	it("drops Google working-location events", () => {
+	it("drops Google working-location, out-of-office and focus-time events", () => {
 		expect(isMeetingEventType("workingLocation")).toBe(false);
+		expect(isMeetingEventType("outOfOffice")).toBe(false);
+		expect(isMeetingEventType("focusTime")).toBe(false);
 	});
 
 	it("keeps regular meetings and unknown/undefined types", () => {
 		expect(isMeetingEventType("default")).toBe(true);
 		expect(isMeetingEventType(undefined)).toBe(true);
-		expect(isMeetingEventType("focusTime")).toBe(true);
+		expect(isMeetingEventType("fromGmail")).toBe(true);
 	});
 });
 

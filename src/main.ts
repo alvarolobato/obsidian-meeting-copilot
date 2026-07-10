@@ -17,6 +17,7 @@ import {
     createMeetingNote,
     linkRecording,
     MeetingEventInfo,
+    MeetingNoteConfig,
 } from "./notes/meetingNote";
 import { t } from "./i18n";
 import { TypedEventBus } from "./util/events";
@@ -362,11 +363,7 @@ export default class SystemRecordingPlugin extends Plugin {
 			return;
 		}
 		try {
-			const ref = await createMeetingNote(
-				this.app,
-				this.settings.meetingsFolder,
-				info
-			);
+			const ref = await createMeetingNote(this.app, info, this.noteConfig());
 			await this.app.workspace.getLeaf(false).openFile(ref.file);
 			await this.startRecording({
 				folder: ref.folder,
@@ -377,6 +374,14 @@ export default class SystemRecordingPlugin extends Plugin {
 		} catch (e) {
 			new Notice(t().notices.recordingError(e instanceof Error ? e.message : String(e)));
 		}
+	}
+
+	private noteConfig(): MeetingNoteConfig {
+		return {
+			baseFolder: this.settings.meetingsFolder,
+			titlePattern: this.settings.noteTitlePattern,
+			template: this.settings.noteTemplate,
+		};
 	}
 
 	private toMeetingInfo(e: ScheduledEvent): MeetingEventInfo {
@@ -489,8 +494,8 @@ export default class SystemRecordingPlugin extends Plugin {
         try {
             const ref = await createMeetingNote(
                 this.app,
-                this.settings.meetingsFolder,
-                agendaToMeetingInfo(m)
+                agendaToMeetingInfo(m),
+                this.noteConfig()
             );
             await this.app.workspace.getLeaf(false).openFile(ref.file);
             this.agendaEvents.emit("changed", undefined);
