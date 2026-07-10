@@ -106,7 +106,7 @@ export const en = {
 		},
 		retentionDays: {
 			name: "Recording retention (days)",
-			desc: "After transcription, recordings are compressed to m4a and deleted once older than this. 0 keeps them forever.",
+			desc: "Planned — not yet enforced. Intended to clean up recordings older than this many days. 0 keeps them forever.",
 		},
 		calendarHeading: "Google Calendar integration",
 		clientId: {

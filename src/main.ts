@@ -650,8 +650,23 @@ export default class SystemRecordingPlugin extends Plugin {
         if (notePath) {
             const file = this.app.vault.getAbstractFileByPath(notePath);
             if (file instanceof TFile) {
-                await linkRecording(this.app, file, fileName);
-                this.agendaEvents.emit("changed", undefined);
+                // Qualify the link with the recording's folder (it's colocated
+                // with the note) so duplicate basenames elsewhere can't resolve
+                // to the wrong file.
+                const slash = notePath.lastIndexOf("/");
+                const folder = slash >= 0 ? notePath.slice(0, slash) : "";
+                const link = folder ? `${folder}/${fileName}` : fileName;
+                try {
+                    await linkRecording(this.app, file, link);
+                } catch (e) {
+                    new Notice(
+                        t().notices.recordingError(
+                            e instanceof Error ? e.message : String(e)
+                        )
+                    );
+                } finally {
+                    this.agendaEvents.emit("changed", undefined);
+                }
                 return;
             }
         }

@@ -16,7 +16,7 @@ Calendar-driven meeting notes for Obsidian on macOS: reads your Google Calendar,
 - Google Calendar integration: upcoming events, attendees, and Meet/Zoom link extraction
 - **Meeting agenda sidebar**: Granola-style "coming up / recent" list with per-row actions (create note + record, open note, transcribe, open recording, join link)
 - Creates a meeting note from the invite and colocates the recording with it
-- Recurring meetings organized into a per-series folder; recording retention setting
+- Recurring meetings organized into a per-series folder
 - Ribbon button / command palette control; elapsed-time indicator in the status bar
 
 ## Installation (manual)

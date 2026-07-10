@@ -217,14 +217,20 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName(s.settings.exclusionKeywords.name)
 			.setDesc(s.settings.exclusionKeywords.desc)
-			.addTextArea((ta) =>
+			.addTextArea((ta) => {
 				ta
 					.setValue(this.plugin.settings.exclusionKeywords)
 					.onChange(async (value) => {
 						this.plugin.settings.exclusionKeywords = value;
 						await this.plugin.saveSettings();
-					})
-			);
+					});
+				// Re-poll and refresh the agenda once editing ends so newly
+				// excluded events drop out without waiting for the next poll.
+				this.plugin.registerDomEvent(ta.inputEl, "blur", () => {
+					this.plugin.refreshCalendarNow();
+					this.plugin.refreshAgenda();
+				});
+			});
 
 		new Setting(containerEl)
 			.setName(s.settings.openMeet.name)
