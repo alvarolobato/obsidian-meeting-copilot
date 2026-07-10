@@ -48,6 +48,10 @@ export const en = {
 		dashboardCreated: "Meetings dashboard updated",
 		transcribeError: (msg: string) => `Transcription failed: ${msg}`,
 		transcribeEmpty: "Transcription produced no text.",
+		transcribePartial:
+			"Transcription only partially succeeded — not inserted. Try again.",
+		transcribeNoNote: (audio: string) =>
+			`Transcribed "${audio}" but found no meeting note to add it to.`,
 	},
 	statusBar: {
 		recording: (hms: string) => `Recording ${hms}`,
@@ -216,6 +220,7 @@ export const en = {
 			noBaseUrl: "Set the enrichment base URL first.",
 			success: (n: number) =>
 				`Connected. Loaded ${n} model${n === 1 ? "" : "s"}.`,
+			empty: "Connected, but the endpoint returned no models.",
 			failure: (msg: string) => `Connection failed: ${msg}`,
 		},
 		enrichOnTranscribe: {

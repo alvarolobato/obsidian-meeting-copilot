@@ -34,6 +34,21 @@ import { findExpiredRecordings } from "./recordings/retention";
 
 /** Note section that holds action-item checkboxes (obsidian-tasks compatible). */
 const ACTION_ITEMS_HEADING = "## Action items";
+
+/**
+ * The AI Transcriber returns a marker-prefixed string for partial/failed runs
+ * (see its `modal.transcription.partialResult` localization) instead of throwing,
+ * so we detect those prefixes to avoid inserting error text as a transcript.
+ */
+const PARTIAL_TRANSCRIPT_MARKERS = [
+    "Partial transcription result",
+    "[部分的な文字起こし結果]",
+    "（部分结果）",
+    "[부분 전사 결과]",
+];
+function isPartialTranscript(text: string): boolean {
+    return PARTIAL_TRANSCRIPT_MARKERS.some((m) => text.startsWith(m));
+}
 import { chatComplete } from "./enrich/llm";
 import { ENRICH_SYSTEM_PROMPT, fillPrompt } from "./enrich/prompt";
 import { t } from "./i18n";
@@ -740,16 +755,27 @@ export default class SystemRecordingPlugin extends Plugin {
             const result = await engine.transcribe(recording);
             const text =
                 typeof result === "string" ? result : (result?.text ?? "");
-            if (!text.trim()) {
+            const trimmed = text.trim();
+            if (!trimmed) {
                 new Notice(t().notices.transcribeEmpty);
                 if (!this.recorder.isRecording) this.clearActionStatus();
                 return;
             }
-            await this.handleTranscriptionCompleted({
+            // A partial/failed run comes back as a marker-prefixed string
+            // (not clean transcript text), so don't insert it as the transcript.
+            if (isPartialTranscript(trimmed)) {
+                new Notice(t().notices.transcribePartial);
+                this.setActionStatus(t().statusBar.transcribeFailed, "error");
+                return;
+            }
+            const noteFound = await this.handleTranscriptionCompleted({
                 audioFile: recording,
                 transcription: text,
                 file: null,
             });
+            if (!noteFound) {
+                new Notice(t().notices.transcribeNoNote(recording.basename));
+            }
         } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
             new Notice(t().notices.transcribeError(msg));
@@ -958,7 +984,10 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /** Inserts a finished transcription into its meeting note, then refreshes the agenda. */
-    private async handleTranscriptionCompleted(payload: unknown): Promise<void> {
+    /** Returns true when a matching meeting note was found (regardless of insert). */
+    private async handleTranscriptionCompleted(
+        payload: unknown
+    ): Promise<boolean> {
         let enrichTarget: TFile | null = null;
         let transcriptText: string | null = null;
         let inserted = false;
@@ -1013,6 +1042,7 @@ export default class SystemRecordingPlugin extends Plugin {
             // insertTranscript is off and the note has no transcript yet.
             await this.enrichMeetingNote(enrichTarget, transcriptText ?? undefined);
         }
+        return enrichTarget !== null;
     }
 
     /** Enriches the active markdown note, if it is one. */

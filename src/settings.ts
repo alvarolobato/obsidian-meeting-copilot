@@ -459,9 +459,11 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                             enrichApiKey
                         );
                         new Notice(
-                            s.settings.testConnection.success(
-                                this.enrichModels.length
-                            )
+                            this.enrichModels.length === 0
+                                ? s.settings.testConnection.empty
+                                : s.settings.testConnection.success(
+                                      this.enrichModels.length
+                                  )
                         );
                         this.display();
                     } catch (e) {
