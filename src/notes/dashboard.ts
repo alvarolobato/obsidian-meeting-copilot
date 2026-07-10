@@ -24,9 +24,9 @@ export function buildDashboardBlock(meetingsFolder: string): string {
 		"```dataview",
 		cols,
 		`FROM "${folder}"`,
-		// Split on the datetime `start` so same-day meetings that already ended
-		// fall under Past rather than lingering in Upcoming.
-		"WHERE (event_id OR meeting_url) AND start >= date(now)",
+		// Compare against the current instant (`now`, not `date(now)` midnight)
+		// so same-day meetings that already ended fall under Past.
+		"WHERE (event_id OR meeting_url) AND start >= now",
 		"SORT start ASC",
 		"```",
 		"",
@@ -34,7 +34,7 @@ export function buildDashboardBlock(meetingsFolder: string): string {
 		"```dataview",
 		cols,
 		`FROM "${folder}"`,
-		"WHERE (event_id OR meeting_url) AND start < date(now)",
+		"WHERE (event_id OR meeting_url) AND start < now",
 		"SORT start DESC",
 		"```",
 		"",

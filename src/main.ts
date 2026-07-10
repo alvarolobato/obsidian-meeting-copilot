@@ -89,6 +89,8 @@ export default class SystemRecordingPlugin extends Plugin {
 	private enrichingPaths = new Set<string>();
 	/** One-shot startup retention sweep, cleared on unload. */
 	private retentionTimeout: number | null = null;
+	/** Serializes retention sweeps so the startup timer and the command can't overlap. */
+	private cleanupRunning = false;
 	private agendaEvents = new TypedEventBus<AgendaViewEvents>();
 
     async onload() {
@@ -1085,55 +1087,93 @@ export default class SystemRecordingPlugin extends Plugin {
             if (notify) new Notice(t().notices.retentionDisabled);
             return 0;
         }
-        const files = this.app.vault.getFiles().map((f) => ({
-            path: f.path,
-            ext: f.extension,
-            mtime: f.stat.mtime,
-        }));
-        const expired = findExpiredRecordings(files, {
-            folders: [
-                this.settings.meetingsFolder.trim() || "Meetings",
-                this.settings.recordingFolder.trim() || "recordings",
-            ],
-            retentionDays: this.settings.retentionDays,
-            now: Date.now(),
-            protectedPaths: this.currentRecordingPath
-                ? new Set([this.currentRecordingPath])
-                : undefined,
-        });
+        if (this.cleanupRunning) return 0;
+        this.cleanupRunning = true;
+        try {
+            const files = this.app.vault.getFiles().map((f) => ({
+                path: f.path,
+                ext: f.extension,
+                mtime: f.stat.mtime,
+            }));
+            const expired = findExpiredRecordings(files, {
+                folders: [
+                    this.settings.meetingsFolder.trim() || "Meetings",
+                    this.settings.recordingFolder.trim() || "recordings",
+                ],
+                retentionDays: this.settings.retentionDays,
+                now: Date.now(),
+                protectedPaths: this.currentRecordingPath
+                    ? new Set([this.currentRecordingPath])
+                    : undefined,
+            });
 
-        let removed = 0;
-        for (const info of expired) {
-            const file = this.app.vault.getAbstractFileByPath(info.path);
-            if (!(file instanceof TFile)) continue;
-            // Resolve the owning note before trashing; afterwards drop its now
-            // dangling `recording` link (the transcript already lives in the note).
-            const note = findMeetingNoteForAudio(this.app, file);
-            try {
-                await this.app.fileManager.trashFile(file);
-                removed++;
-                if (note) {
-                    await this.app.fileManager.processFrontMatter(note, (fm) => {
-                        const f = fm as Record<string, unknown>;
-                        delete f.recording;
-                        f.recording_pruned = new Date().toISOString().slice(0, 10);
-                    });
+            let removed = 0;
+            for (const info of expired) {
+                const file = this.app.vault.getAbstractFileByPath(info.path);
+                if (!(file instanceof TFile)) continue;
+                // Resolve the note that actually links THIS audio (verified, so we
+                // never touch a note that points at a different/newer recording).
+                const note = this.noteOwningRecording(file);
+                // Protect audio linked to a note that hasn't captured its content
+                // yet: only prune once the meeting is transcribed/enriched.
+                if (note && !this.isTranscribedNote(note)) continue;
+                try {
+                    await this.app.fileManager.trashFile(file);
+                    removed++;
+                    // Drop the note's now-dangling link (transcript stays in the note).
+                    if (note) {
+                        await this.app.fileManager.processFrontMatter(note, (fm) => {
+                            const f = fm as Record<string, unknown>;
+                            delete f.recording;
+                            f.recording_pruned = new Date()
+                                .toISOString()
+                                .slice(0, 10);
+                        });
+                    }
+                } catch (e) {
+                    console.warn(
+                        `[Meeting Copilot] failed to trash ${info.path}`,
+                        e
+                    );
                 }
-            } catch (e) {
-                console.warn(
-                    `[Meeting Copilot] failed to trash ${info.path}`,
-                    e
-                );
             }
-        }
 
-        if (removed > 0) {
-            new Notice(t().notices.retentionCleaned(removed));
-            this.agendaEvents.emit("changed", undefined);
-        } else if (notify) {
-            new Notice(t().notices.retentionNothing);
+            if (removed > 0) {
+                new Notice(t().notices.retentionCleaned(removed));
+                this.agendaEvents.emit("changed", undefined);
+            } else if (notify) {
+                new Notice(t().notices.retentionNothing);
+            }
+            return removed;
+        } finally {
+            this.cleanupRunning = false;
         }
-        return removed;
+    }
+
+    /** The note whose `recording` frontmatter link resolves to this audio file, if any. */
+    private noteOwningRecording(audio: TFile): TFile | null {
+        for (const f of this.app.vault.getMarkdownFiles()) {
+            const fm = this.app.metadataCache.getFileCache(f)?.frontmatter as
+                | Record<string, unknown>
+                | undefined;
+            const rec = fm?.["recording"];
+            if (typeof rec !== "string") continue;
+            const link = (
+                rec.replace(/^\[\[/, "").replace(/\]\]$/, "").split("|")[0] ?? ""
+            ).trim();
+            const dest = this.app.metadataCache.getFirstLinkpathDest(link, f.path);
+            if (dest instanceof TFile && dest.path === audio.path) return f;
+        }
+        return null;
+    }
+
+    /** True once a meeting note's content has been captured (transcribed or enriched). */
+    private isTranscribedNote(note: TFile): boolean {
+        const fm = this.app.metadataCache.getFileCache(note)?.frontmatter as
+            | Record<string, unknown>
+            | undefined;
+        const status = fm?.["status"];
+        return status === "transcribed" || status === "enriched";
     }
 
     /**

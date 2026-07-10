@@ -37,7 +37,8 @@ export function extractActionItems(markdown: string): ExtractedActions {
 	for (const raw of lines.slice(start + 1, end)) {
 		// Only top-level bullets become tasks; indented lines are supporting detail.
 		if (/^\s+/.test(raw)) continue;
-		const m = raw.match(/^[-*]\s+(.*)$/);
+		// Accept both unordered ("- ", "* ") and ordered ("1. ") list items.
+		const m = raw.match(/^(?:[-*]|\d+\.)\s+(.*)$/);
 		if (!m) continue;
 		const text = (m[1] ?? "").replace(/^\[[ xX]\]\s*/, "").trim();
 		if (text) items.push(`- [ ] ${text}`);
