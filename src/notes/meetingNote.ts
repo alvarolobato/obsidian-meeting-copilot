@@ -111,6 +111,39 @@ async function ensureFolder(app: App, folder: string): Promise<void> {
 	}
 }
 
+/** True if the note has an `event_id` that belongs to a *different* meeting. */
+function belongsToOtherEvent(app: App, file: TFile, eventId: string): boolean {
+	const fm = app.metadataCache.getFileCache(file)?.frontmatter as
+		| Record<string, unknown>
+		| undefined;
+	const existing = fm?.["event_id"];
+	return (
+		typeof existing === "string" && existing.length > 0 && existing !== eventId
+	);
+}
+
+/**
+ * Picks the note path for this event: reuses the base path when it's free or
+ * already belongs to this event; otherwise appends " 2", " 3"… so two distinct
+ * meetings that share a title + time never collapse into one note.
+ */
+function resolveNotePath(
+	app: App,
+	folder: string,
+	basename: string,
+	eventId: string
+): string {
+	let candidate = normalizePath(`${folder}/${basename}.md`);
+	for (let n = 2; n < 1000; n++) {
+		const file = app.vault.getAbstractFileByPath(candidate);
+		if (!(file instanceof TFile) || !belongsToOtherEvent(app, file, eventId)) {
+			return candidate;
+		}
+		candidate = normalizePath(`${folder}/${basename} ${n}.md`);
+	}
+	return candidate;
+}
+
 /**
  * Creates (or reuses) the meeting note and writes its frontmatter. Idempotent:
  * a note at the same path is reused rather than overwritten, so pressing the
@@ -126,8 +159,17 @@ export async function createMeetingNote(
 	const folder = meetingFolder(cfg.baseFolder, ev);
 	await ensureFolder(app, folder);
 
-	const basename = meetingBasename(ev, cfg.titlePattern);
-	const notePath = normalizePath(`${folder}/${basename}.md`);
+	const notePath = resolveNotePath(
+		app,
+		folder,
+		meetingBasename(ev, cfg.titlePattern),
+		ev.id
+	);
+	// The resolved path may carry a " 2" suffix; use its actual stem so the
+	// colocated recording shares the note's basename.
+	const basename = notePath
+		.substring(notePath.lastIndexOf("/") + 1)
+		.replace(/\.md$/, "");
 
 	const existing = app.vault.getAbstractFileByPath(notePath);
 	const file =

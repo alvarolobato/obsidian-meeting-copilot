@@ -140,8 +140,13 @@ export default class SystemRecordingPlugin extends Plugin {
         // Recorder callbacks
         this.recorder.onStatus = (status: RecorderStatus) =>
             this.handleStatus(status);
-        this.recorder.onError = (message: string) =>
+        this.recorder.onError = (message: string) => {
             new Notice(t().notices.recordingError(message));
+            // Fatal failures (spawn error / non-zero exit) flip isRecording off
+            // before invoking onError; a stderr line while still recording is
+            // non-fatal, so only reset the UI when recording has truly stopped.
+            if (!this.recorder.isRecording) this.resetRecordingUi();
+        };
 
 		this.updateScheduler();
     }
@@ -585,12 +590,7 @@ export default class SystemRecordingPlugin extends Plugin {
             void this.attachRecording(fileName);
             new Notice(t().notices.recordingSaved);
         } else if (status.status === "error") {
-            this.clearDurationTimer();
-            this.updateRibbonIcon(false);
-            this.hideStatusBar();
-            this.currentMeetingNotePath = null;
-            this.currentRecordingEventId = null;
-            this.agendaEvents.emit("changed", undefined);
+            this.resetRecordingUi();
             new Notice(
                 t().notices.recordingError(status.message ?? t().notices.unknownError)
             );
@@ -623,6 +623,16 @@ export default class SystemRecordingPlugin extends Plugin {
             window.clearInterval(this.durationInterval);
             this.durationInterval = null;
         }
+    }
+
+    /** Returns all recording UI/state to idle after a stop or failure. */
+    private resetRecordingUi() {
+        this.clearDurationTimer();
+        this.updateRibbonIcon(false);
+        this.hideStatusBar();
+        this.currentMeetingNotePath = null;
+        this.currentRecordingEventId = null;
+        this.agendaEvents.emit("changed", undefined);
     }
 
     private hideStatusBar() {
