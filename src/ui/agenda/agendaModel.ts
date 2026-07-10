@@ -51,7 +51,10 @@ export function buildNoteIndex(app: App): Map<string, NoteIndexEntry> {
 		let recording: TFile | null = null;
 		const rec = fm["recording"];
 		if (typeof rec === "string") {
-			const link = rec.replace(/^\[\[/, "").replace(/\]\]$/, "").trim();
+			// Strip [[ ]] and any |alias so getFirstLinkpathDest gets the target.
+			const link = (
+				rec.replace(/^\[\[/, "").replace(/\]\]$/, "").split("|")[0] ?? ""
+			).trim();
 			const dest = app.metadataCache.getFirstLinkpathDest(link, file.path);
 			if (dest instanceof TFile) recording = dest;
 		}

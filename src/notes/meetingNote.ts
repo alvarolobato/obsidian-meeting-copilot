@@ -266,7 +266,10 @@ export function findMeetingNoteForAudio(app: App, audio: TFile): TFile | null {
 			| undefined;
 		const rec = fm?.["recording"];
 		if (typeof rec !== "string") continue;
-		const link = rec.replace(/^\[\[/, "").replace(/\]\]$/, "").trim();
+		// Strip [[ ]] and any |alias so getFirstLinkpathDest gets the target.
+		const link = (
+			rec.replace(/^\[\[/, "").replace(/\]\]$/, "").split("|")[0] ?? ""
+		).trim();
 		const dest = app.metadataCache.getFirstLinkpathDest(link, file.path);
 		if (dest instanceof TFile && dest.path === audio.path) return file;
 	}
