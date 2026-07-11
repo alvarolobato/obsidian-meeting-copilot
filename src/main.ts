@@ -24,6 +24,7 @@ import {
     MeetingEventInfo,
     MeetingNoteConfig,
     recordingLinkTarget,
+    sanitizeName,
     upsertSection,
 } from "./notes/meetingNote";
 import {
@@ -52,7 +53,13 @@ import {
 } from "./transcribe/TranscriptionService";
 import { parseDictionary } from "./transcribe/dictionary";
 import type { TranscriptionModel } from "./transcribe/vendor/ApiSettings";
-import { ENRICH_SYSTEM_PROMPT, fillPrompt } from "./enrich/prompt";
+import {
+    buildTitlePrompt,
+    ENRICH_SYSTEM_PROMPT,
+    fillPrompt,
+    TITLE_SYSTEM_PROMPT,
+} from "./enrich/prompt";
+import { RenameModal } from "./ui/renameModal";
 import { t } from "./i18n";
 import { TypedEventBus } from "./util/events";
 import {
@@ -73,6 +80,9 @@ import {
     RowHandlers,
 } from "./ui/agenda/components/meetingRow";
 import { registerIcons, RECORD_ICON } from "./ui/icons";
+import { notifyOs, requestNotificationPermission } from "./ui/osNotification";
+import { MeetingDetector } from "./detect/meetingDetector";
+import { googleMeetActive, zoomInMeeting } from "./detect/probe";
 
 export default class SystemRecordingPlugin extends Plugin {
     settings: SystemRecordingSettings;
@@ -97,6 +107,9 @@ export default class SystemRecordingPlugin extends Plugin {
 		},
 	});
 	private scheduler: CalendarScheduler | null = null;
+	/** Tier 1 meeting detector + its poll interval id (macOS only). */
+	private detector: MeetingDetector | null = null;
+	private detectorIntervalId: number | null = null;
 	/** Note the in-progress recording belongs to, so we can link it back on stop. */
 	private currentMeetingNotePath: string | null = null;
 	/**
@@ -112,6 +125,8 @@ export default class SystemRecordingPlugin extends Plugin {
 	private enrichingPaths = new Set<string>();
 	/** Audio paths currently being transcribed, to prevent overlapping runs. */
 	private transcribingPaths = new Set<string>();
+	/** Note paths currently being offered an AI title, to prevent duplicate modals. */
+	private titleSuggestingPaths = new Set<string>();
 	/** One-shot startup retention sweep, cleared on unload. */
 	private retentionTimeout: number | null = null;
 	/** Serializes retention sweeps so the startup timer and the command can't overlap. */
@@ -248,7 +263,7 @@ export default class SystemRecordingPlugin extends Plugin {
         this.recorder.onStatus = (status: RecorderStatus) =>
             this.handleStatus(status);
         this.recorder.onError = (message: string) => {
-            new Notice(t().notices.recordingError(message));
+            this.notifyRecordingError(message);
             // Fatal failures (spawn error / non-zero exit) flip isRecording off
             // before invoking onError; a stderr line while still recording is
             // non-fatal, so only reset the UI when recording has truly stopped.
@@ -256,6 +271,8 @@ export default class SystemRecordingPlugin extends Plugin {
         };
 
 		this.updateScheduler();
+		requestNotificationPermission();
+		this.updateDetector();
     }
 
     onunload() {
@@ -555,6 +572,132 @@ export default class SystemRecordingPlugin extends Plugin {
 		void this.scheduler?.poll();
 	}
 
+	// MARK: - Meeting detection (Tier 1, macOS)
+
+	/** Starts/stops the meeting-detection poller based on settings (macOS only). */
+	updateDetector(): void {
+		if (this.detectorIntervalId !== null) {
+			window.clearInterval(this.detectorIntervalId);
+			this.detectorIntervalId = null;
+		}
+		const enabled = this.enabledProbeApps();
+		// Don't poll if disabled, off-platform, or no probe is enabled (an empty
+		// probe set would otherwise be read as "all meetings ended"). Drop the
+		// detector so a later re-enable starts from a clean state (no stale
+		// "active" app that would false-end an unrelated recording).
+		if (
+			!this.settings.detectMeetings ||
+			enabled.size === 0 ||
+			!Platform.isMacOS
+		) {
+			this.detector = null;
+			return;
+		}
+		if (!this.detector) {
+			this.detector = new MeetingDetector({
+				probe: () => this.probeMeetings(),
+				onStart: (app) => this.onMeetingDetected(app),
+				onEnd: (app) => this.onMeetingEnded(app),
+				onError: (e) => console.error("Meeting detection probe failed", e),
+			});
+		} else {
+			// A probe may have just been disabled — forget it silently (not an end).
+			this.detector.retainOnly(enabled);
+		}
+		const seconds = Math.min(
+			120,
+			Math.max(3, this.settings.detectionIntervalSeconds)
+		);
+		void this.detector.poll();
+		this.detectorIntervalId = window.setInterval(
+			() => void this.detector?.poll(),
+			seconds * 1000
+		);
+		this.registerInterval(this.detectorIntervalId);
+	}
+
+	/** The conferencing app names currently enabled for detection. */
+	private enabledProbeApps(): Set<string> {
+		const apps = new Set<string>();
+		if (this.settings.detectZoom) apps.add("Zoom");
+		if (this.settings.detectGoogleMeet) apps.add("Google Meet");
+		return apps;
+	}
+
+	/** Collects the set of conferencing apps currently in a meeting. */
+	private async probeMeetings(): Promise<Set<string>> {
+		const active = new Set<string>();
+		const checks: Promise<void>[] = [];
+		if (this.settings.detectZoom) {
+			checks.push(
+				zoomInMeeting().then((on) => {
+					if (on) active.add("Zoom");
+				})
+			);
+		}
+		if (this.settings.detectGoogleMeet) {
+			checks.push(
+				googleMeetActive().then((on) => {
+					if (on) active.add("Google Meet");
+				})
+			);
+		}
+		await Promise.all(checks);
+		return active;
+	}
+
+	/** Offers to record when a meeting is detected — unless we're already recording. */
+	private onMeetingDetected(app: string): void {
+		if (this.recorder.isRecording) return;
+		this.promptMeeting(t().detect.detected(app), t().detect.recordPrompt, () => {
+			void this.startAdHocMeeting();
+		});
+	}
+
+	/** True when the active recording is unplanned (ad-hoc/detected), not a calendar meeting. */
+	private isAdhocRecording(): boolean {
+		const id = this.currentRecordingEventId;
+		return id === null || id.startsWith("adhoc-");
+	}
+
+	/**
+	 * When a detected meeting ends, stop the recording automatically — but only
+	 * for unplanned (ad-hoc/detected) recordings. Calendar-driven recordings are
+	 * left to the scheduler's own event-end handling.
+	 */
+	private onMeetingEnded(app: string): void {
+		// Ignore if detection was disabled meanwhile (an in-flight poll's onEnd
+		// must not auto-stop after the user opted out), and only stop once *all*
+		// detected meetings have ended so one of several concurrent calls ending
+		// doesn't truncate a still-active recording.
+		if (!this.detector || this.detector.activeCount() > 0) return;
+		if (!this.recorder.isRecording || !this.isAdhocRecording()) {
+			return;
+		}
+		new Notice(t().detect.endedStopping(app));
+		this.stopRecording();
+	}
+
+	/**
+	 * Prompts the user to act on a meeting. Always shows an in-app actionable
+	 * Notice (so the prompt is there when they return to Obsidian) and, when
+	 * Obsidian is unfocused, additionally fires a native OS notification that's
+	 * visible while minimized. The OS notification is best-effort (needs a
+	 * granted permission); the in-app Notice is the guaranteed path.
+	 */
+	private promptMeeting(
+		message: string,
+		actionLabel: string,
+		onAction: () => void
+	): void {
+		const focused =
+			typeof document !== "undefined" && document.hasFocus
+				? document.hasFocus()
+				: true;
+		if (!focused) notifyOs(message, actionLabel, onAction);
+		actionNotice(message, actionLabel, onAction);
+	}
+
 	private async fetchCalendarEvents(
 		minMs: number,
 		maxMs: number
@@ -592,7 +735,7 @@ export default class SystemRecordingPlugin extends Plugin {
 		) {
 			window.open(event.meetLink, "_blank");
 		}
-		actionNotice(
+		this.promptMeeting(
 			t().event.started(event.summary),
 			t().event.createNoteAndRecord,
 			() => {
@@ -1131,9 +1274,20 @@ export default class SystemRecordingPlugin extends Plugin {
             }
         } else if (status.status === "error") {
             this.resetRecordingUi();
-            new Notice(
-                t().notices.recordingError(status.message ?? t().notices.unknownError)
-            );
+            this.notifyRecordingError(status.message ?? t().notices.unknownError);
+        }
+    }
+
+    /**
+     * Shows a recording error. A "screen capture not authorized" failure is
+     * common after a rename/update (macOS ties the Screen Recording grant to the
+     * helper's identity/path), so surface clear, actionable instructions for it.
+     */
+    private notifyRecordingError(message: string): void {
+        if (/screen[\s-]?(capture|recording)/i.test(message)) {
+            new Notice(t().notices.screenPermission, 15000);
+        } else {
+            new Notice(t().notices.recordingError(message));
         }
     }
 
@@ -1310,6 +1464,7 @@ export default class SystemRecordingPlugin extends Plugin {
         ) {
             // Pass the fresh transcript so enrichment works even when
             // insertTranscript is off and the note has no transcript yet.
+            // enrichMeetingNote also offers an AI title for unplanned meetings.
             await this.enrichMeetingNote(enrichTarget, transcriptText ?? undefined);
         }
         return enrichTarget !== null;
@@ -1346,6 +1501,7 @@ export default class SystemRecordingPlugin extends Plugin {
             return;
         }
         this.enrichingPaths.add(file.path);
+        let enrichedOk = false;
         try {
             const content = await this.app.vault.read(file);
             const notes = extractSection(content, "## Notes");
@@ -1405,6 +1561,7 @@ export default class SystemRecordingPlugin extends Plugin {
             new Notice(t().notices.enrichDone(file.basename));
             this.setActionStatus(t().statusBar.enriched, "success");
             this.agendaEvents.emit("changed", undefined);
+            enrichedOk = true;
         } catch (e) {
             new Notice(
                 t().notices.enrichError(e instanceof Error ? e.message : String(e))
@@ -1412,6 +1569,171 @@ export default class SystemRecordingPlugin extends Plugin {
             this.setActionStatus(t().statusBar.enrichFailed, "error");
         } finally {
             this.enrichingPaths.delete(file.path);
+        }
+
+        // After the AI summary, offer a generated title for unplanned meetings
+        // (once). Scheduled meetings keep their calendar title.
+        if (
+            enrichedOk &&
+            this.settings.suggestAdhocTitle &&
+            this.isAdhocNote(file) &&
+            !this.titleAlreadySuggested(file)
+        ) {
+            await this.suggestAdhocTitle(file, transcriptOverride);
+        }
+    }
+
+    /** True once we've offered an AI title for this note (flagged in frontmatter). */
+    private titleAlreadySuggested(file: TFile): boolean {
+        const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as
+            | Record<string, unknown>
+            | undefined;
+        return fm?.["mc_title_suggested"] === true;
+    }
+
+    /** True for unplanned meetings (ad-hoc/detected), whose event_id we prefix "adhoc-". */
+    private isAdhocNote(file: TFile): boolean {
+        const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as
+            | Record<string, unknown>
+            | undefined;
+        const id = fm?.["event_id"];
+        return typeof id === "string" && id.startsWith("adhoc-");
+    }
+
+    /**
+     * Asks the LLM for a title based on the notes/transcript and offers to
+     * rename the note, keeping the date/time prefix. No-op on empty content.
+     */
+    private async suggestAdhocTitle(
+        file: TFile,
+        transcriptOverride?: string
+    ): Promise<void> {
+        const { apiBaseUrl, apiKey, enrichModel } = this.settings;
+        if (!apiBaseUrl || !apiKey || !enrichModel) return;
+        // Guard against a metadata-cache lag racing two offers for the same note.
+        if (this.titleSuggestingPaths.has(file.path)) return;
+        this.titleSuggestingPaths.add(file.path);
+        try {
+            const content = await this.app.vault.read(file);
+            const notes = extractSection(content, "## Notes");
+            const transcript =
+                transcriptOverride && transcriptOverride.trim().length > 0
+                    ? transcriptOverride
+                    : extractTranscript(content);
+            if (!notes && !transcript) return;
+
+            this.setActionStatus(t().adhoc.suggestingTitle, "busy");
+            const raw = await chatComplete({
+                baseUrl: apiBaseUrl,
+                apiKey,
+                model: enrichModel,
+                system: TITLE_SYSTEM_PROMPT,
+                user: buildTitlePrompt(notes, transcript),
+            });
+            this.clearActionStatus();
+            const title = this.cleanSuggestedTitle(raw);
+            if (!title) return;
+
+            // Mark as offered so we don't re-prompt on a later re-enrich.
+            await this.app.fileManager.processFrontMatter(file, (f) => {
+                (f as Record<string, unknown>).mc_title_suggested = true;
+            });
+
+            const prefix = this.datePrefixOf(file);
+            const suggested = prefix ? `${prefix} ${title}` : title;
+            new RenameModal(this.app, {
+                heading: t().adhoc.titleModal.heading,
+                desc: t().adhoc.titleModal.desc,
+                value: suggested,
+                renameLabel: t().adhoc.titleModal.rename,
+                keepLabel: t().adhoc.titleModal.keep,
+                onRename: (value) => {
+                    void this.renameMeetingNote(file, value, prefix);
+                },
+            }).open();
+        } catch (e) {
+            console.warn("[Meeting Copilot] title suggestion failed", e);
+            this.clearActionStatus();
+        } finally {
+            this.titleSuggestingPaths.delete(file.path);
+        }
+    }
+
+    /** Reduces an LLM response to a single clean filename-safe title line. */
+    private cleanSuggestedTitle(raw: string): string {
+        const firstLine = raw.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+        const unquoted = firstLine
+            .replace(/^["'“”‘’]+|["'“”‘’]+$/g, "")
+            .replace(/[.。]+$/, "")
+            .trim();
+        return sanitizeName(unquoted).slice(0, 100).trim();
+    }
+
+    /** The leading `YYYY-MM-DD [HHmm]` portion of a note's basename, or from frontmatter. */
+    private datePrefixOf(file: TFile): string {
+        const m = file.basename.match(/^(\d{4}-\d{2}-\d{2}(?:\s+\d{3,4})?)/);
+        if (m?.[1]) return m[1];
+        const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as
+            | Record<string, unknown>
+            | undefined;
+        // Prefer `start` (YYYY-MM-DDTHH:MM:SS) so we keep the time component.
+        const start = fm?.["start"];
+        if (typeof start === "string") {
+            const sm = start.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/);
+            if (sm) return `${sm[1]} ${sm[2]}${sm[3]}`;
+        }
+        const date = fm?.["date"];
+        return typeof date === "string" ? date : "";
+    }
+
+    /**
+     * Renames the note file and syncs the H1 + frontmatter title. The new name
+     * is expected to already include the date prefix; `titlePrefix` is stripped
+     * to derive the human title for the H1/frontmatter.
+     */
+    private async renameMeetingNote(
+        file: TFile,
+        newBasename: string,
+        titlePrefix: string
+    ): Promise<void> {
+        try {
+            const safeBase = sanitizeName(newBasename);
+            const folder = file.parent?.path ?? "";
+            const pathFor = (base: string): string =>
+                normalizePath(folder ? `${folder}/${base}.md` : `${base}.md`);
+            // Avoid clobbering an existing note (try " 2", " 3", …).
+            let target = pathFor(safeBase);
+            for (
+                let n = 2;
+                target !== file.path &&
+                this.app.vault.getAbstractFileByPath(target) &&
+                n < 1000;
+                n++
+            ) {
+                target = pathFor(`${safeBase} ${n}`);
+            }
+            const humanTitle =
+                titlePrefix && safeBase.startsWith(titlePrefix)
+                    ? safeBase.slice(titlePrefix.length).trim() || safeBase
+                    : safeBase;
+
+            if (target !== file.path) {
+                await this.app.fileManager.renameFile(file, target);
+            }
+            const content = await this.app.vault.read(file);
+            const updated = content.replace(/^#\s+.*$/m, `# ${humanTitle}`);
+            if (updated !== content) await this.app.vault.modify(file, updated);
+            await this.app.fileManager.processFrontMatter(file, (f) => {
+                (f as Record<string, unknown>).title = humanTitle;
+            });
+            new Notice(t().adhoc.titleModal.renamed(humanTitle));
+            this.agendaEvents.emit("changed", undefined);
+        } catch (e) {
+            new Notice(
+                t().notices.recordingError(
+                    e instanceof Error ? e.message : String(e)
+                )
+            );
         }
     }
 
@@ -1590,21 +1912,51 @@ export default class SystemRecordingPlugin extends Plugin {
                 }
                 // Close the loop: hand the fresh recording to the transcriber.
                 if (this.settings.autoTranscribe) {
-                    const audio = this.app.vault.getAbstractFileByPath(link);
-                    if (audio instanceof TFile) {
-                        void this.launchTranscriber(audio).catch((e) => {
+                    // The helper writes the WAV directly to disk, so Obsidian's
+                    // vault index may not have registered it as a TFile yet.
+                    // Wait for it to appear before auto-transcribing.
+                    void this.resolveFileWithRetry(link)
+                        .then((audio) => {
+                            if (!audio) {
+                                console.warn(
+                                    "[Meeting Copilot] auto-transcribe: recording not found in vault",
+                                    link
+                                );
+                                return;
+                            }
+                            return this.launchTranscriber(audio);
+                        })
+                        .catch((e) => {
                             console.warn(
                                 "[Meeting Copilot] auto-transcribe failed",
                                 e
                             );
                             if (!this.recorder.isRecording) this.hideStatusBar();
                         });
-                    }
                 }
                 return;
             }
         }
         this.insertRecordingLink(fileName);
+    }
+
+    /**
+     * Resolves a vault path to a TFile, retrying with a short backoff to give
+     * Obsidian's file watcher time to index a file just written to disk by the
+     * recorder helper (otherwise auto-transcribe would silently skip it).
+     */
+    private async resolveFileWithRetry(
+        vaultPath: string,
+        tries = 20,
+        delayMs = 500
+    ): Promise<TFile | null> {
+        for (let i = 0; i < tries; i++) {
+            const f = this.app.vault.getAbstractFileByPath(vaultPath);
+            if (f instanceof TFile) return f;
+            await new Promise((r) => setTimeout(r, delayMs));
+        }
+        const f = this.app.vault.getAbstractFileByPath(vaultPath);
+        return f instanceof TFile ? f : null;
     }
 
     /** Returns a vault-relative `.wav` path, appending -2, -3… if the name is taken. */

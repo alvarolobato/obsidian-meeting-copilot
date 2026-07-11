@@ -18,11 +18,28 @@ export const en = {
 	adhoc: {
 		defaultTitle: "Meeting",
 		started: "Recording unplanned meeting — rename the note title if you like",
+		suggestingTitle: "Suggesting a title…",
+		titleModal: {
+			heading: "Rename this meeting?",
+			desc: "Suggested title based on the discussion. Edit it or keep the current name.",
+			rename: "Rename",
+			keep: "Keep current",
+			renamed: (name: string) => `Renamed to “${name}”`,
+			failed: "Couldn't suggest a title",
+		},
+	},
+	detect: {
+		detected: (app: string) => `${app} meeting detected`,
+		recordPrompt: "Create note & record",
+		endedStopping: (app: string) =>
+			`${app} meeting ended — stopping recording`,
 	},
 	notices: {
 		autoRecordEnabled: "Calendar auto-recording enabled",
 		autoRecordDisabled: "Calendar auto-recording disabled",
 		recordingError: (msg: string) => `Recording error: ${msg}`,
+		screenPermission:
+			"Recording failed: Screen Recording isn't authorized. Open System Settings → Privacy & Security → Screen Recording, enable Obsidian, then fully quit and reopen Obsidian. (macOS requires this for capturing system audio.)",
 		alreadyRecording: "Already recording",
 		macOnly: "System recording is only supported on macOS",
 		downloadingHelper: "Downloading recorder helper…",
@@ -181,6 +198,10 @@ export const en = {
 			name: "Action items as tasks",
 			desc: "When enriching, lift the AI's action items into checkboxes under '## Action items' so the obsidian-tasks plugin can track them. Existing and completed tasks are preserved.",
 		},
+		suggestAdhocTitle: {
+			name: "Suggest a title for unplanned meetings",
+			desc: "After enriching an unplanned (ad-hoc or detected) meeting, ask the LLM for a title and offer to rename the note, keeping the date prefix. Scheduled meetings keep their calendar title.",
+		},
 		calendarHeading: "Google Calendar integration",
 		clientId: {
 			name: "Client ID",
@@ -221,6 +242,23 @@ export const en = {
 		agendaLookBack: {
 			name: "Agenda look-back (days)",
 			desc: "How many past days you can navigate back to in the agenda (0–30).",
+		},
+		detectionHeading: "Meeting detection (macOS)",
+		detectMeetings: {
+			name: "Detect meetings automatically",
+			desc: "Watch for an in-progress meeting and offer to record it (even without a calendar event). Shows a native notification you'll see when Obsidian is minimized. macOS only.",
+		},
+		detectZoom: {
+			name: "Detect Zoom",
+			desc: "Detect an active Zoom call via its in-meeting helper process (only running during a call, not when Zoom is merely open).",
+		},
+		detectGoogleMeet: {
+			name: "Detect Google Meet",
+			desc: "Detect a live meet.google.com tab in Chrome, Brave, Edge, or Arc. Requires granting Obsidian Automation permission the first time.",
+		},
+		detectionInterval: {
+			name: "Detection interval (seconds)",
+			desc: "How often to check for a meeting in progress (3–120).",
 		},
 		endpointHeading: "AI endpoint",
 		apiBaseUrl: {
