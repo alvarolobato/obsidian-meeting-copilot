@@ -580,9 +580,7 @@ export default class SystemRecordingPlugin extends Plugin {
 			this.detector = new MeetingDetector({
 				probe: () => this.probeMeetings(),
 				onStart: (app) => this.onMeetingDetected(app),
-				onEnd: () => {
-					/* end is informational; no action for now */
-				},
+				onEnd: (app) => this.onMeetingEnded(app),
 				onError: (e) => console.error("Meeting detection probe failed", e),
 			});
 		}
@@ -625,6 +623,20 @@ export default class SystemRecordingPlugin extends Plugin {
 		if (this.recorder.isRecording) return;
 		this.promptMeeting(t().detect.detected(app), t().detect.recordPrompt, () => {
 			void this.startAdHocMeeting();
+		});
+	}
+
+	/**
+	 * When a detected meeting ends, offer to stop recording — but only for
+	 * ad-hoc/detection recordings (no calendar event id), since calendar-driven
+	 * recordings already get a stop prompt from the scheduler's event-end.
+	 */
+	private onMeetingEnded(app: string): void {
+		if (!this.recorder.isRecording || this.currentRecordingEventId !== null) {
+			return;
+		}
+		this.promptMeeting(t().detect.ended(app), t().detect.stopPrompt, () => {
+			this.stopRecording();
 		});
 	}
 
