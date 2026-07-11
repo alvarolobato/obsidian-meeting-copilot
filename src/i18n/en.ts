@@ -351,6 +351,8 @@ export const en = {
 				"Timestamps confirmed — speaker separation is available for this model.",
 			timestampsNotDetected:
 				"This endpoint didn't return timestamps for this model — speaker separation isn't available.",
+			timestampsUnknown:
+				"Couldn't verify timestamp support (the probe request failed); the stored result is unchanged.",
 		},
 		enrichOnTranscribe: {
 			name: "Enrich automatically after transcription",

@@ -2,9 +2,26 @@ import { describe, expect, it } from "vitest";
 import {
 	canSeparateSpeakers,
 	inferSttApiType,
+	isTimestampCapableFamily,
 	STT_MODELS,
 	type DiarizationGateSettings,
 } from "./sttModel";
+
+describe("isTimestampCapableFamily", () => {
+	it("is true only for the timestamped whisper family", () => {
+		expect(isTimestampCapableFamily("whisper-1-ts")).toBe(true);
+	});
+
+	it("is false for every other family", () => {
+		for (const family of [
+			"whisper-1",
+			"gpt-4o-transcribe",
+			"gpt-4o-mini-transcribe",
+		] as const) {
+			expect(isTimestampCapableFamily(family)).toBe(false);
+		}
+	});
+});
 
 describe("inferSttApiType", () => {
 	it("maps whisper names (incl. gateway ids) to the timestamped whisper family", () => {

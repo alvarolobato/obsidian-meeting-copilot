@@ -55,15 +55,18 @@ function writeAscii(view: DataView, offset: number, text: string): void {
 }
 
 /**
- * True iff a parsed `/audio/transcriptions` response carries at least one
- * segment, meaning the backend actually honored `response_format:
- * verbose_json` (with `timestamp_granularities[]=segment`) instead of
- * silently falling back to a plain-text transcript.
+ * True iff a parsed `/audio/transcriptions` response carries a `segments`
+ * array, meaning the backend honored `response_format: verbose_json` (with
+ * `timestamp_granularities[]=segment`). We check for the array's presence, not
+ * its length: the probe clip is a short quiet tone, so a capable backend can
+ * legitimately transcribe it to nothing and still return `segments: []`. A
+ * backend that ignores verbose_json falls back to a plain-text shape with no
+ * `segments` field at all, which is the case we want to catch.
  */
-export function responseHasSegments(json: unknown): boolean {
+export function responseHasSegmentsArray(json: unknown): boolean {
 	if (!json || typeof json !== "object") return false;
 	const segments = (json as { segments?: unknown }).segments;
-	return Array.isArray(segments) && segments.length > 0;
+	return Array.isArray(segments);
 }
 
 /** Canonical `${baseUrl}::${wireModel}` a probe result was captured against, used to detect staleness after a config change. */
@@ -77,7 +80,7 @@ interface MultipartFile {
 	data: ArrayBuffer;
 }
 
-/** Builds a multipart/form-data body by hand — same approach the vendored WhisperClient uses, since Obsidian's requestUrl takes raw bytes, not a FormData object. */
+/** Builds a multipart/form-data body by hand. The vendored WhisperClient hands a FormData object to ApiClient, and ApiClient is what serializes it to raw bytes because Obsidian's requestUrl can't take a FormData; this does that serialization step directly. */
 function buildMultipartBody(
 	fields: Array<[string, string]>,
 	file: MultipartFile
@@ -128,15 +131,22 @@ export interface ProbeTimestampSupportOptions {
 }
 
 /**
+ * Outcome of a probe. "unknown" means we couldn't get a verdict (transport,
+ * HTTP, or parse failure) and must not be persisted as a definitive answer,
+ * otherwise a transient 429 or timeout would stick as "unsupported" forever.
+ */
+export type TimestampSupport = "supported" | "unsupported" | "unknown";
+
+/**
  * Sends a throwaway clip to `${baseUrl}/audio/transcriptions` asking for
- * `verbose_json` with segment timestamps, exactly like the vendored
- * WhisperClient does, and reports whether segments came back. Network,
- * HTTP, and parse errors all read as "not detected" — a probe failure should
- * never surface as an exception to the caller, just an honest "no".
+ * `verbose_json` with segment timestamps, then reports whether a `segments`
+ * array came back. Only a clean 2xx we could parse yields a real verdict;
+ * anything else (network error, non-2xx, unparseable body) is "unknown" so the
+ * caller can leave the stored result untouched rather than record a false "no".
  */
 export async function probeTimestampSupport(
 	opts: ProbeTimestampSupportOptions
-): Promise<boolean> {
+): Promise<TimestampSupport> {
 	try {
 		const { body, contentType } = buildMultipartBody(
 			[
@@ -156,9 +166,11 @@ export async function probeTimestampSupport(
 			body,
 			throw: false,
 		});
-		if (res.status < 200 || res.status >= 300) return false;
-		return responseHasSegments(res.json);
+		if (res.status < 200 || res.status >= 300) return "unknown";
+		return responseHasSegmentsArray(res.json)
+			? "supported"
+			: "unsupported";
 	} catch {
-		return false;
+		return "unknown";
 	}
 }

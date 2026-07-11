@@ -7,7 +7,12 @@ import {
 } from "./notes/meetingNote";
 import { DEFAULT_ENRICH_PROMPT } from "./enrich/prompt";
 import { listModels } from "./enrich/models";
-import { inferSttApiType, STT_MODELS, type SttApiType } from "./transcribe/sttModel";
+import {
+	inferSttApiType,
+	isTimestampCapableFamily,
+	STT_MODELS,
+	type SttApiType,
+} from "./transcribe/sttModel";
 import { probeKey, probeTimestampSupport } from "./transcribe/probe";
 import { listModels as listSttModels } from "./transcribe/models";
 import { t, type Messages } from "./i18n";
@@ -340,7 +345,6 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.apiBaseUrl)
 					.onChange(async (value) => {
 						this.plugin.settings.apiBaseUrl = value.trim();
-						this.resetTimestampProbe();
 						await this.plugin.saveSettings();
 					})
 			);
@@ -377,31 +381,39 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 											this.models.length
 										)
 							);
-							// Whisper-with-timestamps is the only family that
-							// asks the engine for segment timestamps, so it's
-							// the only one worth probing — the connection
-							// already works either way.
+							// Only the timestamped-Whisper family asks the engine
+							// for segment timestamps, so it's the only one worth
+							// probing — the connection already works either way.
 							if (
-								this.plugin.settings.sttApiType ===
-								"whisper-1-ts"
+								isTimestampCapableFamily(
+									this.plugin.settings.sttApiType
+								)
 							) {
 								const wireModel = this.plugin.settings.sttModel;
-								const supported = await probeTimestampSupport({
+								const support = await probeTimestampSupport({
 									baseUrl: apiBaseUrl,
 									apiKey,
 									wireModel,
 								});
-								this.plugin.settings.sttTimestampsSupported =
-									supported;
-								this.plugin.settings.sttTimestampsProbeKey =
-									probeKey(apiBaseUrl, wireModel);
-								await this.plugin.saveSettings();
+								// Only a real verdict is persisted; on "unknown"
+								// (a transient error) we leave the stored result
+								// alone rather than record a false "no".
+								if (support !== "unknown") {
+									this.plugin.settings.sttTimestampsSupported =
+										support === "supported";
+									this.plugin.settings.sttTimestampsProbeKey =
+										probeKey(apiBaseUrl, wireModel);
+									await this.plugin.saveSettings();
+								}
 								new Notice(
-									supported
+									support === "supported"
 										? s.settings.testConnection
 												.timestampsDetected
-										: s.settings.testConnection
-												.timestampsNotDetected
+										: support === "unsupported"
+											? s.settings.testConnection
+													.timestampsNotDetected
+											: s.settings.testConnection
+													.timestampsUnknown
 								);
 							}
 							// Re-render so both model dropdowns and the
@@ -461,7 +473,6 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 				this.plugin.settings.sttModel = value;
 				// Keep the engine family in sync with the picked model.
 				this.plugin.settings.sttApiType = inferSttApiType(value);
-				this.resetTimestampProbe();
 				await this.plugin.saveSettings();
 				this.display();
 			}
@@ -771,17 +782,11 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
     }
 
     /**
-     * Clears a stored timestamp-probe result. Called whenever the base URL or
-     * the transcription model changes, since both feed into the probe key —
-     * a "yes" from before the change would otherwise silently keep applying
-     * to a different endpoint/model.
+     * Badge text for the transcription model's timestamp support. Reads as
+     * unknown until the current endpoint + model pair has been probed: the
+     * stored key must match (a since-changed URL or model won't), and a null
+     * flag (never probed, or reset by a runtime fallback) counts as unknown too.
      */
-    private resetTimestampProbe(): void {
-        this.plugin.settings.sttTimestampsSupported = null;
-        this.plugin.settings.sttTimestampsProbeKey = "";
-    }
-
-    /** Badge text for the transcription model's timestamp support, reflecting whether the stored probe result is still fresh. */
     private timestampBadgeText(s: Messages): string {
         const { apiBaseUrl, sttModel, sttTimestampsSupported, sttTimestampsProbeKey } =
             this.plugin.settings;

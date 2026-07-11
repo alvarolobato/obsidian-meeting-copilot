@@ -1,11 +1,12 @@
 /**
- * Lists model ids from the transcription endpoint's `/models` route. Separate
- * from `enrich/models.ts` (which throws, and is used to drive the shared
- * "Test connection" flow): this one is meant for a lightweight, optional
- * lookup next to the transcription model field, so it reports failure as
- * `null` rather than an error — the caller just falls back to manual entry.
+ * The one fetcher for an OpenAI-compatible `/models` endpoint, shared by both
+ * the transcription and enrichment settings. {@link fetchModelIds} does the
+ * work and throws on any failure; the two callers wrap it to match their own
+ * error contracts (see {@link listModels} here, and `enrich/models.ts`).
  */
 import { requestUrl } from "obsidian";
+
+const DEFAULT_TIMEOUT_MS = 30_000;
 
 export interface ListModelsOptions {
 	baseUrl: string;
@@ -28,23 +29,59 @@ export function parseModelIds(json: unknown): string[] {
 }
 
 /**
- * GETs `${baseUrl}/models` and returns the sorted list of ids, or `null` on
- * any failure (network error, non-2xx, unparseable body). Never throws.
+ * GETs `${baseUrl}/models` and returns the sorted, de-duplicated list of ids.
+ * Throws on a non-2xx response or a timeout.
+ *
+ * requestUrl can't be aborted, so it's raced against a timeout to guarantee the
+ * caller's promise settles; otherwise a stalled gateway can leave a "Test
+ * connection" or "Load models" button disabled forever.
+ */
+export async function fetchModelIds(
+	baseUrl: string,
+	apiKey: string,
+	timeoutMs = DEFAULT_TIMEOUT_MS
+): Promise<string[]> {
+	const url = `${baseUrl.replace(/\/+$/, "")}/models`;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<never>((_, reject) => {
+		timer = setTimeout(
+			() =>
+				reject(
+					new Error(
+						`Request timed out after ${Math.round(timeoutMs / 1000)}s`
+					)
+				),
+			timeoutMs
+		);
+	});
+	const request = requestUrl({
+		url,
+		method: "GET",
+		headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+		throw: false,
+	});
+	let res;
+	try {
+		res = await Promise.race([request, timeout]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+	if (res.status < 200 || res.status >= 300) {
+		throw new Error(`HTTP ${res.status}`);
+	}
+	return parseModelIds(res.json);
+}
+
+/**
+ * Null-on-failure wrapper for the optional "Load models" button next to the
+ * transcription model field: any failure (network, non-2xx, timeout, bad body)
+ * just returns `null` so the caller falls back to manual entry, no error noise.
  */
 export async function listModels(
 	opts: ListModelsOptions
 ): Promise<string[] | null> {
 	try {
-		const res = await requestUrl({
-			url: `${opts.baseUrl.replace(/\/+$/, "")}/models`,
-			method: "GET",
-			headers: opts.apiKey
-				? { Authorization: `Bearer ${opts.apiKey}` }
-				: {},
-			throw: false,
-		});
-		if (res.status < 200 || res.status >= 300) return null;
-		return parseModelIds(res.json);
+		return await fetchModelIds(opts.baseUrl, opts.apiKey);
 	} catch {
 		return null;
 	}

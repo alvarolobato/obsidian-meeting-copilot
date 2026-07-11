@@ -1,5 +1,14 @@
-import { describe, expect, it } from "vitest";
-import { makeProbeWav, probeKey, responseHasSegments } from "./probe";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { requestUrl } = vi.hoisted(() => ({ requestUrl: vi.fn() }));
+vi.mock("obsidian", () => ({ requestUrl }));
+
+import {
+	makeProbeWav,
+	probeKey,
+	probeTimestampSupport,
+	responseHasSegmentsArray,
+} from "./probe";
 
 describe("makeProbeWav", () => {
 	const wav = makeProbeWav();
@@ -44,35 +53,77 @@ describe("makeProbeWav", () => {
 	});
 });
 
-describe("responseHasSegments", () => {
+describe("responseHasSegmentsArray", () => {
 	it("is true for a verbose_json response with segments", () => {
 		expect(
-			responseHasSegments({
+			responseHasSegmentsArray({
 				text: "hello world",
 				segments: [{ id: 0, text: "hello world", start: 0, end: 1 }],
 			})
 		).toBe(true);
 	});
 
-	it("is false when segments is an empty array", () => {
-		expect(responseHasSegments({ text: "hello world", segments: [] })).toBe(
-			false
-		);
+	it("is true when segments is an empty array (quiet clip, backend honored verbose_json)", () => {
+		expect(
+			responseHasSegmentsArray({ text: "", segments: [] })
+		).toBe(true);
 	});
 
 	it("is false when segments is missing (plain-text fallback)", () => {
-		expect(responseHasSegments({ text: "hello world" })).toBe(false);
+		expect(responseHasSegmentsArray({ text: "hello world" })).toBe(false);
 	});
 
 	it("is false for non-object or null input", () => {
-		expect(responseHasSegments(null)).toBe(false);
-		expect(responseHasSegments(undefined)).toBe(false);
-		expect(responseHasSegments("hello world")).toBe(false);
-		expect(responseHasSegments(42)).toBe(false);
+		expect(responseHasSegmentsArray(null)).toBe(false);
+		expect(responseHasSegmentsArray(undefined)).toBe(false);
+		expect(responseHasSegmentsArray("hello world")).toBe(false);
+		expect(responseHasSegmentsArray(42)).toBe(false);
 	});
 
 	it("is false when segments isn't an array", () => {
-		expect(responseHasSegments({ segments: "nope" })).toBe(false);
+		expect(responseHasSegmentsArray({ segments: "nope" })).toBe(false);
+	});
+});
+
+describe("probeTimestampSupport", () => {
+	const opts = {
+		baseUrl: "https://gw.example.com/v1",
+		apiKey: "sk-test",
+		wireModel: "whisper-1",
+	};
+
+	beforeEach(() => {
+		requestUrl.mockReset();
+	});
+
+	it("is 'supported' when a 2xx response carries a segments array", async () => {
+		requestUrl.mockResolvedValue({ status: 200, json: { segments: [] } });
+		expect(await probeTimestampSupport(opts)).toBe("supported");
+	});
+
+	it("is 'unsupported' when a 2xx response has no segments field", async () => {
+		requestUrl.mockResolvedValue({ status: 200, json: { text: "hi" } });
+		expect(await probeTimestampSupport(opts)).toBe("unsupported");
+	});
+
+	it("is 'unknown' on a non-2xx response (e.g. a transient 429)", async () => {
+		requestUrl.mockResolvedValue({ status: 429, json: undefined });
+		expect(await probeTimestampSupport(opts)).toBe("unknown");
+	});
+
+	it("is 'unknown' when the request throws (network/DNS error)", async () => {
+		requestUrl.mockRejectedValue(new Error("getaddrinfo ENOTFOUND"));
+		expect(await probeTimestampSupport(opts)).toBe("unknown");
+	});
+
+	it("is 'unknown' when the body can't be parsed as JSON", async () => {
+		requestUrl.mockResolvedValue({
+			status: 200,
+			get json(): unknown {
+				throw new Error("invalid json");
+			},
+		});
+		expect(await probeTimestampSupport(opts)).toBe("unknown");
 	});
 });
 

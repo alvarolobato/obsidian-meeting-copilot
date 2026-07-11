@@ -19,6 +19,15 @@ export const STT_MODELS = [
 
 export type SttApiType = (typeof STT_MODELS)[number];
 
+/**
+ * Whether an engine family asks the backend for segment timestamps at all.
+ * Only this family is worth probing, and only it can drive speaker separation,
+ * so both gates key off this single predicate instead of repeating the literal.
+ */
+export function isTimestampCapableFamily(family: SttApiType): boolean {
+	return family === "whisper-1-ts";
+}
+
 /** Best-effort guess of the engine family from a model id, used to auto-fill the API type. */
 export function inferSttApiType(modelId: string): SttApiType {
 	const name = modelId.toLowerCase();
@@ -55,7 +64,7 @@ export function canSeparateSpeakers(
 ): boolean {
 	return (
 		s.diarizationEnabled &&
-		s.sttApiType === "whisper-1-ts" &&
+		isTimestampCapableFamily(s.sttApiType) &&
 		s.sttTimestampsSupported === true &&
 		s.sttTimestampsProbeKey === currentKey
 	);
