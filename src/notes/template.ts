@@ -16,8 +16,24 @@ const VAR_RE = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)(?::([^}]+))?\s*\}\}/g;
  * Unknown placeholders render as an empty string.
  */
 export function renderTemplate(template: string, ev: MeetingEventInfo): string {
+	return renderTemplateWith(template, ev, (value) => value);
+}
+
+/**
+ * Same substitution as `renderTemplate`, but passes each resolved value
+ * through `transform` before it's spliced in. Folder-template rendering uses
+ * this to sanitize each token's value as a single path segment, so e.g. a
+ * `{{series}}` value containing "/" can't inject an extra folder — literal
+ * "/" written in the template itself is untouched, since it isn't part of any
+ * `{{…}}` match.
+ */
+export function renderTemplateWith(
+	template: string,
+	ev: MeetingEventInfo,
+	transform: (value: string) => string
+): string {
 	return template.replace(VAR_RE, (_m, name: string, fmt?: string) =>
-		resolveVariable(name, fmt, ev)
+		transform(resolveVariable(name, fmt, ev))
 	);
 }
 

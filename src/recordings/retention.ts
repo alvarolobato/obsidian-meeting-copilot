@@ -33,7 +33,7 @@ function normalizeFolder(folder: string): string {
 }
 
 /** True if `path` is inside (or equal to) `folder`. */
-function underFolder(path: string, folder: string): boolean {
+export function underFolder(path: string, folder: string): boolean {
 	if (!folder) return false;
 	return path === folder || path.startsWith(`${folder}/`);
 }

@@ -8,11 +8,19 @@ describe("migrateSettings", () => {
 		expect(migrated.seriesFolderTemplate).toBe("Work/Meetings/{{series}}");
 	});
 
+	it("keeps ad-hoc notes at the legacy folder itself, and nests 1:1s under it", () => {
+		const migrated = migrateSettings({ meetingsFolder: "Work/Meetings" });
+		expect(migrated.adhocFolder).toBe("Work/Meetings");
+		expect(migrated.oneOnOneFolder).toBe("Work/Meetings/1-1s");
+	});
+
 	it("falls back to \"Meetings\" when meetingsFolder is missing or empty", () => {
 		expect(migrateSettings({}).oneOffFolderTemplate).toBe("Meetings");
 		expect(migrateSettings({ meetingsFolder: "" }).oneOffFolderTemplate).toBe(
 			"Meetings"
 		);
+		expect(migrateSettings({}).adhocFolder).toBe("Meetings");
+		expect(migrateSettings({}).oneOnOneFolder).toBe("Meetings/1-1s");
 	});
 
 	it("leaves data that already has the new templates untouched", () => {

@@ -132,6 +132,11 @@ export function migrateSettings(
 		...(loaded as Partial<SystemRecordingSettings>),
 		oneOffFolderTemplate: base,
 		seriesFolderTemplate: `${base}/{{series}}`,
+		// Ad-hoc notes used to land directly in `meetingsFolder`; keep that
+		// exact location rather than nesting them under a brand-new top-level
+		// "Meetings" tree.
+		adhocFolder: base,
+		oneOnOneFolder: `${base}/1-1s`,
 	};
 }
 
@@ -649,47 +654,41 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					})
 			);
 
-		new Setting(containerEl)
-			.setName(s.settings.oneOffFolderTemplate.name)
-			.setDesc(s.settings.oneOffFolderTemplate.desc)
-			.addText((text) =>
-				text
-					.setPlaceholder(DEFAULT_SETTINGS.oneOffFolderTemplate)
-					.setValue(this.plugin.settings.oneOffFolderTemplate)
-					.onChange(async (value) => {
-						this.plugin.settings.oneOffFolderTemplate =
-							value.trim() || DEFAULT_SETTINGS.oneOffFolderTemplate;
-						await this.plugin.saveSettings();
-					})
-			);
+		this.addFolderField(
+			new Setting(containerEl)
+				.setName(s.settings.oneOffFolderTemplate.name)
+				.setDesc(s.settings.oneOffFolderTemplate.desc),
+			this.plugin.settings.oneOffFolderTemplate,
+			DEFAULT_SETTINGS.oneOffFolderTemplate,
+			async (value) => {
+				this.plugin.settings.oneOffFolderTemplate = value;
+				await this.plugin.saveSettings();
+			}
+		);
 
-		new Setting(containerEl)
-			.setName(s.settings.seriesFolderTemplate.name)
-			.setDesc(s.settings.seriesFolderTemplate.desc)
-			.addText((text) =>
-				text
-					.setPlaceholder(DEFAULT_SETTINGS.seriesFolderTemplate)
-					.setValue(this.plugin.settings.seriesFolderTemplate)
-					.onChange(async (value) => {
-						this.plugin.settings.seriesFolderTemplate =
-							value.trim() || DEFAULT_SETTINGS.seriesFolderTemplate;
-						await this.plugin.saveSettings();
-					})
-			);
+		this.addFolderField(
+			new Setting(containerEl)
+				.setName(s.settings.seriesFolderTemplate.name)
+				.setDesc(s.settings.seriesFolderTemplate.desc),
+			this.plugin.settings.seriesFolderTemplate,
+			DEFAULT_SETTINGS.seriesFolderTemplate,
+			async (value) => {
+				this.plugin.settings.seriesFolderTemplate = value;
+				await this.plugin.saveSettings();
+			}
+		);
 
-		new Setting(containerEl)
-			.setName(s.settings.adhocFolder.name)
-			.setDesc(s.settings.adhocFolder.desc)
-			.addText((text) =>
-				text
-					.setPlaceholder(DEFAULT_SETTINGS.adhocFolder)
-					.setValue(this.plugin.settings.adhocFolder)
-					.onChange(async (value) => {
-						this.plugin.settings.adhocFolder =
-							value.trim() || DEFAULT_SETTINGS.adhocFolder;
-						await this.plugin.saveSettings();
-					})
-			);
+		this.addFolderField(
+			new Setting(containerEl)
+				.setName(s.settings.adhocFolder.name)
+				.setDesc(s.settings.adhocFolder.desc),
+			this.plugin.settings.adhocFolder,
+			DEFAULT_SETTINGS.adhocFolder,
+			async (value) => {
+				this.plugin.settings.adhocFolder = value;
+				await this.plugin.saveSettings();
+			}
+		);
 
 		new Setting(containerEl)
 			.setName(s.settings.oneOnOneSeparately.name)
@@ -703,19 +702,17 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					})
 			);
 
-		new Setting(containerEl)
-			.setName(s.settings.oneOnOneFolder.name)
-			.setDesc(s.settings.oneOnOneFolder.desc)
-			.addText((text) =>
-				text
-					.setPlaceholder(DEFAULT_SETTINGS.oneOnOneFolder)
-					.setValue(this.plugin.settings.oneOnOneFolder)
-					.onChange(async (value) => {
-						this.plugin.settings.oneOnOneFolder =
-							value.trim() || DEFAULT_SETTINGS.oneOnOneFolder;
-						await this.plugin.saveSettings();
-					})
-			);
+		this.addFolderField(
+			new Setting(containerEl)
+				.setName(s.settings.oneOnOneFolder.name)
+				.setDesc(s.settings.oneOnOneFolder.desc),
+			this.plugin.settings.oneOnOneFolder,
+			DEFAULT_SETTINGS.oneOnOneFolder,
+			async (value) => {
+				this.plugin.settings.oneOnOneFolder = value;
+				await this.plugin.saveSettings();
+			}
+		);
 
 		new Setting(containerEl)
 			.setName(s.settings.noteTitlePattern.name)
@@ -760,6 +757,28 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
+    }
+
+    /**
+     * Text field for one of the folder/template settings (one-off, series,
+     * ad-hoc, 1:1), which all share the same shape: a placeholder of the
+     * default value, and an empty/blank edit reverting to that default rather
+     * than being saved as "".
+     */
+    private addFolderField(
+        setting: Setting,
+        current: string,
+        defaultValue: string,
+        onChange: (value: string) => Promise<void>
+    ): void {
+        setting.addText((text) =>
+            text
+                .setPlaceholder(defaultValue)
+                .setValue(current)
+                .onChange(async (value) => {
+                    await onChange(value.trim() || defaultValue);
+                })
+        );
     }
 
     /**

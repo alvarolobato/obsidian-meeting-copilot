@@ -22,6 +22,8 @@ export interface GCalEvent {
 	recurringEventId: string | null;
 	/** The other attendee's display name (or email) for a 1:1; null for anything else. */
 	oneOnOnePartner: string | null;
+	/** The other attendee's email for a 1:1 (lowercased/trimmed); null when unavailable. */
+	oneOnOnePartnerEmail: string | null;
 }
 
 export interface GCalCalendar {
@@ -105,18 +107,39 @@ function mapAttendees(raw: RawAttendee[] | undefined): string[] {
 }
 
 /**
- * The other participant's display name (or email) for a 1:1: exactly two
- * non-resource attendees with exactly one of them marked `self`. Null for
- * group meetings, a missing self flag, or an unnamed/emailless partner.
+ * The other attendee in a 1:1: exactly two non-resource attendees with
+ * exactly one of them marked `self`. Null for group meetings or a missing
+ * self flag. Shared by `oneOnOnePartner` and `oneOnOnePartnerEmail` so both
+ * agree on what counts as a 1:1.
  */
-export function oneOnOnePartner(raw: RawAttendee[] | undefined): string | null {
+function oneOnOneOther(raw: RawAttendee[] | undefined): RawAttendee | null {
 	const humans = (raw ?? []).filter((a) => !a.resource);
 	if (humans.length !== 2) return null;
 	const selves = humans.filter((a) => a.self === true);
 	if (selves.length !== 1) return null;
-	const other = humans.find((a) => a.self !== true);
+	return humans.find((a) => a.self !== true) ?? null;
+}
+
+/**
+ * The other participant's display name (or email) for a 1:1. Null for group
+ * meetings, a missing self flag, or an unnamed/emailless partner.
+ */
+export function oneOnOnePartner(raw: RawAttendee[] | undefined): string | null {
+	const other = oneOnOneOther(raw);
 	const name = (other?.displayName || other?.email || "").trim();
 	return name.length > 0 ? name : null;
+}
+
+/**
+ * The other participant's email for a 1:1 (lowercased/trimmed), keyed on
+ * email rather than the mutable display label so the same person renaming
+ * themselves between events doesn't fork their notes into two folders. Null
+ * for group meetings, a missing self flag, or an emailless partner.
+ */
+export function oneOnOnePartnerEmail(raw: RawAttendee[] | undefined): string | null {
+	const other = oneOnOneOther(raw);
+	const email = (other?.email ?? "").trim().toLowerCase();
+	return email.length > 0 ? email : null;
 }
 
 async function authedGet(oauth: GoogleOAuth, url: string): Promise<unknown> {
@@ -208,6 +231,7 @@ export async function listEvents(
 			iCalUID: ev.iCalUID ?? null,
 			recurringEventId: ev.recurringEventId ?? null,
 			oneOnOnePartner: oneOnOnePartner(ev.attendees),
+			oneOnOnePartnerEmail: oneOnOnePartnerEmail(ev.attendees),
 		};
 	});
 }

@@ -1,15 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { TFile, type App, type TFolder } from "obsidian";
 import {
+	ADHOC_ID_PREFIX,
 	createMeetingNote,
 	DEFAULT_NOTE_TEMPLATE,
 	DEFAULT_TITLE_PATTERN,
 	formatTranscriptCallout,
+	isAdhocId,
 	type MeetingEventInfo,
 	type MeetingNoteConfig,
+	normalizeFolderPath,
 	recordingLinkTarget,
 	resolveMeetingFolder,
+	scanMeetingNotes,
 	stripTranscript,
+	templateStaticRoot,
 	transcriptAtBottom,
 	upsertSection,
 } from "./meetingNote";
@@ -29,8 +34,9 @@ function makeTFile(path: string): TFile {
 	const dot = file.name.lastIndexOf(".");
 	file.basename = dot === -1 ? file.name : file.name.slice(0, dot);
 	file.extension = dot === -1 ? "" : file.name.slice(dot + 1);
+	// Mirrors real Obsidian: a root TFile's parent path is "/", not "".
 	// eslint-disable-next-line obsidianmd/no-tfile-tfolder-cast -- building a test fixture, not narrowing a real runtime value
-	file.parent = { path: slash === -1 ? "" : path.slice(0, slash) } as unknown as TFolder;
+	file.parent = { path: slash === -1 ? "/" : path.slice(0, slash) } as unknown as TFolder;
 	return file;
 }
 
@@ -110,6 +116,7 @@ function ev(overrides: Partial<MeetingEventInfo> = {}): MeetingEventInfo {
 		iCalUID: null,
 		recurringEventId: null,
 		oneOnOnePartner: null,
+		oneOnOnePartnerEmail: null,
 		...overrides,
 	};
 }
@@ -326,5 +333,184 @@ describe("resolveMeetingFolder", () => {
 			cfg({ oneOffFolderTemplate: "Meetings/{{title}}" })
 		);
 		expect(folder).toBe("Meetings/Weird Title");
+	});
+
+	it("keeps a '/' inside a rendered token value as one folder segment, not a nested one", () => {
+		const app = makeApp(new FakeVault());
+		const folder = resolveMeetingFolder(
+			app,
+			ev({ recurringEventId: "rec-x", summary: "AC/DC sync" }),
+			cfg()
+		);
+		expect(folder).toBe("Meetings/AC DC sync");
+	});
+
+	it("collapses a token that renders empty instead of inserting 'Untitled'", () => {
+		const app = makeApp(new FakeVault());
+		const folder = resolveMeetingFolder(
+			app,
+			ev({ organizer: null, start: new Date("2026-07-10T14:00:00") }),
+			cfg({ oneOffFolderTemplate: "Meetings/{{organizer}}/{{year}}" })
+		);
+		expect(folder).toBe("Meetings/2026");
+	});
+
+	it("still nests on '/' written literally in the template itself", () => {
+		const app = makeApp(new FakeVault());
+		const folder = resolveMeetingFolder(
+			app,
+			ev({ start: new Date("2026-07-10T14:00:00") }),
+			cfg({ oneOffFolderTemplate: "Meetings/{{year}}/{{month}}" })
+		);
+		expect(folder).toBe("Meetings/2026/07");
+	});
+
+	it("can't have a rendered token value escape the template root via '..'", () => {
+		const app = makeApp(new FakeVault());
+		const folder = resolveMeetingFolder(
+			app,
+			ev({ summary: "../../X" }),
+			cfg({ oneOffFolderTemplate: "Meetings/{{title}}" })
+		);
+		expect(folder.startsWith("Meetings/")).toBe(true);
+		expect(folder.split("/")).toHaveLength(2);
+	});
+
+	it("sanitizes the 1:1 partner name as a single segment under oneOnOneFolder", () => {
+		const app = makeApp(new FakeVault());
+		const folder = resolveMeetingFolder(
+			app,
+			ev({ oneOnOnePartner: "A/B" }),
+			cfg({ oneOnOneSeparately: true })
+		);
+		expect(folder).toBe("Meetings/1-1s/A B");
+	});
+
+	it("follows a 1:1 partner across a display-name rename, matched by email", () => {
+		const vault = new FakeVault();
+		// The partner's first note only ever recorded the email-derived label.
+		vault.addNote("Somewhere/Bob Chats/2026-05-01.md", {
+			one_on_one_with: "bob@example.com",
+			one_on_one_email: "bob@example.com",
+			start: "2026-05-01T10:00:00",
+		});
+		const app = makeApp(vault);
+
+		// The second event carries a displayName now, but the same email.
+		const folder = resolveMeetingFolder(
+			app,
+			ev({ oneOnOnePartner: "Bob", oneOnOnePartnerEmail: "bob@example.com" }),
+			cfg({ oneOnOneSeparately: true })
+		);
+		expect(folder).toBe("Somewhere/Bob Chats");
+	});
+});
+
+describe("normalizeFolderPath", () => {
+	it("drops segments that are only dots, so '..' can't walk outside the root", () => {
+		expect(normalizeFolderPath("Meetings/../../X")).toBe("Meetings/X");
+		expect(normalizeFolderPath("../../..")).toBe("Meetings");
+	});
+});
+
+describe("templateStaticRoot", () => {
+	it("returns the literal prefix of a folder template", () => {
+		expect(templateStaticRoot("Meetings/{{year}}")).toBe("Meetings");
+	});
+
+	it("returns '' (no fallback) when the template starts with a token", () => {
+		expect(templateStaticRoot("{{series}}")).toBe("");
+		expect(templateStaticRoot("{{series}}/notes")).toBe("");
+	});
+});
+
+describe("isAdhocId", () => {
+	it("matches only ids carrying the ad-hoc prefix", () => {
+		expect(isAdhocId(`${ADHOC_ID_PREFIX}12345`)).toBe(true);
+		expect(isAdhocId("evt-1")).toBe(false);
+	});
+});
+
+describe("scanMeetingNotes", () => {
+	it("extracts the plugin-relevant frontmatter for every markdown note in one pass", () => {
+		const vault = new FakeVault();
+		vault.addNote("Meetings/a.md", {
+			event_id: "evt-1",
+			recurring_event_id: "rec-1",
+			one_on_one_with: "Bob",
+			one_on_one_email: "bob@example.com",
+			start: "2026-01-01T10:00:00",
+			status: "recorded",
+			recording: "[[a.wav]]",
+			meeting_url: "https://example.com",
+		});
+		vault.addNote("Meetings/b.md", {});
+		const app = makeApp(vault);
+
+		const entries = scanMeetingNotes(app);
+		expect(entries).toHaveLength(2);
+
+		const a = entries.find((e) => e.file.path === "Meetings/a.md");
+		expect(a?.eventId).toBe("evt-1");
+		expect(a?.recurringEventId).toBe("rec-1");
+		expect(a?.oneOnOneWith).toBe("Bob");
+		expect(a?.oneOnOneEmail).toBe("bob@example.com");
+		expect(a?.stamp).toBe("2026-01-01T10:00:00");
+		expect(a?.status).toBe("recorded");
+		expect(a?.hasMeetingUrl).toBe(true);
+
+		const b = entries.find((e) => e.file.path === "Meetings/b.md");
+		expect(b?.eventId).toBeNull();
+		expect(b?.stamp).toBeNull();
+		expect(b?.hasMeetingUrl).toBe(false);
+	});
+});
+
+describe("createMeetingNote — 1:1 stamping follows the toggle", () => {
+	it("does not stamp one_on_one_with/one_on_one_email when the toggle is off", async () => {
+		const vault = new FakeVault();
+		const app = makeApp(vault);
+		const ref = await createMeetingNote(
+			app,
+			ev({
+				id: "evt-1on1-off",
+				oneOnOnePartner: "Bob",
+				oneOnOnePartnerEmail: "bob@example.com",
+			}),
+			cfg({ oneOnOneSeparately: false })
+		);
+		const fm = vault.frontmatterFor(ref.file);
+		expect(fm?.one_on_one_with).toBeUndefined();
+		expect(fm?.one_on_one_email).toBeUndefined();
+	});
+
+	it("stamps one_on_one_with and one_on_one_email when the toggle is on", async () => {
+		const vault = new FakeVault();
+		const app = makeApp(vault);
+		const ref = await createMeetingNote(
+			app,
+			ev({
+				id: "evt-1on1-on",
+				oneOnOnePartner: "Bob",
+				oneOnOnePartnerEmail: "bob@example.com",
+			}),
+			cfg({ oneOnOneSeparately: true })
+		);
+		const fm = vault.frontmatterFor(ref.file);
+		expect(fm?.one_on_one_with).toBe("Bob");
+		expect(fm?.one_on_one_email).toBe("bob@example.com");
+	});
+});
+
+describe("createMeetingNote — vault-root notes", () => {
+	it("reuses a note at the vault root with folder \"\" and a notePath without a leading slash", async () => {
+		const vault = new FakeVault();
+		const rootNote = vault.addNote("Root Note.md", { event_id: "evt-root" });
+		const app = makeApp(vault);
+
+		const ref = await createMeetingNote(app, ev({ id: "evt-root" }), cfg());
+		expect(ref.file).toBe(rootNote);
+		expect(ref.folder).toBe("");
+		expect(ref.notePath).toBe("Root Note.md");
 	});
 });

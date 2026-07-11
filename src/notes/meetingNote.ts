@@ -1,5 +1,16 @@
 import { App, normalizePath, TFile } from "obsidian";
-import { renderTemplate } from "./template";
+import { renderTemplate, renderTemplateWith } from "./template";
+import { normalizeFolderPath, sanitizeName, templateStaticRoot } from "./paths";
+
+export { normalizeFolderPath, sanitizeName, templateStaticRoot };
+
+/** Prefix marking an ad-hoc (unplanned) meeting's synthetic id, e.g. "adhoc-1699999999999". */
+export const ADHOC_ID_PREFIX = "adhoc-";
+
+/** True for an ad-hoc meeting's id (see `ADHOC_ID_PREFIX`). */
+export function isAdhocId(id: string): boolean {
+	return id.startsWith(ADHOC_ID_PREFIX);
+}
 
 /**
  * Extracts the link target from a `recording` frontmatter value, stripping the
@@ -28,6 +39,8 @@ export interface MeetingEventInfo {
 	recurringEventId: string | null;
 	/** The other attendee's display name (or email) for a 1:1; null for anything else. */
 	oneOnOnePartner: string | null;
+	/** The other attendee's email for a 1:1, lowercased/trimmed; null when unavailable. */
+	oneOnOnePartnerEmail: string | null;
 }
 
 /** How the note's path/name and body are produced from a meeting. */
@@ -74,14 +87,6 @@ export interface MeetingNoteRef {
 	basename: string;
 }
 
-// Characters Obsidian/most filesystems reject in file names, plus wikilink-hostile ones.
-const ILLEGAL = /[\\/:*?"<>|#^[\]]/g;
-
-/** Makes a string safe to use as a file or folder name. */
-export function sanitizeName(name: string): string {
-	return name.replace(ILLEGAL, " ").replace(/\s+/g, " ").trim() || "Untitled";
-}
-
 function pad(n: number): string {
 	return String(n).padStart(2, "0");
 }
@@ -99,61 +104,80 @@ export function dateTimePrefix(d: Date): string {
 	return `${dateOnly(d)} ${pad(d.getHours())}${pad(d.getMinutes())}`;
 }
 
-/**
- * Normalizes a user- or template-rendered folder path: trims it, drops a
- * trailing slash, sanitizes each segment (so a rendered `{{title}}` carrying a
- * `/` or `:` can't escape the intended folder or break Obsidian), and drops
- * empty segments. Falls back to "Meetings" when nothing is left.
- */
-export function normalizeFolderPath(input: string): string {
-	const segments = input
-		.trim()
-		.replace(/\/+$/, "")
-		.split("/")
-		.filter((s) => s.trim().length > 0)
-		.map((s) => sanitizeName(s));
-	const joined = segments.join("/");
-	return joined.length > 0 ? normalizePath(joined) : "Meetings";
-}
-
-/**
- * The literal, token-free prefix of a folder template (e.g. "Meetings" from
- * "Meetings/{{year}}"), for callers that need a single stable folder to scope
- * a scan to rather than resolving a specific event's folder.
- */
-export function templateStaticRoot(template: string): string {
-	const idx = template.indexOf("{{");
-	return normalizeFolderPath(idx === -1 ? template : template.slice(0, idx));
-}
-
 function frontmatterOf(app: App, file: TFile): Record<string, unknown> | undefined {
 	return app.metadataCache.getFileCache(file)?.frontmatter as
 		| Record<string, unknown>
 		| undefined;
 }
 
-/** The folder holding a note, or "" for the vault root. */
-function folderOf(file: TFile): string {
-	return file.parent?.path ?? "";
+/** The folder holding a note, or "" for the vault root (a root `TFile`'s parent path is "/"). */
+export function folderOf(file: TFile): string {
+	const path = file.parent?.path ?? "";
+	return path === "/" ? "" : path;
+}
+
+/** One row of `scanMeetingNotes`: the plugin-relevant frontmatter of a single note. */
+export interface MeetingNoteScanEntry {
+	file: TFile;
+	eventId: string | null;
+	recurringEventId: string | null;
+	oneOnOneWith: string | null;
+	oneOnOneEmail: string | null;
+	/** `start` frontmatter, falling back to `date`; null when neither is a non-empty string. */
+	stamp: string | null;
+	status: string | null;
+	/** Raw `recording` frontmatter value (typically a `[[wikilink]]` string), if any. */
+	recording: unknown;
+	hasMeetingUrl: boolean;
+}
+
+function nonEmptyString(v: unknown): string | null {
+	return typeof v === "string" && v.length > 0 ? v : null;
 }
 
 /**
- * The most recently-started note whose `key` frontmatter equals `value`, by
- * lexicographic max of the `start` frontmatter string (falling back to
- * `date`); notes with neither are skipped. This is how a series or a 1:1's
- * folder "follows" wherever its notes currently live.
+ * Scans every markdown note once, pulling out the frontmatter fields used for
+ * identity lookup (`event_id`), sticky-home resolution (`recurring_event_id`,
+ * `one_on_one_with`/`one_on_one_email`), the "Needs attention" table, and
+ * retention scoping, all in a single vault pass.
+ *
+ * Depends on `metadataCache` being populated; shortly after startup a note
+ * that was just created or moved outside the plugin may not show up yet
+ * (known limitation — resolves itself once the cache catches up).
  */
-function mostRecentNoteBy(app: App, key: string, value: string): TFile | null {
+export function scanMeetingNotes(app: App): MeetingNoteScanEntry[] {
+	return app.vault.getMarkdownFiles().map((file) => {
+		const fm = frontmatterOf(app, file);
+		return {
+			file,
+			eventId: nonEmptyString(fm?.["event_id"]),
+			recurringEventId: nonEmptyString(fm?.["recurring_event_id"]),
+			oneOnOneWith: nonEmptyString(fm?.["one_on_one_with"]),
+			oneOnOneEmail: nonEmptyString(fm?.["one_on_one_email"]),
+			stamp: nonEmptyString(fm?.["start"] ?? fm?.["date"]),
+			status: nonEmptyString(fm?.["status"]),
+			recording: fm?.["recording"],
+			hasMeetingUrl: nonEmptyString(fm?.["meeting_url"]) !== null,
+		};
+	});
+}
+
+/**
+ * The file of the most recently-started entry (by lexicographic max `stamp`)
+ * matching `predicate`; entries with no `stamp` are skipped. This is how a
+ * series or a 1:1's folder "follows" wherever its notes currently live.
+ */
+function mostRecentMatching(
+	entries: MeetingNoteScanEntry[],
+	predicate: (e: MeetingNoteScanEntry) => boolean
+): TFile | null {
 	let best: TFile | null = null;
 	let bestStamp = "";
-	for (const file of app.vault.getMarkdownFiles()) {
-		const fm = frontmatterOf(app, file);
-		if (!fm || fm[key] !== value) continue;
-		const stamp = fm["start"] ?? fm["date"];
-		if (typeof stamp !== "string" || stamp.length === 0) continue;
-		if (!best || stamp > bestStamp) {
-			best = file;
-			bestStamp = stamp;
+	for (const e of entries) {
+		if (e.stamp === null || !predicate(e)) continue;
+		if (!best || e.stamp > bestStamp) {
+			best = e.file;
+			bestStamp = e.stamp;
 		}
 	}
 	return best;
@@ -166,41 +190,74 @@ function mostRecentNoteBy(app: App, key: string, value: string): TFile | null {
  */
 export function findNoteByEventId(app: App, eventId: string): TFile | null {
 	if (!eventId) return null;
-	for (const file of app.vault.getMarkdownFiles()) {
-		const fm = frontmatterOf(app, file);
-		if (fm && fm["event_id"] === eventId) return file;
-	}
-	return null;
+	return scanMeetingNotes(app).find((e) => e.eventId === eventId)?.file ?? null;
 }
 
 /**
- * Folder for a *new* meeting note (only consulted once `findNoteByEventId`
- * comes up empty). Order: a 1:1 routed separately follows its partner's
- * folder (or starts one under `oneOnOneFolder`); a recurring event follows
- * its series' current folder (or renders `seriesFolderTemplate` for a series
- * with no notes yet); an ad-hoc meeting goes to `adhocFolder`; everything
- * else renders `oneOffFolderTemplate`. A 1:1 series is matched by rule 1
- * before rule 2 when `oneOnOneSeparately` is on; with it off, rule 2 applies.
+ * Renders a folder template with each substituted token's value sanitized as
+ * a single path segment (via `sanitizeName`) before splicing it in, so e.g. a
+ * `{{series}}` value containing "/" or ".." can't inject an extra folder or
+ * walk outside the template's root. "/" written literally in the template
+ * (outside any `{{…}}`) still separates folders as usual.
  */
+function renderFolderTemplate(template: string, ev: MeetingEventInfo): string {
+	// An empty token value collapses (its segment is dropped by
+	// `normalizeFolderPath`) instead of becoming sanitizeName's "Untitled".
+	return renderTemplateWith(template, ev, (value) =>
+		value.trim().length > 0 ? sanitizeName(value) : ""
+	);
+}
+
+/**
+ * Folder for a *new* meeting note (only consulted once identity lookup by
+ * `event_id` comes up empty). Order: a 1:1 routed separately follows its
+ * partner's folder — matched by `one_on_one_email` when the event has one,
+ * falling back to the `one_on_one_with` label match (covers notes stamped
+ * before email tracking existed, or a partner with no email) — or starts one
+ * under `oneOnOneFolder`; a recurring event follows its series' current
+ * folder (or renders `seriesFolderTemplate` for a series with no notes yet);
+ * an ad-hoc meeting goes to `adhocFolder`; everything else renders
+ * `oneOffFolderTemplate`. A 1:1 series is matched by rule 1 before rule 2 when
+ * `oneOnOneSeparately` is on; with it off, rule 2 applies.
+ */
+function resolveMeetingFolderFromScan(
+	entries: MeetingNoteScanEntry[],
+	ev: MeetingEventInfo,
+	cfg: MeetingNoteConfig
+): string {
+	if (cfg.oneOnOneSeparately && ev.oneOnOnePartner) {
+		const byEmail = ev.oneOnOnePartnerEmail
+			? mostRecentMatching(entries, (e) => e.oneOnOneEmail === ev.oneOnOnePartnerEmail)
+			: null;
+		const home =
+			byEmail ??
+			mostRecentMatching(entries, (e) => e.oneOnOneWith === ev.oneOnOnePartner);
+		if (home) return folderOf(home);
+		return normalizeFolderPath(
+			`${cfg.oneOnOneFolder}/${sanitizeName(ev.oneOnOnePartner)}`
+		);
+	}
+	if (ev.recurringEventId) {
+		const home = mostRecentMatching(
+			entries,
+			(e) => e.recurringEventId === ev.recurringEventId
+		);
+		if (home) return folderOf(home);
+		return normalizeFolderPath(renderFolderTemplate(cfg.seriesFolderTemplate, ev));
+	}
+	if (isAdhocId(ev.id)) {
+		return normalizeFolderPath(cfg.adhocFolder);
+	}
+	return normalizeFolderPath(renderFolderTemplate(cfg.oneOffFolderTemplate, ev));
+}
+
+/** Public entry point for `resolveMeetingFolderFromScan`, scanning the vault itself. */
 export function resolveMeetingFolder(
 	app: App,
 	ev: MeetingEventInfo,
 	cfg: MeetingNoteConfig
 ): string {
-	if (cfg.oneOnOneSeparately && ev.oneOnOnePartner) {
-		const home = mostRecentNoteBy(app, "one_on_one_with", ev.oneOnOnePartner);
-		if (home) return folderOf(home);
-		return normalizeFolderPath(`${cfg.oneOnOneFolder}/${ev.oneOnOnePartner}`);
-	}
-	if (ev.recurringEventId) {
-		const home = mostRecentNoteBy(app, "recurring_event_id", ev.recurringEventId);
-		if (home) return folderOf(home);
-		return normalizeFolderPath(renderTemplate(cfg.seriesFolderTemplate, ev));
-	}
-	if (ev.id.startsWith("adhoc-")) {
-		return normalizeFolderPath(cfg.adhocFolder);
-	}
-	return normalizeFolderPath(renderTemplate(cfg.oneOffFolderTemplate, ev));
+	return resolveMeetingFolderFromScan(scanMeetingNotes(app), ev, cfg);
 }
 
 /**
@@ -214,6 +271,7 @@ export function meetingBasename(ev: MeetingEventInfo, titlePattern: string): str
 }
 
 async function ensureFolder(app: App, folder: string): Promise<void> {
+	if (!folder) return;
 	let cur = "";
 	for (const part of folder.split("/")) {
 		cur = cur ? `${cur}/${part}` : part;
@@ -258,11 +316,18 @@ function resolveNotePath(
 	return candidate;
 }
 
-/** Writes the frontmatter this plugin manages, regardless of how the note was found. */
+/**
+ * Writes the frontmatter this plugin manages, regardless of how the note was
+ * found. `one_on_one_with`/`one_on_one_email` are stamped only when
+ * `cfg.oneOnOneSeparately` is on — with the toggle off, a 1:1 is just a
+ * regular meeting, so its notes don't accumulate 1:1 metadata that would
+ * later strand them once the toggle is switched on.
+ */
 async function stampFrontmatter(
 	app: App,
 	file: TFile,
-	ev: MeetingEventInfo
+	ev: MeetingEventInfo,
+	cfg: MeetingNoteConfig
 ): Promise<void> {
 	await app.fileManager.processFrontMatter(file, (fm) => {
 		const f = fm as Record<string, unknown>;
@@ -276,7 +341,10 @@ async function stampFrontmatter(
 		if (ev.meetLink) f.meeting_url = ev.meetLink;
 		if (ev.location) f.location = ev.location;
 		if (ev.organizer) f.organizer = ev.organizer;
-		if (ev.oneOnOnePartner) f.one_on_one_with = ev.oneOnOnePartner;
+		if (cfg.oneOnOneSeparately && ev.oneOnOnePartner) {
+			f.one_on_one_with = ev.oneOnOnePartner;
+			if (ev.oneOnOnePartnerEmail) f.one_on_one_email = ev.oneOnOnePartnerEmail;
+		}
 		f.attendees = ev.attendees;
 		if (!f.status) f.status = "scheduled";
 	});
@@ -296,9 +364,12 @@ export async function createMeetingNote(
 	ev: MeetingEventInfo,
 	cfg: MeetingNoteConfig
 ): Promise<MeetingNoteRef> {
-	const byIdentity = findNoteByEventId(app, ev.id);
+	// One scan serves both the identity lookup below and the sticky-home
+	// lookups inside `resolveMeetingFolderFromScan`.
+	const entries = scanMeetingNotes(app);
+	const byIdentity = ev.id ? entries.find((e) => e.eventId === ev.id)?.file ?? null : null;
 	if (byIdentity) {
-		await stampFrontmatter(app, byIdentity, ev);
+		await stampFrontmatter(app, byIdentity, ev, cfg);
 		return {
 			file: byIdentity,
 			notePath: byIdentity.path,
@@ -307,7 +378,7 @@ export async function createMeetingNote(
 		};
 	}
 
-	const folder = resolveMeetingFolder(app, ev, cfg);
+	const folder = resolveMeetingFolderFromScan(entries, ev, cfg);
 	await ensureFolder(app, folder);
 
 	const notePath = resolveNotePath(
@@ -328,7 +399,7 @@ export async function createMeetingNote(
 			? existing
 			: await app.vault.create(notePath, renderTemplate(cfg.template, ev));
 
-	await stampFrontmatter(app, file, ev);
+	await stampFrontmatter(app, file, ev, cfg);
 
 	return { file, notePath, folder, basename };
 }

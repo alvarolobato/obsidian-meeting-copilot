@@ -3,6 +3,7 @@ import {
 	collectPages,
 	isDeclinedByUser,
 	oneOnOnePartner,
+	oneOnOnePartnerEmail,
 } from "./googleCalendar";
 
 
@@ -132,5 +133,45 @@ describe("oneOnOnePartner", () => {
 	it("returns null for an empty or undefined attendee list", () => {
 		expect(oneOnOnePartner(undefined)).toBeNull();
 		expect(oneOnOnePartner([])).toBeNull();
+	});
+});
+
+describe("oneOnOnePartnerEmail", () => {
+	it("returns the other attendee's email, lowercased and trimmed", () => {
+		const email = oneOnOnePartnerEmail([
+			{ email: "me@example.com", self: true },
+			{ email: " Bob@Example.com ", displayName: "Bob" },
+		]);
+		expect(email).toBe("bob@example.com");
+	});
+
+	it("stays the same across a display-name-only rename (identity is the email)", () => {
+		const first = oneOnOnePartnerEmail([
+			{ email: "me@example.com", self: true },
+			{ email: "bob@example.com" },
+		]);
+		const second = oneOnOnePartnerEmail([
+			{ email: "me@example.com", self: true },
+			{ email: "bob@example.com", displayName: "Bob" },
+		]);
+		expect(first).toBe("bob@example.com");
+		expect(second).toBe("bob@example.com");
+		expect(first).toBe(second);
+	});
+
+	it("returns null when the partner has no email, or it isn't a 1:1", () => {
+		expect(
+			oneOnOnePartnerEmail([
+				{ email: "me@example.com", self: true },
+				{ displayName: "Bob" },
+			])
+		).toBeNull();
+		expect(
+			oneOnOnePartnerEmail([
+				{ email: "alice@example.com", displayName: "Alice" },
+				{ email: "bob@example.com", displayName: "Bob" },
+			])
+		).toBeNull();
+		expect(oneOnOnePartnerEmail(undefined)).toBeNull();
 	});
 });

@@ -16,6 +16,7 @@ function ev(overrides: Partial<MeetingEventInfo> = {}): MeetingEventInfo {
 		iCalUID: "uid-123",
 		recurringEventId: null,
 		oneOnOnePartner: null,
+		oneOnOnePartnerEmail: null,
 		...overrides,
 	};
 }

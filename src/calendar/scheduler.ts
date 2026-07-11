@@ -12,6 +12,8 @@ export interface ScheduledEvent {
 	recurringEventId: string | null;
 	/** The other attendee's display name (or email) for a 1:1; null for anything else. */
 	oneOnOnePartner: string | null;
+	/** The other attendee's email for a 1:1 (lowercased/trimmed); null when unavailable. */
+	oneOnOnePartnerEmail: string | null;
 }
 
 export interface SchedulerDeps {
