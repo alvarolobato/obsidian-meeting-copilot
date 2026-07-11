@@ -98,6 +98,10 @@ class FakeVault {
 		this.staleCache.add(path);
 	}
 
+	deleteNote(path: string): void {
+		this.entries.delete(path);
+	}
+
 	isCacheStale(path: string): boolean {
 		return this.staleCache.has(path);
 	}
@@ -290,6 +294,31 @@ describe("createMeetingNote", () => {
 		const second = await createMeetingNote(app, event, cfg());
 		expect(second.file).toBe(first.file);
 		expect(vault.created).toEqual([first.notePath]);
+	});
+
+	it("distrusts a stale recent-map entry whose path was reclaimed by a different event", async () => {
+		const vault = new FakeVault();
+		const app = makeApp(vault);
+
+		// evt-a creates a note, which the user then deletes; evt-b's note
+		// later lands at the same path (its cached frontmatter says evt-b).
+		const first = await createMeetingNote(
+			app,
+			ev({ id: "evt-a", summary: "Standup" }),
+			cfg()
+		);
+		vault.deleteNote(first.notePath);
+		const reclaimed = vault.addNote(first.notePath, { event_id: "evt-b" });
+
+		// evt-a again: the map points at the reclaimed path, but the cached
+		// event_id differs, so it must NOT stamp over evt-b's note.
+		const second = await createMeetingNote(
+			app,
+			ev({ id: "evt-a", summary: "Standup" }),
+			cfg()
+		);
+		expect(second.file).not.toBe(reclaimed);
+		expect(vault.frontmatterFor(reclaimed)?.event_id).toBe("evt-b");
 	});
 
 	it("recovers from a create collision by reusing the file that won the race", async () => {

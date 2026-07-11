@@ -136,17 +136,34 @@ describe("oneOnOnePartner", () => {
 		expect(oneOnOnePartner([])).toBeNull();
 	});
 
-	it("recognizes a 1:1 when Google omits the self attendee entirely", () => {
-		const partner = oneOnOnePartner([
-			{ email: "bob@example.com", displayName: "Bob" },
-		]);
+	it("recognizes a self-organized 1:1 when Google omits the self attendee entirely", () => {
+		const partner = oneOnOnePartner(
+			[{ email: "bob@example.com", displayName: "Bob" }],
+			{ organizerIsSelf: true }
+		);
 		expect(partner).toBe("Bob");
 	});
 
-	it("returns null for a single attendee who is self (a meeting with yourself)", () => {
+	it("does not treat a lone attendee on someone else's event as a 1:1", () => {
 		const partner = oneOnOnePartner([
-			{ email: "me@example.com", self: true },
+			{ email: "bob@example.com", displayName: "Bob" },
 		]);
+		expect(partner).toBeNull();
+	});
+
+	it("infers nothing from a truncated attendee list (attendeesOmitted)", () => {
+		const partner = oneOnOnePartner(
+			[{ email: "group@example.com", displayName: "Team" }],
+			{ organizerIsSelf: true, attendeesOmitted: true }
+		);
+		expect(partner).toBeNull();
+	});
+
+	it("returns null for a single attendee who is self (a meeting with yourself)", () => {
+		const partner = oneOnOnePartner(
+			[{ email: "me@example.com", self: true }],
+			{ organizerIsSelf: true }
+		);
 		expect(partner).toBeNull();
 	});
 });

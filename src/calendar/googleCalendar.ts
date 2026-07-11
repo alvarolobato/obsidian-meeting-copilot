@@ -92,8 +92,10 @@ interface RawEvent extends RawConferenceEvent {
 	htmlLink?: string;
 	iCalUID?: string;
 	recurringEventId?: string;
-	organizer?: { email?: string; displayName?: string };
+	organizer?: { email?: string; displayName?: string; self?: boolean };
 	attendees?: RawAttendee[];
+	/** True when Google truncated the attendee list (large events). */
+	attendeesOmitted?: boolean;
 	start?: { date?: string; dateTime?: string };
 	end?: { date?: string; dateTime?: string };
 }
@@ -106,19 +108,34 @@ function mapAttendees(raw: RawAttendee[] | undefined): string[] {
 		.filter((name) => name.length > 0);
 }
 
+/** How a raw event's 1:1 shape is judged, beyond the attendee list itself. */
+export interface OneOnOneContext {
+	/** True when the signed-in user organized the event (`organizer.self`). */
+	organizerIsSelf?: boolean;
+	/** True when Google truncated the attendee list; nothing can be inferred then. */
+	attendeesOmitted?: boolean;
+}
+
 /**
  * The other attendee in a 1:1: exactly two non-resource attendees with
- * exactly one of them marked `self`, or exactly one non-resource attendee
- * that isn't marked `self` (a self-organized event sometimes arrives with
- * only the other side listed, omitting the organizer's own attendee entry).
- * Null for group meetings, a missing self flag on two attendees, or a single
- * attendee who *is* self (a meeting with yourself). Shared by
+ * exactly one of them marked `self`; or, for an event the user organized
+ * themselves (`organizerIsSelf`), exactly one non-resource attendee that
+ * isn't marked `self` — Google omits the organizer's own attendee entry on
+ * some self-organized events. Null for group meetings, a truncated attendee
+ * list (`attendeesOmitted`), a missing self flag on two attendees, a single
+ * attendee on someone else's event (foreign calendars never mark `self`, so
+ * a lone guest proves nothing), or a single attendee who *is* self. Shared by
  * `oneOnOnePartner` and `oneOnOnePartnerEmail` so both agree on what counts
  * as a 1:1.
  */
-function oneOnOneOther(raw: RawAttendee[] | undefined): RawAttendee | null {
+function oneOnOneOther(
+	raw: RawAttendee[] | undefined,
+	ctx: OneOnOneContext = {}
+): RawAttendee | null {
+	if (ctx.attendeesOmitted) return null;
 	const humans = (raw ?? []).filter((a) => !a.resource);
 	if (humans.length === 1) {
+		if (!ctx.organizerIsSelf) return null;
 		return humans[0]?.self === true ? null : (humans[0] ?? null);
 	}
 	if (humans.length !== 2) return null;
@@ -131,8 +148,11 @@ function oneOnOneOther(raw: RawAttendee[] | undefined): RawAttendee | null {
  * The other participant's display name (or email) for a 1:1. Null for group
  * meetings, a missing self flag, or an unnamed/emailless partner.
  */
-export function oneOnOnePartner(raw: RawAttendee[] | undefined): string | null {
-	const other = oneOnOneOther(raw);
+export function oneOnOnePartner(
+	raw: RawAttendee[] | undefined,
+	ctx: OneOnOneContext = {}
+): string | null {
+	const other = oneOnOneOther(raw, ctx);
 	const name = (other?.displayName || other?.email || "").trim();
 	return name.length > 0 ? name : null;
 }
@@ -143,8 +163,11 @@ export function oneOnOnePartner(raw: RawAttendee[] | undefined): string | null {
  * themselves between events doesn't fork their notes into two folders. Null
  * for group meetings, a missing self flag, or an emailless partner.
  */
-export function oneOnOnePartnerEmail(raw: RawAttendee[] | undefined): string | null {
-	const other = oneOnOneOther(raw);
+export function oneOnOnePartnerEmail(
+	raw: RawAttendee[] | undefined,
+	ctx: OneOnOneContext = {}
+): string | null {
+	const other = oneOnOneOther(raw, ctx);
 	const email = (other?.email ?? "").trim().toLowerCase();
 	return email.length > 0 ? email : null;
 }
@@ -237,8 +260,14 @@ export async function listEvents(
 			organizer,
 			iCalUID: ev.iCalUID ?? null,
 			recurringEventId: ev.recurringEventId ?? null,
-			oneOnOnePartner: oneOnOnePartner(ev.attendees),
-			oneOnOnePartnerEmail: oneOnOnePartnerEmail(ev.attendees),
+			oneOnOnePartner: oneOnOnePartner(ev.attendees, {
+				organizerIsSelf: ev.organizer?.self === true,
+				attendeesOmitted: ev.attendeesOmitted === true,
+			}),
+			oneOnOnePartnerEmail: oneOnOnePartnerEmail(ev.attendees, {
+				organizerIsSelf: ev.organizer?.self === true,
+				attendeesOmitted: ev.attendeesOmitted === true,
+			}),
 		};
 	});
 }

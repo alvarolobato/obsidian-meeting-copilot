@@ -475,6 +475,20 @@ async function stampFrontmatter(
  */
 const recentNoteByEventId = new Map<string, string>();
 
+/** Bounds `recentNoteByEventId`; oldest entries are evicted first. */
+const RECENT_NOTE_CACHE_MAX = 200;
+
+function rememberRecentNote(eventId: string, path: string): void {
+	// Re-insert so the entry moves to the back of the eviction order.
+	recentNoteByEventId.delete(eventId);
+	recentNoteByEventId.set(eventId, path);
+	while (recentNoteByEventId.size > RECENT_NOTE_CACHE_MAX) {
+		const oldest = recentNoteByEventId.keys().next().value;
+		if (oldest === undefined) break;
+		recentNoteByEventId.delete(oldest);
+	}
+}
+
 /** Test-only: clears the module-level recent-note cache between test cases. */
 export function __resetRecentNoteCache(): void {
 	recentNoteByEventId.clear();
@@ -507,16 +521,30 @@ export async function createMeetingNote(
 ): Promise<MeetingNoteRef> {
 	const reuse = async (file: TFile): Promise<MeetingNoteRef> => {
 		await stampFrontmatter(app, file, ev, cfg);
-		if (ev.id) recentNoteByEventId.set(ev.id, file.path);
+		if (ev.id) rememberRecentNote(ev.id, file.path);
 		return refFromFile(file);
 	};
 
 	// Catches a just-created note before metadataCache has indexed it (see
 	// `recentNoteByEventId`); getAbstractFileByPath doesn't depend on the cache.
+	// The mapping can go stale: the note may have been deleted and its path
+	// reclaimed by a DIFFERENT meeting's note. Trust it only while the file's
+	// cached `event_id` is still this event's (or the cache hasn't indexed the
+	// file yet — the very lag the map exists to bridge); otherwise drop the
+	// entry and fall through to the frontmatter scan.
 	const recentPath = ev.id ? recentNoteByEventId.get(ev.id) : undefined;
-	if (recentPath) {
+	if (recentPath && ev.id) {
 		const recent = app.vault.getAbstractFileByPath(recentPath);
-		if (recent instanceof TFile) return reuse(recent);
+		const cachedId = recent instanceof TFile
+			? frontmatterOf(app, recent)?.["event_id"]
+			: undefined;
+		if (
+			recent instanceof TFile &&
+			(cachedId === undefined || cachedId === ev.id)
+		) {
+			return reuse(recent);
+		}
+		recentNoteByEventId.delete(ev.id);
 	}
 
 	// One scan serves both the identity lookup below and the sticky-home
