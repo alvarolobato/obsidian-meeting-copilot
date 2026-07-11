@@ -282,6 +282,21 @@ export const en = {
 			whisper: "Whisper",
 			whisperTs: "Whisper (word timestamps)",
 		},
+		diarization: {
+			name: "Separate my voice from others",
+			desc: "Transcribes the mic and system audio channels separately so your side of the conversation can be told apart from everyone else's. Roughly doubles transcription cost, and needs a timestamp-capable model — check the badge above, or run 'Test connection'.",
+		},
+		timestampBadge: {
+			name: "Timestamp support",
+			detected: "Timestamps: detected",
+			notDetected: "Timestamps: not detected",
+			unknown: "Timestamps: unknown (run Test connection)",
+		},
+		loadModels: {
+			button: "Load models",
+			success: (n: number) =>
+				`Loaded ${n} model${n === 1 ? "" : "s"}.`,
+		},
 		sttLanguage: {
 			name: "Language",
 			desc: "ISO code (e.g. en, ja) or 'auto' to detect.",
@@ -323,6 +338,10 @@ export const en = {
 				`Connected. Loaded ${n} model${n === 1 ? "" : "s"}.`,
 			empty: "Connected, but the endpoint returned no models.",
 			failure: (msg: string) => `Connection failed: ${msg}`,
+			timestampsDetected:
+				"Timestamps confirmed — speaker separation is available for this model.",
+			timestampsNotDetected:
+				"This endpoint didn't return timestamps for this model — speaker separation isn't available.",
 		},
 		enrichOnTranscribe: {
 			name: "Enrich automatically after transcription",

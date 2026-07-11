@@ -377,7 +377,35 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 											this.models.length
 										)
 							);
-							// Re-render so both model dropdowns pick up the list.
+							// Whisper-with-timestamps is the only family that
+							// asks the engine for segment timestamps, so it's
+							// the only one worth probing — the connection
+							// already works either way.
+							if (
+								this.plugin.settings.sttApiType ===
+								"whisper-1-ts"
+							) {
+								const wireModel = this.plugin.settings.sttModel;
+								const supported = await probeTimestampSupport({
+									baseUrl: apiBaseUrl,
+									apiKey,
+									wireModel,
+								});
+								this.plugin.settings.sttTimestampsSupported =
+									supported;
+								this.plugin.settings.sttTimestampsProbeKey =
+									probeKey(apiBaseUrl, wireModel);
+								await this.plugin.saveSettings();
+								new Notice(
+									supported
+										? s.settings.testConnection
+												.timestampsDetected
+										: s.settings.testConnection
+												.timestampsNotDetected
+								);
+							}
+							// Re-render so both model dropdowns and the
+							// timestamp badge pick up the new state.
 							this.display();
 						} catch (e) {
 							new Notice(
@@ -398,20 +426,50 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 			.setName(s.settings.transcriptionHeading)
 			.setHeading();
 
-		// Model id sent on the wire (dropdown once models are loaded, else free text).
+		// Model id sent on the wire (dropdown once models are loaded, else free
+		// text). "Load models" fetches just the transcription endpoint's list,
+		// independent of the shared "Test connection" above.
+		const sttModelSetting = new Setting(containerEl)
+			.setName(s.settings.sttModel.name)
+			.setDesc(s.settings.sttModel.desc)
+			.addButton((button) =>
+				button
+					.setButtonText(s.settings.loadModels.button)
+					.onClick(async () => {
+						const { apiBaseUrl, apiKey } = this.plugin.settings;
+						button.setDisabled(true);
+						const found = await listSttModels({
+							baseUrl: apiBaseUrl,
+							apiKey,
+						});
+						button.setDisabled(false);
+						// A null or empty result just means the lookup didn't
+						// pan out — keep the free-text field, no error noise.
+						if (found && found.length > 0) {
+							this.models = found;
+							new Notice(
+								s.settings.loadModels.success(found.length)
+							);
+							this.display();
+						}
+					})
+			);
 		this.addModelPicker(
-			new Setting(containerEl)
-				.setName(s.settings.sttModel.name)
-				.setDesc(s.settings.sttModel.desc),
+			sttModelSetting,
 			this.plugin.settings.sttModel,
 			async (value) => {
 				this.plugin.settings.sttModel = value;
 				// Keep the engine family in sync with the picked model.
 				this.plugin.settings.sttApiType = inferSttApiType(value);
+				this.resetTimestampProbe();
 				await this.plugin.saveSettings();
 				this.display();
 			}
 		);
+
+		new Setting(containerEl)
+			.setName(s.settings.timestampBadge.name)
+			.setDesc(this.timestampBadgeText(s));
 
 		new Setting(containerEl)
 			.setName(s.settings.sttApiType.name)
@@ -441,6 +499,18 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					}
 				);
 			});
+
+		new Setting(containerEl)
+			.setName(s.settings.diarization.name)
+			.setDesc(s.settings.diarization.desc)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.diarizationEnabled)
+					.onChange(async (value) => {
+						this.plugin.settings.diarizationEnabled = value;
+						await this.plugin.saveSettings();
+					})
+			);
 
 		new Setting(containerEl)
 			.setName(s.settings.sttLanguage.name)
@@ -698,6 +768,30 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
+    }
+
+    /**
+     * Clears a stored timestamp-probe result. Called whenever the base URL or
+     * the transcription model changes, since both feed into the probe key —
+     * a "yes" from before the change would otherwise silently keep applying
+     * to a different endpoint/model.
+     */
+    private resetTimestampProbe(): void {
+        this.plugin.settings.sttTimestampsSupported = null;
+        this.plugin.settings.sttTimestampsProbeKey = "";
+    }
+
+    /** Badge text for the transcription model's timestamp support, reflecting whether the stored probe result is still fresh. */
+    private timestampBadgeText(s: Messages): string {
+        const { apiBaseUrl, sttModel, sttTimestampsSupported, sttTimestampsProbeKey } =
+            this.plugin.settings;
+        const currentKey = probeKey(apiBaseUrl, sttModel);
+        if (sttTimestampsSupported === null || sttTimestampsProbeKey !== currentKey) {
+            return s.settings.timestampBadge.unknown;
+        }
+        return sttTimestampsSupported
+            ? s.settings.timestampBadge.detected
+            : s.settings.timestampBadge.notDetected;
     }
 
     /**
