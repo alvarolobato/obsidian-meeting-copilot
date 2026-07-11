@@ -48,6 +48,12 @@ Then, regardless of method:
 4. Optionally install the plugins from the table above (Dataview, Tasks).
 5. On your first recording, the macOS helper (`system-recorder`) is downloaded from the matching release and verified (SHA-256) if you didn't already copy it in. macOS then prompts for **Screen Recording** and **Microphone** permissions — grant both, then fully quit and reopen Obsidian. (Apple Silicon / arm64 only.)
 
+### Updating
+
+- **BRAT (Option A)** auto-updates: it watches this repo's [releases](https://github.com/alvarolobato/obsidian-meeting-copilot/releases) and pulls new versions (enable *Auto-update plugins at startup* in BRAT's settings, or run *BRAT: Check for updates*). After an update, the plugin re-downloads the matching `system-recorder` helper on the next recording.
+- **Manual (Option B)** installs do **not** auto-update — download the new release assets and replace the files in `.obsidian/plugins/meeting-copilot/` when a new version ships. Your settings (`data.json`) are preserved.
+- Obsidian's built-in *Check for updates* only covers plugins in the official community store, so it will **not** update this plugin. Use BRAT.
+
 ## Setup
 
 ### Google Calendar
