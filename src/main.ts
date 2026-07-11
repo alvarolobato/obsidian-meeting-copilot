@@ -666,9 +666,11 @@ export default class SystemRecordingPlugin extends Plugin {
 	 * left to the scheduler's own event-end handling.
 	 */
 	private onMeetingEnded(app: string): void {
-		// Only stop once *all* detected meetings have ended, so ending one of
-		// several concurrent calls doesn't truncate a still-active recording.
-		if (this.detector && this.detector.activeCount() > 0) return;
+		// Ignore if detection was disabled meanwhile (an in-flight poll's onEnd
+		// must not auto-stop after the user opted out), and only stop once *all*
+		// detected meetings have ended so one of several concurrent calls ending
+		// doesn't truncate a still-active recording.
+		if (!this.detector || this.detector.activeCount() > 0) return;
 		if (!this.recorder.isRecording || !this.isAdhocRecording()) {
 			return;
 		}
