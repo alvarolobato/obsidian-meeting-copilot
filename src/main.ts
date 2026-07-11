@@ -1,6 +1,9 @@
 import { FileSystemAdapter, MarkdownView, Menu, normalizePath, Notice, Platform, Plugin, setIcon, TFile } from "obsidian";
 import {
     DEFAULT_SETTINGS,
+    inferSttApiType,
+    STT_MODELS,
+    SttApiType,
     SystemRecordingSettings,
     SystemRecordingSettingTab,
 } from "./settings";
@@ -30,13 +33,25 @@ import {
     withEnrichedBlock,
 } from "./notes/enrichedBlock";
 import { extractActionItems, mergeActionItems } from "./notes/actionItems";
-import { buildDashboardBlock, withDashboardBlock } from "./notes/dashboard";
+import {
+    ATTENTION_BLOCK_LANG,
+    buildDashboardBlock,
+    withDashboardBlock,
+} from "./notes/dashboard";
+import { computeAttention, type AttentionInput } from "./notes/attention";
 import { findExpiredRecordings } from "./recordings/retention";
 
 /** Note section that holds action-item checkboxes (obsidian-tasks compatible). */
 const ACTION_ITEMS_HEADING = "## Action items";
 import { chatComplete } from "./enrich/llm";
 import { isPartialTranscript } from "./transcribe/partial";
+import {
+    initTranscribeEngine,
+    transcribeAudio,
+    type TranscribeConfig,
+} from "./transcribe/TranscriptionService";
+import { parseDictionary } from "./transcribe/dictionary";
+import type { TranscriptionModel } from "./transcribe/vendor/ApiSettings";
 import { ENRICH_SYSTEM_PROMPT, fillPrompt } from "./enrich/prompt";
 import { t } from "./i18n";
 import { TypedEventBus } from "./util/events";
@@ -57,6 +72,7 @@ import {
     populateMeetingMenu,
     RowHandlers,
 } from "./ui/agenda/components/meetingRow";
+import { registerIcons, RECORD_ICON } from "./ui/icons";
 
 export default class SystemRecordingPlugin extends Plugin {
     settings: SystemRecordingSettings;
@@ -83,6 +99,11 @@ export default class SystemRecordingPlugin extends Plugin {
 	private scheduler: CalendarScheduler | null = null;
 	/** Note the in-progress recording belongs to, so we can link it back on stop. */
 	private currentMeetingNotePath: string | null = null;
+	/**
+	 * Live reference to that note. Preferred over the path on stop so renaming
+	 * the note mid-recording (Obsidian updates `TFile.path`) still links back.
+	 */
+	private currentMeetingNote: TFile | null = null;
 	/** Calendar event id of the in-progress meeting recording, for agenda state. */
 	private currentRecordingEventId: string | null = null;
 	/** Vault-relative path of the in-progress recording, protected from retention. */
@@ -99,10 +120,13 @@ export default class SystemRecordingPlugin extends Plugin {
 
     async onload() {
         await this.loadSettings();
+        // Prime the vendored transcription engine (i18n + plugin dir).
+        initTranscribeEngine(this.manifest.dir ?? null);
 
         // Ribbon icon
+        registerIcons();
         this.ribbonIconEl = this.addRibbonIcon(
-            "microphone",
+            RECORD_ICON,
             t().ribbon.toggleRecording,
             () => this.toggleRecording()
         );
@@ -120,16 +144,6 @@ export default class SystemRecordingPlugin extends Plugin {
             name: t().commands.openAgenda,
             callback: () => void this.openAgenda(),
         });
-
-        // When a transcription finishes, drop it into the matching meeting note
-        // and refresh the agenda (ai-transcriber emits this custom event).
-        this.registerEvent(
-            this.app.workspace.on(
-                "transcription:completed" as never,
-                (payload: unknown) =>
-                    void this.handleTranscriptionCompleted(payload)
-            )
-        );
 
         // Expose the same actions as the agenda list (record, transcribe,
         // enrich, links, …) from the note's editor and file context menus.
@@ -149,6 +163,13 @@ export default class SystemRecordingPlugin extends Plugin {
             })
         );
 
+        // "Needs attention" dashboard section: meetings that haven't finished
+        // the pipeline, rendered with per-row action buttons.
+        this.registerMarkdownCodeBlockProcessor(
+            ATTENTION_BLOCK_LANG,
+            (_src, el) => this.renderAttention(el)
+        );
+
         // Status bar
         this.statusBarEl = this.addStatusBarItem();
         this.statusBarEl.addClass("system-recording-hidden");
@@ -157,7 +178,7 @@ export default class SystemRecordingPlugin extends Plugin {
         this.addCommand({
             id: "start-recording",
             name: t().commands.startRecording,
-            callback: () => this.startRecording(),
+            callback: () => void this.startAdHocMeeting(),
         });
 
         this.addCommand({
@@ -252,11 +273,66 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     async loadSettings() {
-        this.settings = Object.assign(
-            {},
-            DEFAULT_SETTINGS,
-            await this.loadData() as Partial<SystemRecordingSettings>
-        );
+        const raw = (await this.loadData()) as
+            | (Partial<SystemRecordingSettings> & {
+                  enrichBaseUrl?: string;
+                  enrichApiKey?: string;
+                  /** Retired: canonical family used to live in sttModel + wire id in sttModelId. */
+                  sttModelId?: string;
+              })
+            | null;
+        this.settings = Object.assign({}, DEFAULT_SETTINGS, raw ?? {});
+        // Normalize the shared endpoint (tolerate hand-edited data.json).
+        this.settings.apiBaseUrl = (this.settings.apiBaseUrl ?? "").trim();
+        this.settings.apiKey = (this.settings.apiKey ?? "").trim();
+        // Migrate the previously enrichment-only endpoint into the shared fields
+        // when the shared ones are still unset or at the default.
+        const legacyBase = raw?.enrichBaseUrl?.trim();
+        const legacyKey = raw?.enrichApiKey?.trim();
+        if (
+            legacyBase &&
+            (!this.settings.apiBaseUrl ||
+                this.settings.apiBaseUrl === DEFAULT_SETTINGS.apiBaseUrl)
+        ) {
+            this.settings.apiBaseUrl = legacyBase;
+        }
+        if (legacyKey && !this.settings.apiKey) {
+            this.settings.apiKey = legacyKey;
+        }
+        // Clamp a value to a valid engine family, inferring one when the value
+        // is a free-form wire id (e.g. a gateway deployment name).
+        const clampApiType = (m: string): SttApiType =>
+            (STT_MODELS as readonly string[]).includes(m)
+                ? (m as SttApiType)
+                : inferSttApiType(m);
+        // Migrate the old split (sttModel = canonical family, sttModelId = wire id)
+        // into the new model: sttModel is the wire id, sttApiType is the family.
+        const legacyModelId = raw?.sttModelId?.trim();
+        if (legacyModelId) {
+            this.settings.sttApiType = clampApiType(
+                String(raw?.sttModel ?? DEFAULT_SETTINGS.sttModel)
+            );
+            this.settings.sttModel = legacyModelId;
+        } else if (raw?.sttApiType === undefined) {
+            // Pre-apiType data: derive the family from the model name.
+            this.settings.sttApiType = clampApiType(this.settings.sttModel);
+        }
+        // Don't persist the retired keys back into data.json.
+        const bag = this.settings as unknown as Record<string, unknown>;
+        delete bag.enrichBaseUrl;
+        delete bag.enrichApiKey;
+        delete bag.sttModelId;
+        // Guard against corrupt/hand-edited data selecting an unknown engine
+        // family, which would silently fall through to the GPT-4o path.
+        this.settings.sttApiType = clampApiType(this.settings.sttApiType);
+        // We ship no local-VAD WASM, so only server/disabled are valid; keep
+        // hand-edited data from sending the engine down the local VAD path.
+        if (
+            this.settings.vadMode !== "server" &&
+            this.settings.vadMode !== "disabled"
+        ) {
+            this.settings.vadMode = DEFAULT_SETTINGS.vadMode;
+        }
     }
 
     async saveSettings() {
@@ -269,7 +345,78 @@ export default class SystemRecordingPlugin extends Plugin {
         if (this.recorder.isRecording) {
             this.stopRecording();
         } else {
-            void this.startRecording();
+            void this.startAdHocMeeting();
+        }
+    }
+
+    /**
+     * Starts an unplanned meeting: creates a meeting note (default title, ready
+     * to rename), opens it with the title selected, and records beside it. On
+     * stop the recording follows the same link → transcribe → enrich pipeline
+     * as calendar meetings.
+     */
+    private async startAdHocMeeting(): Promise<void> {
+        if (!Platform.isMacOS) {
+            new Notice(t().notices.macOnly);
+            return;
+        }
+        if (this.recorder.isRecording) {
+            new Notice(t().notices.alreadyRecording);
+            return;
+        }
+        const now = new Date();
+        const info: MeetingEventInfo = {
+            // A stable non-empty id makes it a recognized meeting note right
+            // away and avoids note-path collisions with other ad-hoc meetings.
+            id: `adhoc-${now.getTime()}`,
+            summary: t().adhoc.defaultTitle,
+            start: now,
+            end: new Date(now.getTime() + 60 * 60 * 1000),
+            meetLink: null,
+            location: "",
+            htmlLink: "",
+            attendees: [],
+            organizer: null,
+            iCalUID: null,
+            recurringEventId: null,
+        };
+        try {
+            const ref = await createMeetingNote(this.app, info, this.noteConfig());
+            const leaf = this.app.workspace.getLeaf(false);
+            await leaf.openFile(ref.file);
+            this.selectNoteTitle(leaf);
+            await this.startRecording({
+                folder: ref.folder,
+                basename: ref.basename,
+                notePath: ref.notePath,
+                eventId: info.id,
+                note: ref.file,
+            });
+            new Notice(t().adhoc.started);
+        } catch (e) {
+            new Notice(
+                t().notices.recordingError(
+                    e instanceof Error ? e.message : String(e)
+                )
+            );
+        }
+    }
+
+    /** Selects the H1 title in a freshly opened note so the user can rename it. */
+    private selectNoteTitle(leaf: import("obsidian").WorkspaceLeaf): void {
+        const view = leaf.view instanceof MarkdownView ? leaf.view : null;
+        if (!view) return;
+        const editor = view.editor;
+        for (let i = 0; i < editor.lineCount(); i++) {
+            const line = editor.getLine(i);
+            if (line.startsWith("# ")) {
+                editor.setSelection(
+                    { line: i, ch: 2 },
+                    { line: i, ch: line.length }
+                );
+                editor.focus();
+                return;
+            }
         }
     }
 
@@ -278,6 +425,7 @@ export default class SystemRecordingPlugin extends Plugin {
         basename: string;
         notePath: string;
         eventId?: string;
+        note?: TFile;
     }) {
         if (this.recorder.isRecording) {
             new Notice(t().notices.alreadyRecording);
@@ -324,6 +472,7 @@ export default class SystemRecordingPlugin extends Plugin {
                     meeting.basename
                 );
                 this.currentMeetingNotePath = meeting.notePath;
+                this.currentMeetingNote = meeting.note ?? null;
                 this.currentRecordingEventId = meeting.eventId ?? null;
             } else {
                 const folder = this.settings.recordingFolder;
@@ -333,6 +482,7 @@ export default class SystemRecordingPlugin extends Plugin {
                 const fileName = this.formatFileName(this.settings.fileNameTemplate);
                 relativePath = await this.uniqueWavPath(adapter, folder, fileName);
                 this.currentMeetingNotePath = null;
+                this.currentMeetingNote = null;
                 this.currentRecordingEventId = null;
             }
 
@@ -579,15 +729,141 @@ export default class SystemRecordingPlugin extends Plugin {
         );
     }
 
-    /** Adds the shared meeting actions (record/transcribe/enrich/links) to a menu. */
+    /** Adds a "Meeting Copilot" submenu with the shared meeting actions. */
     private addNoteMeetingMenu(menu: Menu, file: TFile): void {
-        menu.addSeparator();
-        populateMeetingMenu(
-            menu,
-            this.agendaMeetingFromNote(file),
-            this.noteRowHandlers(),
-            { includeNavigation: false }
-        );
+        menu.addItem((item) => {
+            item.setTitle(t().agenda.menuTitle).setIcon("mic");
+            const sub = item.setSubmenu();
+            populateMeetingMenu(
+                sub,
+                this.agendaMeetingFromNote(file),
+                this.noteRowHandlers(),
+                { includeNavigation: false }
+            );
+        });
+    }
+
+    /**
+     * Renders the dashboard's "Needs attention" table: meeting notes that
+     * haven't finished the scheduled → recorded → transcribed → enriched
+     * pipeline, each with buttons to open, transcribe, and enrich.
+     */
+    private renderAttention(el: HTMLElement): void {
+        el.empty();
+        const d = t().dashboard.attention;
+        const acts = t().agenda.actions;
+
+        const folder =
+            this.settings.meetingsFolder.trim().replace(/\/+$/, "") ||
+            "Meetings";
+        const prefix = `${folder}/`;
+        const byPath = new Map<string, TFile>();
+        const inputs: AttentionInput[] = [];
+        for (const f of this.app.vault.getMarkdownFiles()) {
+            if (f.path !== `${folder}.md` && !f.path.startsWith(prefix))
+                continue;
+            const fm = this.app.metadataCache.getFileCache(f)?.frontmatter as
+                | Record<string, unknown>
+                | undefined;
+            if (!fm) continue;
+            if (!(fm["event_id"] || fm["meeting_url"] || fm["recording"]))
+                continue;
+            const startRaw = fm["start"] ?? fm["date"];
+            const start =
+                typeof startRaw === "string" ? new Date(startRaw) : null;
+            const status =
+                typeof fm["status"] === "string" ? fm["status"] : null;
+            const titleRaw = fm["title"];
+            const title =
+                typeof titleRaw === "string" && titleRaw
+                    ? titleRaw
+                    : f.basename;
+            byPath.set(f.path, f);
+            inputs.push({
+                path: f.path,
+                title,
+                start,
+                status,
+                hasRecording: recordingLinkTarget(fm["recording"]) !== "",
+            });
+        }
+
+        const rows = computeAttention(inputs, new Date());
+
+        const header = el.createDiv({ cls: "mc-attention-header" });
+        header.createSpan({ text: d.count(rows.length) });
+        const refresh = header.createEl("button", { text: d.refresh });
+        refresh.onclick = () => this.renderAttention(el);
+
+        if (rows.length === 0) {
+            el.createEl("p", { text: d.allClear, cls: "mc-attention-empty" });
+            return;
+        }
+
+        const table = el.createEl("table", { cls: "mc-attention" });
+        const head = table.createEl("thead").createEl("tr");
+        for (const h of [
+            d.colMeeting,
+            d.colDate,
+            d.colStatus,
+            d.colMissing,
+            d.colActions,
+        ]) {
+            head.createEl("th", { text: h });
+        }
+        const body = table.createEl("tbody");
+        const pad = (n: number): string => String(n).padStart(2, "0");
+        const fmtDate = (dt: Date): string =>
+            `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(
+                dt.getDate()
+            )} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+
+        for (const row of rows) {
+            const file = byPath.get(row.path);
+            const tr = body.createEl("tr");
+
+            const nameTd = tr.createEl("td");
+            const link = nameTd.createEl("a", {
+                text: row.title,
+                cls: "internal-link",
+            });
+            link.onclick = (e): void => {
+                e.preventDefault();
+                if (file) this.openFileInTab(file);
+            };
+
+            tr.createEl("td", { text: row.start ? fmtDate(row.start) : "—" });
+            tr.createEl("td", { text: row.status });
+
+            const missTd = tr.createEl("td");
+            for (const m of row.missing) {
+                missTd.createSpan({
+                    text: d.missing[m],
+                    cls: `mc-badge mc-badge-${m}`,
+                });
+            }
+
+            const actTd = tr.createEl("td", { cls: "mc-attention-actions" });
+            if (!file) continue;
+            const meeting = this.agendaMeetingFromNote(file);
+            const openBtn = actTd.createEl("button", { text: acts.openNote });
+            openBtn.onclick = (): void => this.openFileInTab(file);
+            if (meeting.recording) {
+                const trBtn = actTd.createEl("button", {
+                    text: acts.transcribe,
+                });
+                trBtn.onclick = (): void => void this.transcribeRecording(
+                    meeting
+                );
+            }
+            const enBtn = actTd.createEl("button", { text: acts.enrich });
+            enBtn.onclick = (): void => void this.enrichMeetingNote(file);
+        }
+    }
+
+    /** Opens a file in the active tab (used by dashboard row links/buttons). */
+    private openFileInTab(file: TFile): void {
+        void this.app.workspace.getLeaf(false).openFile(file);
     }
 
     /** Builds an AgendaMeeting view-model from a meeting note's frontmatter. */
@@ -714,7 +990,7 @@ export default class SystemRecordingPlugin extends Plugin {
         await this.app.workspace.getLeaf(false).openFile(m.recording);
     }
 
-    /** Opens the recording, then hands off to the AI Transcriber plugin if present. */
+    /** Transcribes the meeting's recording with the built-in engine. */
     private async transcribeRecording(m: AgendaMeeting): Promise<void> {
         if (!m.recording) {
             new Notice(t().agenda.notices.noRecording);
@@ -723,16 +999,34 @@ export default class SystemRecordingPlugin extends Plugin {
         await this.launchTranscriber(m.recording);
     }
 
+    /** Maps plugin settings onto the vendored transcription engine's config. */
+    private buildTranscribeConfig(): TranscribeConfig {
+        const s = this.settings;
+        return {
+            baseUrl: s.apiBaseUrl,
+            apiKey: s.apiKey,
+            // sttApiType selects the engine family (routing/chunking/timestamps);
+            // sttModel is the actual name sent on the wire (may be a gateway id).
+            model: s.sttApiType as TranscriptionModel,
+            modelOverride: s.sttModel,
+            chatModel: s.enrichModel,
+            language: s.sttLanguage || "auto",
+            vadMode: s.vadMode,
+            postProcessingEnabled: s.postProcessingEnabled,
+            dictionaryCorrectionEnabled: s.dictionaryCorrectionEnabled,
+            userDictionaries: parseDictionary(s.dictionary),
+            debugMode: false,
+        };
+    }
+
     /**
-     * Transcribes an audio file by driving the AI Transcriber plugin's engine
-     * directly (Option C: headless bridge — no modal, no cost dialog, no
-     * separate transcript file). The returned text is routed through the same
-     * insert+enrich path as the plugin's own completion event.
+     * Transcribes an audio file with the vendored engine (headless — no modal,
+     * no separate transcript file). The transcript text is routed through the
+     * same insert+enrich path used elsewhere.
      */
     private async launchTranscriber(recording: TFile): Promise<void> {
-        const engine = this.aiTranscriberEngine();
-        if (!engine) {
-            new Notice(t().agenda.notices.transcriberMissing);
+        if (!this.settings.apiBaseUrl || !this.settings.apiKey) {
+            new Notice(t().notices.transcribeNoEndpoint);
             return;
         }
         // Guard against overlapping runs (double-click, or auto-transcribe
@@ -744,9 +1038,11 @@ export default class SystemRecordingPlugin extends Plugin {
         this.transcribingPaths.add(recording.path);
         this.setActionStatus(t().statusBar.transcribing, "busy");
         try {
-            const result = await engine.transcribe(recording);
-            const text =
-                typeof result === "string" ? result : (result?.text ?? "");
+            const text = await transcribeAudio(
+                this.app,
+                recording,
+                this.buildTranscribeConfig()
+            );
             const trimmed = text.trim();
             if (!trimmed) {
                 new Notice(t().notices.transcribeEmpty);
@@ -770,49 +1066,17 @@ export default class SystemRecordingPlugin extends Plugin {
             }
         } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
-            new Notice(t().notices.transcribeError(msg));
+            // The engine throws the partial text (marker-prefixed) for a
+            // partial/failed run rather than returning it, so classify it.
+            if (isPartialTranscript(msg)) {
+                new Notice(t().notices.transcribePartial);
+            } else {
+                new Notice(t().notices.transcribeError(msg));
+            }
             this.setActionStatus(t().statusBar.transcribeFailed, "error");
         } finally {
             this.transcribingPaths.delete(recording.path);
         }
-    }
-
-    /**
-     * The AI Transcriber plugin's transcription engine, if the plugin is
-     * installed and enabled. This reaches into a non-public API shape; when we
-     * vendor the engine (Option A) this bridge goes away.
-     */
-    private aiTranscriberEngine(): {
-        transcribe(
-            file: TFile
-        ): Promise<string | { text: string; modelUsed?: string }>;
-    } | null {
-        const plugins = (
-            this.app as unknown as {
-                plugins?: { plugins?: Record<string, unknown> };
-            }
-        ).plugins?.plugins;
-        const tp = plugins?.["ai-transcriber"] as
-            | {
-                  transcriber?: {
-                      transcribe?: (
-                          file: TFile
-                      ) => Promise<
-                          string | { text: string; modelUsed?: string }
-                      >;
-                  };
-              }
-            | undefined;
-        const engine = tp?.transcriber;
-        // Guard against the plugin being present but not yet initialized, or a
-        // future refactor that changes this internal shape.
-        return engine && typeof engine.transcribe === "function"
-            ? (engine as {
-                  transcribe(
-                      file: TFile
-                  ): Promise<string | { text: string; modelUsed?: string }>;
-              })
-            : null;
     }
 
     private openMeetingLink(url: string): void {
@@ -910,6 +1174,7 @@ export default class SystemRecordingPlugin extends Plugin {
         this.currentRecordingPath = null;
         this.hideStatusBar();
         this.currentMeetingNotePath = null;
+        this.currentMeetingNote = null;
         this.currentRecordingEventId = null;
         this.agendaEvents.emit("changed", undefined);
     }
@@ -1069,8 +1334,8 @@ export default class SystemRecordingPlugin extends Plugin {
             new Notice(t().notices.enrichDisabled);
             return;
         }
-        const { enrichBaseUrl, enrichApiKey, enrichModel } = this.settings;
-        if (!enrichBaseUrl || !enrichApiKey || !enrichModel) {
+        const { apiBaseUrl, apiKey, enrichModel } = this.settings;
+        if (!apiBaseUrl || !apiKey || !enrichModel) {
             new Notice(t().notices.enrichNotConfigured);
             return;
         }
@@ -1111,8 +1376,8 @@ export default class SystemRecordingPlugin extends Plugin {
             new Notice(t().notices.enriching);
             this.setActionStatus(t().statusBar.enriching, "busy");
             const output = await chatComplete({
-                baseUrl: enrichBaseUrl,
-                apiKey: enrichApiKey,
+                baseUrl: apiBaseUrl,
+                apiKey: apiKey,
                 model: enrichModel,
                 system: ENRICH_SYSTEM_PROMPT,
                 user: fillPrompt(this.settings.enrichPrompt, ctx),
@@ -1293,13 +1558,18 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     private async attachRecording(fileName: string) {
-        const notePath = this.currentMeetingNotePath;
+        // Prefer the live TFile (survives a rename during recording); fall back
+        // to the path captured at start.
+        const noteRef = this.currentMeetingNote;
+        const notePath = noteRef?.path ?? this.currentMeetingNotePath;
         this.currentMeetingNotePath = null;
+        this.currentMeetingNote = null;
         this.currentRecordingEventId = null;
         this.currentRecordingPath = null;
         this.agendaEvents.emit("changed", undefined);
         if (notePath) {
-            const file = this.app.vault.getAbstractFileByPath(notePath);
+            const file =
+                noteRef ?? this.app.vault.getAbstractFileByPath(notePath);
             if (file instanceof TFile) {
                 // Qualify the link with the recording's folder (it's colocated
                 // with the note) so duplicate basenames elsewhere can't resolve

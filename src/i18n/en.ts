@@ -1,11 +1,11 @@
 // English locale.
 export const en = {
 	ribbon: {
-		toggleRecording: "Toggle recording",
+		toggleRecording: "Start/Stop on-demand meeting",
 		openAgenda: "Open meeting agenda",
 	},
 	commands: {
-		startRecording: "Start recording",
+		startRecording: "Start unplanned meeting",
 		stopRecording: "Stop recording",
 		authenticateCalendar: "Authenticate calendar",
 		toggleCalendarAutoRecording: "Toggle calendar auto-recording",
@@ -14,6 +14,10 @@ export const en = {
 		toggleAiNotes: "Toggle AI notes visibility",
 		cleanupRecordings: "Clean up old recordings",
 		createDashboard: "Create/update meetings dashboard",
+	},
+	adhoc: {
+		defaultTitle: "Meeting",
+		started: "Recording unplanned meeting — rename the note title if you like",
 	},
 	notices: {
 		autoRecordEnabled: "Calendar auto-recording enabled",
@@ -33,7 +37,7 @@ export const en = {
 		enrichDone: (note: string) => `Enriched ${note}`,
 		enrichError: (msg: string) => `Enrichment failed: ${msg}`,
 		enrichNotConfigured:
-			"Set the enrichment base URL, API key and model in settings first.",
+			"Set the AI endpoint (base URL + API key) and an enrichment model in settings first.",
 		enrichDisabled: "AI enrichment is disabled in settings.",
 		enrichInProgress: "This note is already being enriched…",
 		nothingToEnrich: "No notes or transcript to enrich in this note.",
@@ -53,6 +57,8 @@ export const en = {
 		transcribeInProgress: "This recording is already being transcribed…",
 		transcribeNoNote: (audio: string) =>
 			`Transcribed "${audio}" but found no meeting note to add it to.`,
+		transcribeNoEndpoint:
+			"Set the AI endpoint (base URL + API key) in settings before transcribing.",
 	},
 	statusBar: {
 		recording: (hms: string) => `Recording ${hms}`,
@@ -114,8 +120,26 @@ export const en = {
 		notices: {
 			linkCopied: "Meeting link copied",
 			noRecording: "No recording for this meeting yet",
-			transcriberMissing:
-				"AI Transcriber not found. Open the recording and run it manually.",
+		},
+		menuTitle: "Meeting Copilot",
+	},
+	dashboard: {
+		attention: {
+			allClear: "All meetings are complete. 🎉",
+			count: (n: number) =>
+				`${n} meeting${n === 1 ? "" : "s"} need attention`,
+			refresh: "Refresh",
+			colMeeting: "Meeting",
+			colDate: "Date",
+			colStatus: "Status",
+			colMissing: "Missing",
+			colActions: "Actions",
+			missing: {
+				date: "date",
+				recording: "recording",
+				transcript: "transcript",
+				summary: "summary",
+			},
 		},
 	},
 	settings: {
@@ -143,11 +167,11 @@ export const en = {
 		},
 		insertTranscript: {
 			name: "Insert transcript into meeting note",
-			desc: "When AI Transcriber finishes, write the transcript into the matching meeting note's ## Transcript section and mark it transcribed.",
+			desc: "When transcription finishes, write the transcript into the matching meeting note's collapsible transcript section and mark it transcribed.",
 		},
 		autoTranscribe: {
 			name: "Auto-transcribe when recording stops",
-			desc: "When a meeting recording finishes, transcribe it automatically (no dialog) and add the transcript to the meeting note. Requires the AI Transcriber plugin with an API key configured.",
+			desc: "When a meeting recording finishes, transcribe it automatically (no dialog) and add the transcript to the meeting note. Requires the shared AI endpoint (base URL + API key) above.",
 		},
 		retentionDays: {
 			name: "Recording retention (days)",
@@ -198,18 +222,56 @@ export const en = {
 			name: "Agenda look-back (days)",
 			desc: "How many past days you can navigate back to in the agenda (0–30).",
 		},
+		endpointHeading: "AI endpoint",
+		apiBaseUrl: {
+			name: "API base URL",
+			desc: "OpenAI-compatible endpoint (OpenAI, Azure, a LiteLLM proxy, …) used for transcription and enrichment. The /audio/transcriptions and /chat/completions paths are appended.",
+		},
+		apiKey: {
+			name: "API key",
+			desc: "Sent as a Bearer token for transcription and enrichment. Stored in this vault's plugin data. Use 'Test connection' to verify it and load the available models.",
+		},
+		transcriptionHeading: "Transcription",
+		sttModel: {
+			name: "Transcription model",
+			desc: "Model sent to the endpoint. Run 'Test connection' above to load the models your endpoint exposes, then pick one (or type a gateway deployment name such as llm-gateway/whisper).",
+		},
+		sttApiType: {
+			name: "Transcription API",
+			desc: "Which speech-to-text API the model above speaks. Auto-detected from the model name; override it if your gateway renames models. Controls request shape, chunking, and word timestamps.",
+			gpt4o: "GPT-4o (most accurate)",
+			gpt4oMini: "GPT-4o mini (lower cost)",
+			whisper: "Whisper",
+			whisperTs: "Whisper (word timestamps)",
+		},
+		sttLanguage: {
+			name: "Language",
+			desc: "ISO code (e.g. en, ja) or 'auto' to detect.",
+		},
+		vadMode: {
+			name: "Voice activity detection",
+			desc: "Server-side VAD lets the API split on speech; disabled uses fixed-size chunks.",
+			server: "Server-side (recommended)",
+			disabled: "Disabled",
+		},
+		dictionaryCorrection: {
+			name: "Custom dictionary correction",
+			desc: "Apply the rules below to fix misheard names and terms after transcription.",
+		},
+		postProcessing: {
+			name: "GPT-assisted dictionary correction",
+			desc: "Use the model (instead of plain find-and-replace) to apply the dictionary more intelligently. Requires 'Custom dictionary correction' above.",
+		},
+		dictionary: {
+			name: "Dictionary",
+			desc: "One rule per line: misheard => correct. Example: elastic search => Elasticsearch",
+			placeholder: "elastic search => Elasticsearch\nkubernetis => Kubernetes",
+		},
+		recordingHeading: "Recording & notes",
 		enrichHeading: "AI enrichment",
 		enableEnrichment: {
 			name: "Enable AI enrichment",
 			desc: "Allow generating an AI notes summary from your notes and the transcript.",
-		},
-		enrichBaseUrl: {
-			name: "API base URL",
-			desc: "OpenAI-compatible endpoint (OpenAI, Azure, a LiteLLM proxy, Ollama, …). The /chat/completions path is appended.",
-		},
-		enrichApiKey: {
-			name: "API key",
-			desc: "Sent as a Bearer token. Stored in this vault's plugin data.",
 		},
 		enrichModel: {
 			name: "Model",
@@ -218,7 +280,7 @@ export const en = {
 		testConnection: {
 			button: "Test connection",
 			testing: "Testing…",
-			noBaseUrl: "Set the enrichment base URL first.",
+			noBaseUrl: "Set the API base URL first.",
 			success: (n: number) =>
 				`Connected. Loaded ${n} model${n === 1 ? "" : "s"}.`,
 			empty: "Connected, but the endpoint returned no models.",
