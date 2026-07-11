@@ -77,6 +77,13 @@ export const en = {
 		transcribeNoEndpoint:
 			"Set the AI endpoint (base URL + API key) in settings before transcribing.",
 	},
+	transcript: {
+		// Prepended to a speaker-separated transcript. Tells the enrichment model
+		// who "Me"/"Them" are (so it can attribute action items) and reads fine to
+		// a human skimming the note.
+		speakerBanner:
+			'[Speaker labels: "Me" is the note\'s author; "Them" are the other attendees.]',
+	},
 	statusBar: {
 		recording: (hms: string) => `Recording ${hms}`,
 		enriching: "Enriching notes…",

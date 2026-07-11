@@ -49,8 +49,13 @@ import { isPartialTranscript } from "./transcribe/partial";
 import {
     initTranscribeEngine,
     transcribeAudio,
+    transcribeDiarized,
     type TranscribeConfig,
 } from "./transcribe/TranscriptionService";
+import { canSeparateSpeakers } from "./transcribe/sttModel";
+import { probeKey } from "./transcribe/probe";
+import { parseSpeechWindows, sidecarPathsFor } from "./transcribe/sidecar";
+import type { SpeechWindows } from "./transcribe/diarize";
 import { parseDictionary } from "./transcribe/dictionary";
 import type { TranscriptionModel } from "./transcribe/vendor/ApiSettings";
 import {
@@ -508,8 +513,11 @@ export default class SystemRecordingPlugin extends Plugin {
                 adapter instanceof FileSystemAdapter ? adapter.getBasePath() : "";
             const absolutePath = path.join(vaultBasePath, relativePath);
 
-            // Start recording
-            this.recorder.start(binaryPath, absolutePath);
+            // Start recording. --split writes the per-speaker sidecars only when
+            // separation is actually usable, so we don't pay for them otherwise.
+            this.recorder.start(binaryPath, absolutePath, {
+                split: this.shouldSeparateSpeakers(),
+            });
             this.recordingStartTime = Date.now();
             this.startDurationTimer();
             this.updateRibbonIcon(true);
@@ -1142,6 +1150,19 @@ export default class SystemRecordingPlugin extends Plugin {
         await this.launchTranscriber(m.recording);
     }
 
+    /**
+     * True when me-vs-them speaker separation should run: the user enabled it
+     * and the current endpoint + model has been probed and confirmed to return
+     * timestamps. Gates both the split at record time and the diarized pass at
+     * transcribe time.
+     */
+    private shouldSeparateSpeakers(): boolean {
+        return canSeparateSpeakers(
+            this.settings,
+            probeKey(this.settings.apiBaseUrl, this.settings.sttModel)
+        );
+    }
+
     /** Maps plugin settings onto the vendored transcription engine's config. */
     private buildTranscribeConfig(): TranscribeConfig {
         const s = this.settings;
@@ -1181,11 +1202,65 @@ export default class SystemRecordingPlugin extends Plugin {
         this.transcribingPaths.add(recording.path);
         this.setActionStatus(t().statusBar.transcribing, "busy");
         try {
-            const text = await transcribeAudio(
-                this.app,
-                recording,
-                this.buildTranscribeConfig()
-            );
+            // Discover the split sidecars by naming convention so separation
+            // works for both the auto-transcribe after stop and a manual re-run
+            // on an old recording. Any sidecar may be absent (write failed, or
+            // the recording predates the feature); the mixed wav always exists.
+            const sidecars = sidecarPathsFor(recording.path);
+            const meFile = this.app.vault.getAbstractFileByPath(sidecars.me);
+            const themFile = this.app.vault.getAbstractFileByPath(sidecars.them);
+
+            let text: string;
+            let diarized = false;
+            let speechFile: TFile | null = null;
+            if (
+                this.shouldSeparateSpeakers() &&
+                meFile instanceof TFile &&
+                themFile instanceof TFile
+            ) {
+                // speech.json is optional: a missing or malformed sidecar yields
+                // undefined windows, and the merge then keeps every segment.
+                let windows: SpeechWindows | undefined;
+                const speech = this.app.vault.getAbstractFileByPath(
+                    sidecars.speech
+                );
+                if (speech instanceof TFile) {
+                    speechFile = speech;
+                    windows = parseSpeechWindows(
+                        await this.app.vault.read(speech)
+                    );
+                }
+                const result = await transcribeDiarized(
+                    this.app,
+                    meFile,
+                    themFile,
+                    this.buildTranscribeConfig(),
+                    windows
+                );
+                if (result.diarized) {
+                    text = result.text;
+                    diarized = true;
+                } else {
+                    // The endpoint didn't return timestamps this pass (a rare
+                    // misconfiguration slipping past the probe); fall back to the
+                    // mixed file. One extra pass is the price of the fallback.
+                    console.warn(
+                        "[Meeting Copilot] diarization returned no segments; using mixed audio"
+                    );
+                    text = await transcribeAudio(
+                        this.app,
+                        recording,
+                        this.buildTranscribeConfig()
+                    );
+                }
+            } else {
+                text = await transcribeAudio(
+                    this.app,
+                    recording,
+                    this.buildTranscribeConfig()
+                );
+            }
+
             const trimmed = text.trim();
             if (!trimmed) {
                 new Notice(t().notices.transcribeEmpty);
@@ -1199,13 +1274,32 @@ export default class SystemRecordingPlugin extends Plugin {
                 this.setActionStatus(t().statusBar.transcribeFailed, "error");
                 return;
             }
+            // Tell the reader (and the enrichment model) who "Me"/"Them" are,
+            // so owner attribution of action items has something to go on.
+            const finalText = diarized
+                ? `${t().transcript.speakerBanner}\n\n${text}`
+                : text;
             const noteFound = await this.handleTranscriptionCompleted({
                 audioFile: recording,
-                transcription: text,
+                transcription: finalText,
                 file: null,
             });
             if (!noteFound) {
                 new Notice(t().notices.transcribeNoNote(recording.basename));
+            }
+            // Retention only sweeps audio extensions, so the speech.json would
+            // linger forever; drop it once its transcript is in. Kept on
+            // failure/fallback so a retry can still filter. The .me/.them wavs
+            // are wavs and are already swept.
+            if (diarized && speechFile) {
+                try {
+                    await this.app.fileManager.trashFile(speechFile);
+                } catch (e) {
+                    console.warn(
+                        "[Meeting Copilot] failed to delete speech.json",
+                        e
+                    );
+                }
             }
         } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
