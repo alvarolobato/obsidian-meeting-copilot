@@ -345,17 +345,10 @@ export default class SystemRecordingPlugin extends Plugin {
         delete bag.enrichBaseUrl;
         delete bag.enrichApiKey;
         delete bag.sttModelId;
+        delete bag.vadMode;
         // Guard against corrupt/hand-edited data selecting an unknown engine
         // family, which would silently fall through to the GPT-4o path.
         this.settings.sttApiType = clampApiType(this.settings.sttApiType);
-        // We ship no local-VAD WASM, so only server/disabled are valid; keep
-        // hand-edited data from sending the engine down the local VAD path.
-        if (
-            this.settings.vadMode !== "server" &&
-            this.settings.vadMode !== "disabled"
-        ) {
-            this.settings.vadMode = DEFAULT_SETTINGS.vadMode;
-        }
         // Keep the OAuth refresh token and client secret out of the synced/
         // committed data.json: load them from per-vault localStorage instead,
         // migrating any legacy plaintext copies that still live in data.json.
@@ -367,8 +360,11 @@ export default class SystemRecordingPlugin extends Plugin {
                 ? raw.googleClientSecret
                 : "";
         this.settings.googleTokens = localTokens ?? legacyTokens;
+        // localStorage is authoritative: use its value even when it's an empty
+        // string (an intentionally cleared secret) and only fall back to the
+        // legacy data.json copy when localStorage has nothing.
         this.settings.googleClientSecret =
-            (typeof localSecret === "string" ? localSecret : "") || legacySecret;
+            typeof localSecret === "string" ? localSecret : legacySecret;
         // If data.json still carries either secret (whether or not localStorage
         // already has a copy), re-persist so it gets moved into localStorage and
         // stripped from the synced file — don't leave a stale plaintext copy behind.
@@ -381,21 +377,22 @@ export default class SystemRecordingPlugin extends Plugin {
 
     async saveSettings() {
         // Sensitive fields live in per-vault localStorage, never in the synced/
-        // committed data.json. Only strip them from data.json once we've
-        // *verified* they were durably written to localStorage — otherwise (older
-        // Obsidian without the API, or a write failure) keep them in data.json so
-        // we never silently lose the user's calendar credentials.
-        const stored =
-            this.saveLocal("googleTokens", this.settings.googleTokens) &&
-            this.saveLocal(
-                "googleClientSecret",
-                this.settings.googleClientSecret || null
-            );
+        // committed data.json. Strip a field from data.json only once we've
+        // *verified* it was durably written to localStorage — otherwise (older
+        // Obsidian without the API, or a write failure) keep it in data.json so
+        // we never silently lose the user's calendar credentials. Persist each
+        // field independently so a failure on one doesn't skip the other.
+        const tokensStored = this.saveLocal(
+            "googleTokens",
+            this.settings.googleTokens
+        );
+        const secretStored = this.saveLocal(
+            "googleClientSecret",
+            this.settings.googleClientSecret || null
+        );
         const persisted: Record<string, unknown> = { ...this.settings };
-        if (stored) {
-            delete persisted.googleTokens;
-            delete persisted.googleClientSecret;
-        }
+        if (tokensStored) delete persisted.googleTokens;
+        if (secretStored) delete persisted.googleClientSecret;
         await this.saveData(persisted);
     }
 
@@ -1282,7 +1279,6 @@ export default class SystemRecordingPlugin extends Plugin {
             modelOverride: s.sttModel,
             chatModel: s.enrichModel,
             language: s.sttLanguage || "auto",
-            vadMode: s.vadMode,
             postProcessingEnabled: s.postProcessingEnabled,
             dictionaryCorrectionEnabled: s.dictionaryCorrectionEnabled,
             userDictionaries: parseDictionary(s.dictionary),
