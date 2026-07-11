@@ -369,12 +369,12 @@ export default class SystemRecordingPlugin extends Plugin {
         this.settings.googleTokens = localTokens ?? legacyTokens;
         this.settings.googleClientSecret =
             (typeof localSecret === "string" ? localSecret : "") || legacySecret;
-        const hadLegacy =
-            (legacyTokens !== null && localTokens === null) ||
-            (legacySecret !== "" && !localSecret);
-        // Re-persist to move secrets into localStorage and rewrite data.json
-        // without them (also strips the retired keys handled above).
-        if (hadLegacy) {
+        // If data.json still carries either secret (whether or not localStorage
+        // already has a copy), re-persist so it gets moved into localStorage and
+        // stripped from the synced file — don't leave a stale plaintext copy behind.
+        const legacyInDataJson =
+            legacyTokens !== null || legacySecret !== "";
+        if (legacyInDataJson) {
             await this.saveSettings();
         }
     }

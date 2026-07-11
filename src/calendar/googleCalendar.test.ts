@@ -61,13 +61,16 @@ describe("collectPages", () => {
 		expect(seenTokens).toEqual([undefined, "a", "b"]);
 	});
 
-	it("stops at maxPages to guard against a looping token", async () => {
+	it("stops at maxPages to guard against a looping token, and warns", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		const fetchPage = vi
 			.fn()
 			.mockResolvedValue({ items: [0], nextPageToken: "loops-forever" });
 		const all = await collectPages<number>(fetchPage, 3);
 		expect(all).toHaveLength(3);
 		expect(fetchPage).toHaveBeenCalledTimes(3);
+		expect(warn).toHaveBeenCalledOnce();
+		warn.mockRestore();
 	});
 
 	it("treats an empty-string token as the end", async () => {
