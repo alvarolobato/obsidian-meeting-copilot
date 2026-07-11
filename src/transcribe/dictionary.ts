@@ -15,15 +15,12 @@ function empty(): LanguageDictionaries {
  * Each non-empty, non-comment line is `misheard => correct`. Multiple source
  * spellings can share one target with `a | b => correct`.
  *
- * The engine picks a dictionary by the transcription language. Rules here are
- * language-agnostic name/term fixes, so they're mirrored into every bucket.
- * The auto-language path reads only the `en` bucket (canonical) to avoid
- * duplicating rules; all buckets are identical, so any one is sufficient.
+ * Rules are language-agnostic name/term fixes stored in the `en` bucket.
+ * The transcription controller always reads `en` regardless of language.
  */
 export function parseDictionary(raw: string): LanguageDictionaries {
 	const dict = empty();
 	if (!raw) return dict;
-	const buckets = [dict.en, dict.ja, dict.zh, dict.ko];
 	for (const line of raw.split(/\r?\n/)) {
 		const trimmed = line.trim();
 		if (!trimmed || trimmed.startsWith("#")) continue;
@@ -36,9 +33,7 @@ export function parseDictionary(raw: string): LanguageDictionaries {
 			.map((s) => s.trim())
 			.filter((s) => s.length > 0);
 		if (from.length === 0 || !to) continue;
-		for (const bucket of buckets) {
-			bucket.definiteCorrections.push({ from: [...from], to });
-		}
+		dict.en.definiteCorrections.push({ from: [...from], to });
 	}
 	return dict;
 }

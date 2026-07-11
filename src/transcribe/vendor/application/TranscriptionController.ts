@@ -492,42 +492,20 @@ export class TranscriptionController {
 		// Get current language setting
 			const currentLanguage = this.settings.language;
 
-		if (currentLanguage === 'ja' || currentLanguage === 'en' || currentLanguage === 'zh' || currentLanguage === 'ko') {
-			// For a known language, use that language's bucket.
-			const userDictionary = this.settings.userDictionaries[currentLanguage as 'ja' | 'en' | 'zh' | 'ko'];
-			const entries = this.convertDictionaryToEntries(userDictionary);
+		// Rules are stored in the 'en' bucket; language-specific buckets are unused.
+		const userDictionary = this.settings.userDictionaries.en;
+		const entries = this.convertDictionaryToEntries(userDictionary);
 
-			if (entries.length > 0) {
-				const langDict = {
-					name: `user-dictionary-${currentLanguage}`,
-					language: currentLanguage,
-					enabled: true,
-					useGPTCorrection: useGPTCorrection,
-					definiteCorrections: userDictionary.definiteCorrections,
-					contextualCorrections: userDictionary.contextualCorrections ?? [],
-					entries: entries
-				};
-				corrector.addDictionary(langDict);
-			}
-		} else {
-			// 'auto' and unknown ISO codes (e.g. 'es', 'de', 'fr') both fall back
-			// to the 'en' bucket. parseDictionary mirrors every rule into all buckets,
-			// so en is canonical and sufficient for any language.
-			const userDictionary = this.settings.userDictionaries.en;
-			const entries = this.convertDictionaryToEntries(userDictionary);
-
-			if (entries.length > 0) {
-				const langDict = {
-					name: 'user-dictionary-multi',
-					language: 'multi',
-					enabled: true,
-					useGPTCorrection: useGPTCorrection,
-					definiteCorrections: userDictionary.definiteCorrections,
-					contextualCorrections: userDictionary.contextualCorrections ?? [],
-					entries: entries
-				};
-				corrector.addDictionary(langDict);
-			}
+		if (entries.length > 0) {
+			corrector.addDictionary({
+				name: 'user-dictionary',
+				language: currentLanguage === 'auto' ? 'multi' : currentLanguage,
+				enabled: true,
+				useGPTCorrection: useGPTCorrection,
+				definiteCorrections: userDictionary.definiteCorrections,
+				contextualCorrections: userDictionary.contextualCorrections ?? [],
+				entries: entries
+			});
 		}
 
 		return corrector;
