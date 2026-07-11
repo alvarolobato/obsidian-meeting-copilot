@@ -73,12 +73,17 @@ type ControllerResult =
  * One pass through the vendored controller. Sets the process-global endpoint
  * seam and builds the vendored settings from our config. This does NOT enter
  * the serial queue itself; callers own the queueing (see the note above).
+ *
+ * vadMode is not part of TranscribeConfig (the setting was retired; normal
+ * transcription always uses server VAD), but the diarized passes must run
+ * with VAD off, so it's a parameter here rather than a config field.
  */
 async function runController(
 	app: App,
 	file: TFile,
 	cfg: TranscribeConfig,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	vadMode: APITranscriptionSettings["vadMode"] = "server"
 ): Promise<ControllerResult> {
 	setTranscribeBaseUrl(cfg.baseUrl);
 	setTranscribeModelOverride(cfg.modelOverride);
@@ -88,7 +93,7 @@ async function runController(
 		openaiApiKey: cfg.apiKey ? `PLAIN::${cfg.apiKey}` : "",
 		model: cfg.model,
 		language: cfg.language,
-		vadMode: "server",
+		vadMode,
 		postProcessingEnabled: cfg.postProcessingEnabled,
 		dictionaryCorrectionEnabled: cfg.dictionaryCorrectionEnabled,
 		userDictionaries: cfg.userDictionaries,
@@ -196,10 +201,8 @@ export function transcribeDiarized(
 		// silence, the room audio isn't), shifting their timestamps out of sync
 		// and shearing the shared timeline the merge relies on. We want the raw,
 		// aligned clocks.
-		const diarCfg: TranscribeConfig = { ...cfg, vadMode: "disabled" };
-
 		try {
-			const meResult = await runController(app, meFile, diarCfg, signal);
+			const meResult = await runController(app, meFile, cfg, signal, "disabled");
 			if (signal?.aborted) {
 				throw new DOMException("Transcription aborted", "AbortError");
 			}
@@ -213,7 +216,7 @@ export function transcribeDiarized(
 				return { text: "", diarized: false };
 			}
 
-			const themResult = await runController(app, themFile, diarCfg, signal);
+			const themResult = await runController(app, themFile, cfg, signal, "disabled");
 			const themSegments = extractSegments(themResult);
 			if (isCapabilityMiss(themSegments, resultText(themResult))) {
 				return { text: "", diarized: false };
