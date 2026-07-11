@@ -7,6 +7,7 @@ import {
 } from "./notes/meetingNote";
 import { DEFAULT_ENRICH_PROMPT } from "./enrich/prompt";
 import { listModels } from "./enrich/models";
+import { inferSttApiType, STT_MODELS, type SttApiType } from "./transcribe/sttModel";
 import { t } from "./i18n";
 
 export interface SystemRecordingSettings {
@@ -32,9 +33,10 @@ export interface SystemRecordingSettings {
 	apiBaseUrl: string;
 	apiKey: string;
 	// Transcription (vendored engine).
+	/** Model id sent to the endpoint (e.g. gpt-4o-transcribe, or a gateway name like llm-gateway/whisper). */
 	sttModel: string;
-	/** Custom deployment name to send instead of the canonical model id (e.g. LiteLLM `llm-gateway/whisper`). */
-	sttModelId: string;
+	/** Engine family the model speaks — drives routing/chunking and word timestamps. */
+	sttApiType: SttApiType;
 	sttLanguage: string;
 	vadMode: "server" | "disabled";
 	postProcessingEnabled: boolean;
@@ -49,13 +51,7 @@ export interface SystemRecordingSettings {
 	hideAiNotes: boolean;
 }
 
-/** Transcription models the vendored engine understands (routes Whisper vs GPT-4o). */
-export const STT_MODELS = [
-	"gpt-4o-transcribe",
-	"gpt-4o-mini-transcribe",
-	"whisper-1",
-	"whisper-1-ts",
-] as const;
+export { STT_MODELS, inferSttApiType, type SttApiType };
 
 export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	recordingFolder: "recordings",
@@ -79,7 +75,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	apiBaseUrl: "https://api.openai.com/v1",
 	apiKey: "",
 	sttModel: "gpt-4o-transcribe",
-	sttModelId: "",
+	sttApiType: "gpt-4o-transcribe",
 	sttLanguage: "auto",
 	vadMode: "server",
 	postProcessingEnabled: false,
@@ -94,8 +90,8 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 
 export class SystemRecordingSettingTab extends PluginSettingTab {
     plugin: SystemRecordingPlugin;
-    /** Model ids fetched from the endpoint (populated by "Test connection"). */
-    private enrichModels: string[] = [];
+    /** Model ids fetched from the endpoint (populated by "Test connection"), shared by transcription + enrichment. */
+    private models: string[] = [];
 
     constructor(app: App, plugin: SystemRecordingPlugin) {
         super(app, plugin);
@@ -246,7 +242,8 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					});
 			});
 
-		// ---- AI endpoint (shared by transcription + enrichment) ----
+		// ---- AI ----
+		// One endpoint + key is used for both transcription and enrichment.
 		new Setting(containerEl).setName(s.settings.endpointHeading).setHeading();
 
 		new Setting(containerEl)
@@ -273,38 +270,91 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 						this.plugin.settings.apiKey = value.trim();
 						await this.plugin.saveSettings();
 					});
-			});
+			})
+			.addButton((button) =>
+				button
+					.setButtonText(s.settings.testConnection.button)
+					.onClick(async () => {
+						const { apiBaseUrl, apiKey } = this.plugin.settings;
+						if (!apiBaseUrl) {
+							new Notice(s.settings.testConnection.noBaseUrl);
+							return;
+						}
+						button.setButtonText(s.settings.testConnection.testing);
+						button.setDisabled(true);
+						try {
+							this.models = await listModels(apiBaseUrl, apiKey);
+							new Notice(
+								this.models.length === 0
+									? s.settings.testConnection.empty
+									: s.settings.testConnection.success(
+											this.models.length
+										)
+							);
+							// Re-render so both model dropdowns pick up the list.
+							this.display();
+						} catch (e) {
+							new Notice(
+								s.settings.testConnection.failure(
+									e instanceof Error ? e.message : String(e)
+								)
+							);
+							button.setButtonText(
+								s.settings.testConnection.button
+							);
+							button.setDisabled(false);
+						}
+					})
+			);
 
 		// ---- Transcription ----
 		new Setting(containerEl)
 			.setName(s.settings.transcriptionHeading)
 			.setHeading();
 
+		// Model id sent on the wire (dropdown once models are loaded, else free text).
+		this.addModelPicker(
+			new Setting(containerEl)
+				.setName(s.settings.sttModel.name)
+				.setDesc(s.settings.sttModel.desc),
+			this.plugin.settings.sttModel,
+			async (value) => {
+				this.plugin.settings.sttModel = value;
+				// Keep the engine family in sync with the picked model.
+				this.plugin.settings.sttApiType = inferSttApiType(value);
+				await this.plugin.saveSettings();
+				this.display();
+			}
+		);
+
 		new Setting(containerEl)
-			.setName(s.settings.sttModel.name)
-			.setDesc(s.settings.sttModel.desc)
+			.setName(s.settings.sttApiType.name)
+			.setDesc(s.settings.sttApiType.desc)
 			.addDropdown((dd) => {
-				for (const m of STT_MODELS) dd.addOption(m, m);
-				dd.setValue(this.plugin.settings.sttModel).onChange(
+				dd.addOption(
+					"gpt-4o-transcribe",
+					s.settings.sttApiType.gpt4o
+				);
+				dd.addOption(
+					"gpt-4o-mini-transcribe",
+					s.settings.sttApiType.gpt4oMini
+				);
+				dd.addOption("whisper-1", s.settings.sttApiType.whisper);
+				dd.addOption(
+					"whisper-1-ts",
+					s.settings.sttApiType.whisperTs
+				);
+				dd.setValue(this.plugin.settings.sttApiType).onChange(
 					async (value) => {
-						this.plugin.settings.sttModel = value;
+						this.plugin.settings.sttApiType = STT_MODELS.includes(
+							value as SttApiType
+						)
+							? (value as SttApiType)
+							: "gpt-4o-transcribe";
 						await this.plugin.saveSettings();
 					}
 				);
 			});
-
-		new Setting(containerEl)
-			.setName(s.settings.sttModelId.name)
-			.setDesc(s.settings.sttModelId.desc)
-			.addText((text) =>
-				text
-					.setPlaceholder(s.settings.sttModelId.placeholder)
-					.setValue(this.plugin.settings.sttModelId)
-					.onChange(async (value) => {
-						this.plugin.settings.sttModelId = value.trim();
-						await this.plugin.saveSettings();
-					})
-			);
 
 		new Setting(containerEl)
 			.setName(s.settings.sttLanguage.name)
@@ -413,7 +463,16 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					})
 			);
 
-		this.renderEnrichModelSetting(containerEl);
+		this.addModelPicker(
+			new Setting(containerEl)
+				.setName(s.settings.enrichModel.name)
+				.setDesc(s.settings.enrichModel.desc),
+			this.plugin.settings.enrichModel,
+			async (value) => {
+				this.plugin.settings.enrichModel = value;
+				await this.plugin.saveSettings();
+			}
+		);
 
 		new Setting(containerEl)
 			.setName(s.settings.enrichOnTranscribe.name)
@@ -543,75 +602,35 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
     }
 
     /**
-     * Model picker for enrichment. Shows a dropdown once models have been
-     * fetched from the endpoint, otherwise a free-text field so the user can
-     * type a model id even while offline. A "Test connection" button doubles as
-     * "load models".
+     * Model picker used by both transcription and enrichment. Shows a dropdown
+     * of the models fetched from the endpoint (via "Test connection"), keeping
+     * the current value selectable even if the endpoint didn't list it. Falls
+     * back to a free-text field when no models have been loaded yet so the user
+     * can still type a model id offline.
      */
-    private renderEnrichModelSetting(containerEl: HTMLElement): void {
-        const s = t();
-        const setting = new Setting(containerEl)
-            .setName(s.settings.enrichModel.name)
-            .setDesc(s.settings.enrichModel.desc);
-
-        const current = this.plugin.settings.enrichModel;
-        if (this.enrichModels.length > 0) {
+    private addModelPicker(
+        setting: Setting,
+        current: string,
+        onChange: (value: string) => Promise<void>
+    ): void {
+        if (this.models.length > 0) {
             const options: Record<string, string> = {};
-            for (const m of this.enrichModels) options[m] = m;
-            // Keep the current value selectable even if the endpoint didn't list it.
+            for (const m of this.models) options[m] = m;
             if (current && !options[current]) options[current] = current;
             setting.addDropdown((dd) =>
                 dd
                     .addOptions(options)
                     .setValue(current)
                     .onChange(async (value) => {
-                        this.plugin.settings.enrichModel = value;
-                        await this.plugin.saveSettings();
+                        await onChange(value);
                     })
             );
         } else {
             setting.addText((text) =>
                 text.setValue(current).onChange(async (value) => {
-                    this.plugin.settings.enrichModel = value.trim();
-                    await this.plugin.saveSettings();
+                    await onChange(value.trim());
                 })
             );
         }
-
-        setting.addButton((button) =>
-            button
-                .setButtonText(s.settings.testConnection.button)
-                .onClick(async () => {
-                    const { apiBaseUrl, apiKey } = this.plugin.settings;
-                    if (!apiBaseUrl) {
-                        new Notice(s.settings.testConnection.noBaseUrl);
-                        return;
-                    }
-                    button.setButtonText(s.settings.testConnection.testing);
-                    button.setDisabled(true);
-                    try {
-                        this.enrichModels = await listModels(
-                            apiBaseUrl,
-                            apiKey
-                        );
-                        new Notice(
-                            this.enrichModels.length === 0
-                                ? s.settings.testConnection.empty
-                                : s.settings.testConnection.success(
-                                      this.enrichModels.length
-                                  )
-                        );
-                        this.display();
-                    } catch (e) {
-                        new Notice(
-                            s.settings.testConnection.failure(
-                                e instanceof Error ? e.message : String(e)
-                            )
-                        );
-                        button.setButtonText(s.settings.testConnection.button);
-                        button.setDisabled(false);
-                    }
-                })
-        );
     }
 }

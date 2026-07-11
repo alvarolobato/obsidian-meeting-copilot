@@ -198,24 +198,27 @@ export const en = {
 			name: "Agenda look-back (days)",
 			desc: "How many past days you can navigate back to in the agenda (0–30).",
 		},
-		endpointHeading: "AI endpoint (shared)",
+		endpointHeading: "AI endpoint",
 		apiBaseUrl: {
 			name: "API base URL",
-			desc: "OpenAI-compatible endpoint (OpenAI, Azure, a LiteLLM proxy, …) used for BOTH transcription and enrichment. The /audio/transcriptions and /chat/completions paths are appended.",
+			desc: "OpenAI-compatible endpoint (OpenAI, Azure, a LiteLLM proxy, …) used for transcription and enrichment. The /audio/transcriptions and /chat/completions paths are appended.",
 		},
 		apiKey: {
 			name: "API key",
-			desc: "Sent as a Bearer token for transcription and enrichment. Stored in this vault's plugin data.",
+			desc: "Sent as a Bearer token for transcription and enrichment. Stored in this vault's plugin data. Use 'Test connection' to verify it and load the available models.",
 		},
 		transcriptionHeading: "Transcription",
 		sttModel: {
 			name: "Transcription model",
-			desc: "Speech-to-text family. gpt-4o-transcribe is most accurate; whisper-1-ts adds word timestamps. This also selects the API shape (Whisper vs GPT-4o).",
+			desc: "Model sent to the endpoint. Run 'Test connection' above to load the models your endpoint exposes, then pick one (or type a gateway deployment name such as llm-gateway/whisper).",
 		},
-		sttModelId: {
-			name: "Custom model ID",
-			desc: "Optional. The exact deployment name to send if your gateway renames models (e.g. a LiteLLM proxy). Leave blank to use the model above.",
-			placeholder: "llm-gateway/whisper",
+		sttApiType: {
+			name: "Transcription API",
+			desc: "Which speech-to-text API the model above speaks. Auto-detected from the model name; override it if your gateway renames models. Controls request shape, chunking, and word timestamps.",
+			gpt4o: "GPT-4o (most accurate)",
+			gpt4oMini: "GPT-4o mini (lower cost)",
+			whisper: "Whisper",
+			whisperTs: "Whisper (word timestamps)",
 		},
 		sttLanguage: {
 			name: "Language",

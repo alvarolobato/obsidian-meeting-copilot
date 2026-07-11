@@ -1,7 +1,9 @@
 import { FileSystemAdapter, MarkdownView, Menu, normalizePath, Notice, Platform, Plugin, setIcon, TFile } from "obsidian";
 import {
     DEFAULT_SETTINGS,
+    inferSttApiType,
     STT_MODELS,
+    SttApiType,
     SystemRecordingSettings,
     SystemRecordingSettingTab,
 } from "./settings";
@@ -256,6 +258,8 @@ export default class SystemRecordingPlugin extends Plugin {
             | (Partial<SystemRecordingSettings> & {
                   enrichBaseUrl?: string;
                   enrichApiKey?: string;
+                  /** Retired: canonical family used to live in sttModel + wire id in sttModelId. */
+                  sttModelId?: string;
               })
             | null;
         this.settings = Object.assign({}, DEFAULT_SETTINGS, raw ?? {});
@@ -276,15 +280,32 @@ export default class SystemRecordingPlugin extends Plugin {
         if (legacyKey && !this.settings.apiKey) {
             this.settings.apiKey = legacyKey;
         }
+        // Clamp a value to a valid engine family, inferring one when the value
+        // is a free-form wire id (e.g. a gateway deployment name).
+        const clampApiType = (m: string): SttApiType =>
+            (STT_MODELS as readonly string[]).includes(m)
+                ? (m as SttApiType)
+                : inferSttApiType(m);
+        // Migrate the old split (sttModel = canonical family, sttModelId = wire id)
+        // into the new model: sttModel is the wire id, sttApiType is the family.
+        const legacyModelId = raw?.sttModelId?.trim();
+        if (legacyModelId) {
+            this.settings.sttApiType = clampApiType(
+                String(raw?.sttModel ?? DEFAULT_SETTINGS.sttModel)
+            );
+            this.settings.sttModel = legacyModelId;
+        } else if (raw?.sttApiType === undefined) {
+            // Pre-apiType data: derive the family from the model name.
+            this.settings.sttApiType = clampApiType(this.settings.sttModel);
+        }
         // Don't persist the retired keys back into data.json.
         const bag = this.settings as unknown as Record<string, unknown>;
         delete bag.enrichBaseUrl;
         delete bag.enrichApiKey;
-        // Guard against corrupt/old data selecting an unknown STT model, which
-        // would silently fall through to the GPT-4o path in the engine.
-        if (!(STT_MODELS as readonly string[]).includes(this.settings.sttModel)) {
-            this.settings.sttModel = DEFAULT_SETTINGS.sttModel;
-        }
+        delete bag.sttModelId;
+        // Guard against corrupt/hand-edited data selecting an unknown engine
+        // family, which would silently fall through to the GPT-4o path.
+        this.settings.sttApiType = clampApiType(this.settings.sttApiType);
         // We ship no local-VAD WASM, so only server/disabled are valid; keep
         // hand-edited data from sending the engine down the local VAD path.
         if (
@@ -765,8 +786,10 @@ export default class SystemRecordingPlugin extends Plugin {
         return {
             baseUrl: s.apiBaseUrl,
             apiKey: s.apiKey,
-            model: s.sttModel as TranscriptionModel,
-            modelOverride: s.sttModelId,
+            // sttApiType selects the engine family (routing/chunking/timestamps);
+            // sttModel is the actual name sent on the wire (may be a gateway id).
+            model: s.sttApiType as TranscriptionModel,
+            modelOverride: s.sttModel,
             chatModel: s.enrichModel,
             language: s.sttLanguage || "auto",
             vadMode: s.vadMode,
