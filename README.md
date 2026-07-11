@@ -62,6 +62,8 @@ Then, regardless of method:
 2. In *Settings → Meeting Copilot → Google Calendar integration*, paste the **Client ID** and **Client secret**, then click **Authenticate** and complete the browser sign-in.
 3. Optionally set the **Target calendar ID** (defaults to `primary`) and the agenda look-ahead / look-back windows.
 
+Your **client secret** and the OAuth **tokens** are stored in per-vault local storage on this device — not in the synced/committed `data.json` — so re-authenticate once per device. Meetings you've **declined** are ignored (no auto-open, no record prompt). If the connection expires, the agenda shows a **Reconnect** action instead of looping errors.
+
 ### AI endpoint (shared)
 
 In *Settings → Meeting Copilot → AI endpoint (shared)*, set the **API base URL** and **API key** for your OpenAI-compatible endpoint. These are used for **both** transcription and enrichment.
@@ -86,7 +88,7 @@ In *Settings → Meeting Copilot → AI enrichment*, enable enrichment, then cli
 - **Google Calendar integration**: Client ID / secret, authentication, target calendar, agenda look-ahead / look-back, exclusion keywords.
 - **Recording folder** / **File name template**: for ad-hoc recordings.
 - **Meetings folder**: where calendar meeting notes (and their recordings) are created.
-- **Recording retention (days)**: recordings older than this are trashed on startup and via *Clean up old recordings*; `0` keeps them forever. Recordings linked to a note that hasn't been transcribed/enriched yet are protected.
+- **Recording retention (days)**: recordings older than this are trashed on startup and via *Clean up old recordings*; `0` keeps them forever. A recording is pruned only when its owning meeting note actually contains the transcript text — so notes without the transcript captured (e.g. enriched with *Insert transcript* off), orphan/ad-hoc recordings, and unrelated audio are never deleted.
 - **AI endpoint (shared)**: OpenAI-compatible base URL + API key used for both transcription and enrichment.
 - **Transcription**: model, language, voice-activity detection, AI post-processing, custom dictionary, and **Auto-transcribe when recording stops** (headless — no dialog).
 - **AI enrichment**: enable it, pick a chat model (via **Test connection** + dropdown); optionally enrich automatically after transcription.

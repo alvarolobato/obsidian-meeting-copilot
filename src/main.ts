@@ -11,7 +11,7 @@ import { Recorder, RecorderStatus } from "./recorder";
 import { BinaryProvisioner } from "./binary";
 import { nodeDeps, resolveBinaryPath } from "./binary-runtime";
 import * as path from "path";
-import { GoogleOAuth } from "./auth/googleOAuth";
+import { GoogleOAuth, type StoredTokens } from "./auth/googleOAuth";
 import { listEvents } from "./calendar/googleCalendar";
 import { parseKeywords } from "./calendar/eventFilter";
 import { CalendarScheduler, ScheduledEvent } from "./calendar/scheduler";
@@ -30,6 +30,7 @@ import {
 import {
     extractSection,
     extractTranscript,
+    hasTranscript,
     HIDE_AI_CLASS,
     withEnrichedBlock,
 } from "./notes/enrichedBlock";
@@ -94,19 +95,24 @@ export default class SystemRecordingPlugin extends Plugin {
     private durationInterval: number | null = null;
     private recordingStartTime: number | null = null;
     private ribbonIconEl: HTMLElement | null = null;
-	private oauth = new GoogleOAuth({
-		getCredentials: () => {
-			const id = this.settings.googleClientId.trim();
-			const secret = this.settings.googleClientSecret.trim();
-			return id && secret ? { client_id: id, client_secret: secret } : null;
+	private oauth = new GoogleOAuth(
+		{
+			getCredentials: () => {
+				const id = this.settings.googleClientId.trim();
+				const secret = this.settings.googleClientSecret.trim();
+				return id && secret ? { client_id: id, client_secret: secret } : null;
+			},
+			getTokens: () => this.settings.googleTokens,
+			setTokens: async (tokens) => {
+				this.settings.googleTokens = tokens;
+				await this.saveSettings();
+			},
 		},
-		getTokens: () => this.settings.googleTokens,
-		setTokens: async (tokens) => {
-			this.settings.googleTokens = tokens;
-			await this.saveSettings();
-		},
-	});
+		() => this.onCalendarAuthExpired()
+	);
 	private scheduler: CalendarScheduler | null = null;
+	/** True once the refresh token died; suppresses the looping calendar-error notice until reconnect. */
+	private authExpired = false;
 	/** Tier 1 meeting detector + its poll interval id (macOS only). */
 	private detector: MeetingDetector | null = null;
 	private detectorIntervalId: number | null = null;
@@ -343,10 +349,110 @@ export default class SystemRecordingPlugin extends Plugin {
         // Guard against corrupt/hand-edited data selecting an unknown engine
         // family, which would silently fall through to the GPT-4o path.
         this.settings.sttApiType = clampApiType(this.settings.sttApiType);
+        // Keep the OAuth refresh token and client secret out of the synced/
+        // committed data.json: load them from per-vault localStorage instead,
+        // migrating any legacy plaintext copies that still live in data.json.
+        const localTokens = this.loadLocal<StoredTokens>("googleTokens");
+        const localSecret = this.loadLocal<string>("googleClientSecret");
+        const legacyTokens = raw?.googleTokens ?? null;
+        const legacySecret =
+            typeof raw?.googleClientSecret === "string"
+                ? raw.googleClientSecret
+                : "";
+        this.settings.googleTokens = localTokens ?? legacyTokens;
+        // localStorage is authoritative: use its value even when it's an empty
+        // string (an intentionally cleared secret) and only fall back to the
+        // legacy data.json copy when localStorage has nothing.
+        this.settings.googleClientSecret =
+            typeof localSecret === "string" ? localSecret : legacySecret;
+        // If data.json still carries either secret (whether or not localStorage
+        // already has a copy), re-persist so it gets moved into localStorage and
+        // stripped from the synced file — don't leave a stale plaintext copy behind.
+        const legacyInDataJson =
+            legacyTokens !== null || legacySecret !== "";
+        if (legacyInDataJson) {
+            await this.saveSettings();
+        }
     }
 
     async saveSettings() {
-        await this.saveData(this.settings);
+        // Sensitive fields live in per-vault localStorage, never in the synced/
+        // committed data.json. Strip a field from data.json only once we've
+        // *verified* it was durably written to localStorage — otherwise (older
+        // Obsidian without the API, or a write failure) keep it in data.json so
+        // we never silently lose the user's calendar credentials. Persist each
+        // field independently so a failure on one doesn't skip the other.
+        const tokensStored = this.saveLocal(
+            "googleTokens",
+            this.settings.googleTokens
+        );
+        const secretStored = this.saveLocal(
+            "googleClientSecret",
+            this.settings.googleClientSecret || null
+        );
+        const persisted: Record<string, unknown> = { ...this.settings };
+        if (tokensStored) delete persisted.googleTokens;
+        if (secretStored) delete persisted.googleClientSecret;
+        await this.saveData(persisted);
+    }
+
+    /** Per-vault localStorage key for a sensitive credential field. */
+    private secretKey(name: string): string {
+        return `meeting-copilot/${name}`;
+    }
+
+    /** Obsidian's per-vault localStorage helpers (added in 1.8.7), if present. */
+    private localStore(): {
+        load(key: string): unknown;
+        save(key: string, value: unknown): void;
+    } | null {
+        const app = this.app as unknown as {
+            loadLocalStorage?(key: string): unknown;
+            saveLocalStorage?(key: string, value: unknown): void;
+        };
+        if (
+            typeof app.loadLocalStorage === "function" &&
+            typeof app.saveLocalStorage === "function"
+        ) {
+            return {
+                load: (k) => app.loadLocalStorage!(k),
+                save: (k, v) => app.saveLocalStorage!(k, v),
+            };
+        }
+        return null;
+    }
+
+    /** Reads a JSON value from per-vault localStorage (null if absent/unavailable/corrupt). */
+    private loadLocal<T>(name: string): T | null {
+        const store = this.localStore();
+        if (!store) return null;
+        const v = store.load(this.secretKey(name));
+        if (typeof v !== "string") return null;
+        try {
+            return JSON.parse(v) as T;
+        } catch {
+            // Corrupt entry — treat as absent so we fall back to legacy/none.
+            return null;
+        }
+    }
+
+    /**
+     * Writes (or clears, when null) a JSON value to per-vault localStorage and
+     * verifies the round-trip. Returns false when the API is unavailable or the
+     * value didn't persist, so the caller can keep the value in data.json.
+     */
+    private saveLocal(name: string, value: unknown): boolean {
+        const store = this.localStore();
+        if (!store) return false;
+        const key = this.secretKey(name);
+        try {
+            store.save(key, value == null ? null : JSON.stringify(value));
+            const back = store.load(key);
+            if (value == null) return back == null;
+            return back === JSON.stringify(value);
+        } catch {
+            return false;
+        }
     }
 
     // MARK: - Recording control
@@ -533,10 +639,31 @@ export default class SystemRecordingPlugin extends Plugin {
 	async authenticateCalendar(): Promise<void> {
 		try {
 			await this.oauth.authenticate();
+			this.authExpired = false;
 			this.updateScheduler();
+			this.agendaEvents.emit("changed", undefined);
 		} catch (e) {
 			new Notice(e instanceof Error ? e.message : String(e));
 		}
+	}
+
+	/**
+	 * The refresh token is permanently dead (tokens already cleared by the OAuth
+	 * layer). Stop polling and show a single actionable "reconnect" notice — the
+	 * agenda flips to its Connect state on its own since we're no longer
+	 * authenticated. The flag stops the scheduler's per-poll error notice from
+	 * also firing for this cycle.
+	 */
+	private onCalendarAuthExpired(): void {
+		if (this.authExpired) return;
+		this.authExpired = true;
+		this.scheduler?.stop();
+		this.agendaEvents.emit("changed", undefined);
+		actionNotice(
+			t().notices.calendarReconnect,
+			t().notices.calendarReconnectAction,
+			() => void this.authenticateCalendar()
+		);
 	}
 
 	/** Starts the scheduler when auto-record is on and authenticated; stops it otherwise. */
@@ -550,7 +677,12 @@ export default class SystemRecordingPlugin extends Plugin {
 					fetchEvents: (minMs, maxMs) => this.fetchCalendarEvents(minMs, maxMs),
 					onEventStart: (event) => this.handleEventStart(event),
 					onEventEnd: (event) => this.handleEventEnd(event),
-					onError: (message) => new Notice(t().notices.calendarError(message)),
+					onError: (message) => {
+						// A dead-token error is handled by onCalendarAuthExpired
+						// (which shows a reconnect prompt); don't also loop the raw error.
+						if (this.authExpired) return;
+						new Notice(t().notices.calendarError(message));
+					},
 					registerInterval: (id) => this.registerInterval(id),
 				});
 			}
@@ -1731,9 +1863,11 @@ export default class SystemRecordingPlugin extends Plugin {
 
     /**
      * Moves recordings older than `retentionDays` to the trash so they don't
-     * grow forever. Only touches audio files under the meetings/recordings
-     * folders; the transcript already lives in the note, so the audio is safe
-     * to prune. `retentionDays: 0` disables cleanup entirely.
+     * grow forever. Only touches audio under the meetings/recordings folders,
+     * and only when the owning meeting note actually contains the transcript —
+     * so the audio is never the last copy of the content. Orphan/inline audio
+     * and not-yet-transcribed notes are left untouched. `retentionDays: 0`
+     * disables cleanup entirely.
      */
     private async cleanupOldRecordings(notify: boolean): Promise<number> {
         if (this.settings.retentionDays <= 0) {
@@ -1764,25 +1898,25 @@ export default class SystemRecordingPlugin extends Plugin {
             for (const info of expired) {
                 const file = this.app.vault.getAbstractFileByPath(info.path);
                 if (!(file instanceof TFile)) continue;
-                // Resolve the note that actually links THIS audio (verified, so we
-                // never touch a note that points at a different/newer recording).
-                const note = this.noteOwningRecording(file);
-                // Protect audio linked to a note that hasn't captured its content
-                // yet: only prune once the meeting is transcribed/enriched.
-                if (note && !this.isTranscribedNote(note)) continue;
+                // Resolve the meeting note that owns THIS audio — colocated
+                // (same folder + basename) or linked via `recording` frontmatter.
+                const note = findMeetingNoteForAudio(this.app, file);
+                // Only prune when a transcript actually exists in the owning note.
+                // Skip when there's no owning note (orphan/inline-embedded ad-hoc
+                // recordings, or unrelated user audio) or the note has captured no
+                // transcript yet — deleting those would destroy the only copy.
+                if (!note || !(await this.noteHasTranscript(note))) continue;
                 try {
                     await this.app.fileManager.trashFile(file);
                     removed++;
                     // Drop the note's now-dangling link (transcript stays in the note).
-                    if (note) {
-                        await this.app.fileManager.processFrontMatter(note, (fm) => {
-                            const f = fm as Record<string, unknown>;
-                            delete f.recording;
-                            f.recording_pruned = new Date()
-                                .toISOString()
-                                .slice(0, 10);
-                        });
-                    }
+                    await this.app.fileManager.processFrontMatter(note, (fm) => {
+                        const f = fm as Record<string, unknown>;
+                        delete f.recording;
+                        f.recording_pruned = new Date()
+                            .toISOString()
+                            .slice(0, 10);
+                    });
                 } catch (e) {
                     console.warn(
                         `[Meeting Copilot] failed to trash ${info.path}`,
@@ -1803,30 +1937,19 @@ export default class SystemRecordingPlugin extends Plugin {
         }
     }
 
-    /** The note whose `recording` frontmatter link resolves to this audio file, if any. */
-    private noteOwningRecording(audio: TFile): TFile | null {
-        for (const f of this.app.vault.getMarkdownFiles()) {
-            const fm = this.app.metadataCache.getFileCache(f)?.frontmatter as
-                | Record<string, unknown>
-                | undefined;
-            const rec = fm?.["recording"];
-            if (typeof rec !== "string") continue;
-            const link = (
-                rec.replace(/^\[\[/, "").replace(/\]\]$/, "").split("|")[0] ?? ""
-            ).trim();
-            const dest = this.app.metadataCache.getFirstLinkpathDest(link, f.path);
-            if (dest instanceof TFile && dest.path === audio.path) return f;
+    /**
+     * True when the meeting note actually contains transcript text. Reading the
+     * body (rather than trusting a `status` flag) closes a data-loss gap: with
+     * "Insert transcript" off, an enriched note carries only the AI summary, so
+     * its audio is the sole copy of the raw content and must not be pruned.
+     */
+    private async noteHasTranscript(note: TFile): Promise<boolean> {
+        try {
+            return hasTranscript(await this.app.vault.cachedRead(note));
+        } catch {
+            // If we can't read it, err on the side of keeping the audio.
+            return false;
         }
-        return null;
-    }
-
-    /** True once a meeting note's content has been captured (transcribed or enriched). */
-    private isTranscribedNote(note: TFile): boolean {
-        const fm = this.app.metadataCache.getFileCache(note)?.frontmatter as
-            | Record<string, unknown>
-            | undefined;
-        const status = fm?.["status"];
-        return status === "transcribed" || status === "enriched";
     }
 
     /**
