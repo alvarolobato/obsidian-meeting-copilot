@@ -261,7 +261,7 @@ export default class SystemRecordingPlugin extends Plugin {
         this.recorder.onStatus = (status: RecorderStatus) =>
             this.handleStatus(status);
         this.recorder.onError = (message: string) => {
-            new Notice(t().notices.recordingError(message));
+            this.notifyRecordingError(message);
             // Fatal failures (spawn error / non-zero exit) flip isRecording off
             // before invoking onError; a stderr line while still recording is
             // non-fatal, so only reset the UI when recording has truly stopped.
@@ -633,13 +633,19 @@ export default class SystemRecordingPlugin extends Plugin {
 		});
 	}
 
+	/** True when the active recording is unplanned (ad-hoc/detected), not a calendar meeting. */
+	private isAdhocRecording(): boolean {
+		const id = this.currentRecordingEventId;
+		return id === null || id.startsWith("adhoc-");
+	}
+
 	/**
 	 * When a detected meeting ends, stop the recording automatically — but only
-	 * for ad-hoc/detection recordings (no calendar event id). Calendar-driven
-	 * recordings are left to the scheduler's own event-end handling.
+	 * for unplanned (ad-hoc/detected) recordings. Calendar-driven recordings are
+	 * left to the scheduler's own event-end handling.
 	 */
 	private onMeetingEnded(app: string): void {
-		if (!this.recorder.isRecording || this.currentRecordingEventId !== null) {
+		if (!this.recorder.isRecording || !this.isAdhocRecording()) {
 			return;
 		}
 		new Notice(t().detect.endedStopping(app));
@@ -1240,9 +1246,20 @@ export default class SystemRecordingPlugin extends Plugin {
             }
         } else if (status.status === "error") {
             this.resetRecordingUi();
-            new Notice(
-                t().notices.recordingError(status.message ?? t().notices.unknownError)
-            );
+            this.notifyRecordingError(status.message ?? t().notices.unknownError);
+        }
+    }
+
+    /**
+     * Shows a recording error. A "screen capture not authorized" failure is
+     * common after a rename/update (macOS ties the Screen Recording grant to the
+     * helper's identity/path), so surface clear, actionable instructions for it.
+     */
+    private notifyRecordingError(message: string): void {
+        if (/not authorized|screen (capture|recording)|permission/i.test(message)) {
+            new Notice(t().notices.screenPermission, 15000);
+        } else {
+            new Notice(t().notices.recordingError(message));
         }
     }
 

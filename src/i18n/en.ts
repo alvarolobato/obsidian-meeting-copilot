@@ -38,6 +38,8 @@ export const en = {
 		autoRecordEnabled: "Calendar auto-recording enabled",
 		autoRecordDisabled: "Calendar auto-recording disabled",
 		recordingError: (msg: string) => `Recording error: ${msg}`,
+		screenPermission:
+			"Recording failed: Screen Recording isn't authorized. Open System Settings → Privacy & Security → Screen Recording, enable Obsidian, then fully quit and reopen Obsidian. (macOS requires this for capturing system audio.)",
 		alreadyRecording: "Already recording",
 		macOnly: "System recording is only supported on macOS",
 		downloadingHelper: "Downloading recorder helper…",
