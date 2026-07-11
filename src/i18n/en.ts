@@ -47,6 +47,8 @@ export const en = {
 		notRecording: "Not recording",
 		stoppingRecording: "Stopping recording...",
 		calendarError: (msg: string) => `Calendar error: ${msg}`,
+		calendarReconnect: "Google Calendar disconnected — reconnect",
+		calendarReconnectAction: "Reconnect",
 		recordingSaved: "Recording saved",
 		unknownError: "Unknown error",
 		transcriptAdded: (note: string) => `Transcript added to ${note}`,
@@ -272,7 +274,7 @@ export const en = {
 		endpointHeading: "AI endpoint",
 		apiBaseUrl: {
 			name: "API base URL",
-			desc: "OpenAI-compatible endpoint (OpenAI, Azure, a LiteLLM proxy, …) used for transcription and enrichment. The /audio/transcriptions and /chat/completions paths are appended.",
+			desc: "OpenAI-compatible endpoint used for both transcription (/audio/transcriptions) and enrichment (/chat/completions). OpenAI and LiteLLM work for both. Ollama works for enrichment only — it has no /audio/transcriptions endpoint. Azure requires the OpenAI-compatible surface (/openai/v1), not the classic deployment-path format.",
 		},
 		apiKey: {
 			name: "API key",
@@ -308,13 +310,7 @@ export const en = {
 		},
 		sttLanguage: {
 			name: "Language",
-			desc: "ISO code (e.g. en, ja) or 'auto' to detect.",
-		},
-		vadMode: {
-			name: "Voice activity detection",
-			desc: "Server-side VAD lets the API split on speech; disabled uses fixed-size chunks.",
-			server: "Server-side (recommended)",
-			disabled: "Disabled",
+			desc: "ISO 639-1 code (e.g. en, ja, ko, zh, es, de, fr) or 'auto' to detect. Use the two-letter code — full names like 'Spanish' will cause a 400 error from the API.",
 		},
 		dictionaryCorrection: {
 			name: "Custom dictionary correction",
@@ -326,7 +322,7 @@ export const en = {
 		},
 		dictionary: {
 			name: "Dictionary",
-			desc: "One rule per line: misheard => correct. Example: elastic search => Elasticsearch",
+			desc: "One rule per line: misheard => correct. Example: elastic search => Elasticsearch. The top 50 rules by priority are applied — rules beyond that are silently ignored.",
 			placeholder: "elastic search => Elasticsearch\nkubernetis => Kubernetes",
 		},
 		recordingHeading: "Recording & notes",
@@ -367,6 +363,8 @@ export const en = {
 		notAuthenticated:
 			"Not authenticated. Please authenticate from the command palette.",
 		credentialsNotSet: "OAuth credentials are not set.",
+		sessionExpired:
+			"Google Calendar session expired. Please reconnect from settings or the command palette.",
 		desktopOnly: "OAuth authentication is only supported on desktop.",
 		setCredentialsFirst: "Please set the OAuth Client ID / Secret first.",
 		openingBrowser: "Opening Google authentication in your browser…",

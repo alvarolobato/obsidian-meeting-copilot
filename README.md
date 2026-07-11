@@ -7,7 +7,7 @@ A Granola-style meeting workflow for Obsidian on macOS. Meeting Copilot reads yo
 - macOS 13.0+ (Apple Silicon)
 - Obsidian Desktop
 - A Google account (for calendar integration)
-- An OpenAI-compatible LLM endpoint (OpenAI, Azure OpenAI, a LiteLLM proxy, Ollama, …) for transcription and enrichment
+- One OpenAI-compatible endpoint (configured as a single base URL in settings) used for both transcription and enrichment. OpenAI and LiteLLM work for both. **Ollama** has no `/audio/transcriptions` endpoint, so it works for enrichment only. **Azure** requires the `/openai/v1` OpenAI-compatible surface — the classic deployment-path format won't work.
 
 ## Features
 
@@ -31,7 +31,7 @@ Meeting Copilot handles calendar, recording, transcription, and enrichment on it
 | [Dataview](https://github.com/blacksmithgu/obsidian-dataview) | The Meetings dashboard command | Optional |
 | [Tasks](https://github.com/obsidian-tasks-group/obsidian-tasks) | Tracking the `## Action items` checkboxes | Optional (checkboxes work without it) |
 
-> Transcription and enrichment share one OpenAI-compatible endpoint (OpenAI, Azure, a LiteLLM proxy, …), configured in Meeting Copilot's own settings. The transcription engine is bundled (vendored from [AI Transcriber](https://github.com/mssoftjp/obsidian-ai-transcriber), MIT); AI Transcriber does **not** need to be installed.
+> Transcription and enrichment share one endpoint configured in Meeting Copilot's own settings. The endpoint must be OpenAI-compatible and serve both `/audio/transcriptions` and `/chat/completions`. OpenAI and a LiteLLM proxy work for both. Ollama works for enrichment only (no `/audio/transcriptions`). Azure works only via the newer OpenAI-compatible surface (`/openai/v1`), not the classic deployment-path format. The transcription engine itself is bundled (vendored from [AI Transcriber](https://github.com/mssoftjp/obsidian-ai-transcriber), MIT); AI Transcriber does **not** need to be installed.
 
 ## Installation
 
@@ -62,6 +62,8 @@ Then, regardless of method:
 2. In *Settings → Meeting Copilot → Google Calendar integration*, paste the **Client ID** and **Client secret**, then click **Authenticate** and complete the browser sign-in.
 3. Optionally set the **Target calendar ID** (defaults to `primary`) and the agenda look-ahead / look-back windows.
 
+Your **client secret** and the OAuth **tokens** are stored in per-vault local storage on this device — not in the synced/committed `data.json` — so re-authenticate once per device. Meetings you've **declined** are ignored (no auto-open, no record prompt). If the connection expires, the agenda shows a **Reconnect** action instead of looping errors.
+
 ### AI endpoint (shared)
 
 In *Settings → Meeting Copilot → AI endpoint (shared)*, set the **API base URL** and **API key** for your OpenAI-compatible endpoint. These are used for **both** transcription and enrichment.
@@ -86,7 +88,7 @@ In *Settings → Meeting Copilot → AI enrichment*, enable enrichment, then cli
 - **Google Calendar integration**: Client ID / secret, authentication, target calendar, agenda look-ahead / look-back, exclusion keywords.
 - **Recording folder** / **File name template**: for ad-hoc recordings.
 - **Meetings folder**: where calendar meeting notes (and their recordings) are created.
-- **Recording retention (days)**: recordings older than this are trashed on startup and via *Clean up old recordings*; `0` keeps them forever. Recordings linked to a note that hasn't been transcribed/enriched yet are protected.
+- **Recording retention (days)**: recordings older than this are trashed on startup and via *Clean up old recordings*; `0` keeps them forever. A recording is pruned only when its owning meeting note actually contains the transcript text — so notes without the transcript captured (e.g. enriched with *Insert transcript* off), orphan/ad-hoc recordings, and unrelated audio are never deleted.
 - **AI endpoint (shared)**: OpenAI-compatible base URL + API key used for both transcription and enrichment.
 - **Transcription**: model, language, voice-activity detection, AI post-processing, custom dictionary, and **Auto-transcribe when recording stops** (headless — no dialog).
 - **AI enrichment**: enable it, pick a chat model (via **Test connection** + dropdown); optionally enrich automatically after transcription.

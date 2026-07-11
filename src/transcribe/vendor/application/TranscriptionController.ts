@@ -504,49 +504,21 @@ export class TranscriptionController {
 		// Get current language setting
 			const currentLanguage = this.settings.language;
 
-		if (currentLanguage === 'auto') {
-			// For auto-detect, use all language dictionaries combined
-			const allEntries = this.convertAllDictionariesToEntries();
+		// Rules are stored in the 'en' bucket; language-specific buckets are unused.
+		const userDictionary = this.settings.userDictionaries.en;
+		const entries = this.convertDictionaryToEntries(userDictionary);
 
-			if (allEntries.length > 0) {
-				const multiDict = {
-					name: 'user-dictionary-multi',
-					language: 'multi', // Special language code for multi-language
-					enabled: true,
-					useGPTCorrection: useGPTCorrection,
-					// Pass all dictionaries data for GPT correction
-					definiteCorrections: [
-						...this.settings.userDictionaries.ja.definiteCorrections,
-						...this.settings.userDictionaries.en.definiteCorrections,
-						...this.settings.userDictionaries.zh.definiteCorrections
-					],
-						contextualCorrections: [
-							...(this.settings.userDictionaries.ja.contextualCorrections ?? []),
-							...(this.settings.userDictionaries.en.contextualCorrections ?? []),
-							...(this.settings.userDictionaries.zh.contextualCorrections ?? [])
-						],
-						entries: allEntries
-					};
-				corrector.addDictionary(multiDict);
-			}
-		} else if (currentLanguage === 'ja' || currentLanguage === 'en' || currentLanguage === 'zh') {
-			// For specific language, use only that language's dictionary
-				const userDictionary = this.settings.userDictionaries[currentLanguage];
-				const entries = this.convertDictionaryToEntries(userDictionary);
-
-				if (entries.length > 0) {
-					const langDict = {
-						name: `user-dictionary-${currentLanguage}`,
-						language: currentLanguage,
-						enabled: true,
-						useGPTCorrection: useGPTCorrection,
-						definiteCorrections: userDictionary.definiteCorrections,
-						contextualCorrections: userDictionary.contextualCorrections ?? [],
-						entries: entries
-					};
-					corrector.addDictionary(langDict);
-				}
-			}
+		if (entries.length > 0) {
+			corrector.addDictionary({
+				name: 'user-dictionary',
+				language: currentLanguage === 'auto' ? 'multi' : currentLanguage,
+				enabled: true,
+				useGPTCorrection: useGPTCorrection,
+				definiteCorrections: userDictionary.definiteCorrections,
+				contextualCorrections: userDictionary.contextualCorrections ?? [],
+				entries: entries
+			});
+		}
 
 		return corrector;
 	}
@@ -606,21 +578,6 @@ export class TranscriptionController {
 		);
 
 		return entries;
-	}
-
-	/**
-	 * Convert all language dictionaries to entries
-	 */
-	private convertAllDictionariesToEntries(): CorrectionDictionaryEntry[] {
-		const allEntries: CorrectionDictionaryEntry[] = [];
-		const languages: ('ja' | 'en' | 'zh' | 'ko')[] = ['ja', 'en', 'zh', 'ko'];
-
-			for (const lang of languages) {
-				const dict = this.settings.userDictionaries[lang];
-				allEntries.push(...this.convertDictionaryToEntries(dict));
-			}
-
-		return allEntries;
 	}
 
 	/**
