@@ -22,12 +22,36 @@ export interface OAuthStorage {
 	setTokens(tokens: StoredTokens | null): Promise<void>;
 }
 
+/**
+ * Thrown when the refresh token is permanently dead (`invalid_grant`: revoked,
+ * expired 7-day "Testing" token, password change, …). Stored tokens are cleared
+ * before this is thrown, so `isAuthenticated()` flips to false and callers can
+ * surface a single "reconnect" prompt instead of looping on the raw error.
+ */
+export class AuthInvalidatedError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "AuthInvalidatedError";
+	}
+}
+
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
 
 export class GoogleOAuth {
-	constructor(private readonly storage: OAuthStorage) {}
+	/** Shared in-flight refresh so concurrent callers (scheduler + agenda) don't double-refresh. */
+	private refreshing: Promise<string> | null = null;
+
+	/**
+	 * @param storage token/credential persistence.
+	 * @param onAuthExpired fired once when the refresh token is invalidated (after
+	 *   tokens are cleared), so the host can stop polling and prompt to reconnect.
+	 */
+	constructor(
+		private readonly storage: OAuthStorage,
+		private readonly onAuthExpired?: () => void
+	) {}
 
 	isAuthenticated(): boolean {
 		return this.storage.getTokens() !== null;
@@ -40,7 +64,13 @@ export class GoogleOAuth {
 		if (Date.now() < tokens.expires_at - 60_000) {
 			return tokens.access_token;
 		}
-		return await this.refresh(tokens);
+		// Coalesce parallel refreshes into one network round-trip.
+		if (!this.refreshing) {
+			this.refreshing = this.refresh(tokens).finally(() => {
+				this.refreshing = null;
+			});
+		}
+		return this.refreshing;
 	}
 
 	private async refresh(tokens: StoredTokens): Promise<string> {
@@ -60,6 +90,13 @@ export class GoogleOAuth {
 			throw: false,
 		});
 		if (res.status >= 400) {
+			// A dead refresh token is unrecoverable: clear it so the app stops
+			// retrying forever and can prompt the user to reconnect.
+			if (res.status === 400 && /invalid_grant/.test(res.text ?? "")) {
+				await this.storage.setTokens(null);
+				this.onAuthExpired?.();
+				throw new AuthInvalidatedError(t().oauth.sessionExpired);
+			}
 			throw new Error(`Token refresh failed: HTTP ${res.status} ${res.text}`);
 		}
 		const json = res.json as { access_token: string; expires_in: number; scope: string };

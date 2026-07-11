@@ -47,6 +47,8 @@ export const en = {
 		notRecording: "Not recording",
 		stoppingRecording: "Stopping recording...",
 		calendarError: (msg: string) => `Calendar error: ${msg}`,
+		calendarReconnect: "Google Calendar disconnected — reconnect",
+		calendarReconnectAction: "Reconnect",
 		recordingSaved: "Recording saved",
 		unknownError: "Unknown error",
 		transcriptAdded: (note: string) => `Transcript added to ${note}`,
@@ -337,6 +339,8 @@ export const en = {
 		notAuthenticated:
 			"Not authenticated. Please authenticate from the command palette.",
 		credentialsNotSet: "OAuth credentials are not set.",
+		sessionExpired:
+			"Google Calendar session expired. Please reconnect from settings or the command palette.",
 		desktopOnly: "OAuth authentication is only supported on desktop.",
 		setCredentialsFirst: "Please set the OAuth Client ID / Secret first.",
 		openingBrowser: "Opening Google authentication in your browser…",
