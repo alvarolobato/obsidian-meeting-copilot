@@ -108,12 +108,19 @@ function mapAttendees(raw: RawAttendee[] | undefined): string[] {
 
 /**
  * The other attendee in a 1:1: exactly two non-resource attendees with
- * exactly one of them marked `self`. Null for group meetings or a missing
- * self flag. Shared by `oneOnOnePartner` and `oneOnOnePartnerEmail` so both
- * agree on what counts as a 1:1.
+ * exactly one of them marked `self`, or exactly one non-resource attendee
+ * that isn't marked `self` (a self-organized event sometimes arrives with
+ * only the other side listed, omitting the organizer's own attendee entry).
+ * Null for group meetings, a missing self flag on two attendees, or a single
+ * attendee who *is* self (a meeting with yourself). Shared by
+ * `oneOnOnePartner` and `oneOnOnePartnerEmail` so both agree on what counts
+ * as a 1:1.
  */
 function oneOnOneOther(raw: RawAttendee[] | undefined): RawAttendee | null {
 	const humans = (raw ?? []).filter((a) => !a.resource);
+	if (humans.length === 1) {
+		return humans[0]?.self === true ? null : (humans[0] ?? null);
+	}
 	if (humans.length !== 2) return null;
 	const selves = humans.filter((a) => a.self === true);
 	if (selves.length !== 1) return null;

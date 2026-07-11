@@ -40,7 +40,7 @@ This alone makes "move a note anywhere" safe.
 
 ### 2. Sticky series homes
 
-A series is identified by `recurring_event_id`. When creating a note for a new occurrence, place it in the folder that currently holds the series (resolution order in item 3). Consequences:
+A series is identified by `recurring_event_id`. When creating a note for a new occurrence, place it in the folder that currently holds the series (the most-recent-note rule from item 2). Consequences:
 
 - Move the series folder to `Projects/Acme/Meetings/Weekly sync/` and the next occurrence lands there.
 - Rename the series in Google Calendar and notes keep landing with their siblings; the folder name is yours to change whenever.
@@ -58,7 +58,7 @@ Replace the single `meetingsFolder` string with two templates using the existing
 - One-offs, default `Meetings/{{year}}`
 - Series, default `Meetings/{{series}}`
 
-Tokens: `{{year}}`, `{{month}}`, `{{date}}`, `{{title}}`, `{{series}}`, `{{organizer_domain}}`. Users who want month sharding, per-client trees, or the old flat layout set it here. Date sharding by year is enough to keep one-off folders bounded without burying files two levels deep.
+Tokens: `{{year}}`, `{{month}}`, `{{date}}`, `{{title}}`, `{{series}}`, plus date-format tokens like `{{start:YYYY/MM}}`, which may nest. Users who want month sharding, per-client trees, or the old flat layout set it here. Date sharding by year is enough to keep one-off folders bounded without burying files two levels deep.
 
 ### 5. Routing rules
 

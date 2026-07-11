@@ -173,11 +173,11 @@ export const en = {
 		},
 		oneOffFolderTemplate: {
 			name: "One-off meetings folder",
-			desc: "Folder template for a one-off meeting's note and recording. Tokens: {{year}}, {{month}}, {{title}}, {{date}}.",
+			desc: "Folder template for a one-off meeting's note and recording. Tokens: {{year}}, {{month}}, {{date}}, {{title}}, {{series}}. Date-format tokens like {{start:YYYY/MM}} may create nested folders.",
 		},
 		seriesFolderTemplate: {
 			name: "New series folder",
-			desc: "Folder template used the first time a recurring meeting is seen. Later occurrences follow wherever that folder ends up. Tokens: {{year}}, {{month}}, {{series}}, {{title}}, {{date}}.",
+			desc: "Folder template used the first time a recurring meeting is seen. Later occurrences follow wherever that folder ends up. Tokens: {{year}}, {{month}}, {{date}}, {{title}}, {{series}}. Date-format tokens like {{start:YYYY/MM}} may create nested folders.",
 		},
 		oneOnOneSeparately: {
 			name: "Handle 1:1s separately",

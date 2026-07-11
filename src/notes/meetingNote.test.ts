@@ -1,17 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { TFile, type App, type TFolder } from "obsidian";
 import {
+	__resetRecentNoteCache,
 	ADHOC_ID_PREFIX,
 	createMeetingNote,
 	DEFAULT_NOTE_TEMPLATE,
 	DEFAULT_TITLE_PATTERN,
+	findNoteByEventId,
 	formatTranscriptCallout,
 	isAdhocId,
 	type MeetingEventInfo,
 	type MeetingNoteConfig,
 	normalizeFolderPath,
+	parseStampDate,
 	recordingLinkTarget,
 	resolveMeetingFolder,
+	sanitizeName,
 	scanMeetingNotes,
 	stripTranscript,
 	templateStaticRoot,
@@ -37,6 +41,9 @@ function makeTFile(path: string): TFile {
 	// Mirrors real Obsidian: a root TFile's parent path is "/", not "".
 	// eslint-disable-next-line obsidianmd/no-tfile-tfolder-cast -- building a test fixture, not narrowing a real runtime value
 	file.parent = { path: slash === -1 ? "/" : path.slice(0, slash) } as unknown as TFolder;
+	// Real Obsidian always populates `stat`; tests override it to exercise
+	// mtime-based tiebreaks/fallbacks.
+	file.stat = { mtime: 0, ctime: 0, size: 0 };
 	return file;
 }
 
@@ -44,6 +51,9 @@ function makeTFile(path: string): TFile {
 class FakeVault {
 	private entries = new Map<string, FakeEntry>();
 	private folders = new Set<string>([""]);
+	// Paths whose metadataCache lookup should behave as if the cache hasn't
+	// indexed the file yet (simulates the lag `recentNoteByEventId` bridges).
+	private staleCache = new Set<string>();
 	created: string[] = [];
 
 	/** Seeds an existing note; returns its TFile so a test can reference it. */
@@ -82,13 +92,26 @@ class FakeVault {
 	frontmatterFor(file: TFile): Record<string, unknown> | undefined {
 		return this.entries.get(file.path)?.frontmatter;
 	}
+
+	/** Marks a path's metadataCache lookup as not-yet-indexed (see `staleCache`). */
+	markCacheStale(path: string): void {
+		this.staleCache.add(path);
+	}
+
+	isCacheStale(path: string): boolean {
+		return this.staleCache.has(path);
+	}
 }
 
 function makeApp(vault: FakeVault): App {
 	return {
 		vault,
 		metadataCache: {
-			getFileCache: (file: TFile) => ({ frontmatter: vault.frontmatterFor(file) }),
+			getFileCache: (file: TFile) => ({
+				frontmatter: vault.isCacheStale(file.path)
+					? undefined
+					: vault.frontmatterFor(file),
+			}),
 		},
 		fileManager: {
 			processFrontMatter: async (
@@ -120,6 +143,13 @@ function ev(overrides: Partial<MeetingEventInfo> = {}): MeetingEventInfo {
 		...overrides,
 	};
 }
+
+beforeEach(() => {
+	// Each test gets its own FakeVault; the recent-note map is module-level,
+	// so it must not leak an event id -> path mapping from one test's vault
+	// into the next.
+	__resetRecentNoteCache();
+});
 
 function cfg(overrides: Partial<MeetingNoteConfig> = {}): MeetingNoteConfig {
 	return {
@@ -244,6 +274,93 @@ describe("createMeetingNote", () => {
 		expect(vault.created).toEqual([ref.notePath]);
 		expect(ref.folder).toBe("Meetings/2026");
 	});
+
+	it("reuses the just-created note via the recent-note map when metadataCache hasn't indexed it yet", async () => {
+		const vault = new FakeVault();
+		const app = makeApp(vault);
+		const event = ev({ id: "evt-race" });
+
+		const first = await createMeetingNote(app, event, cfg());
+		expect(vault.created).toEqual([first.notePath]);
+
+		// Simulate the metadataCache lag: the identity scan can't see this
+		// note's frontmatter yet, so only the recent-note map can find it.
+		vault.markCacheStale(first.notePath);
+
+		const second = await createMeetingNote(app, event, cfg());
+		expect(second.file).toBe(first.file);
+		expect(vault.created).toEqual([first.notePath]);
+	});
+
+	it("recovers from a create collision by reusing the file that won the race", async () => {
+		const vault = new FakeVault();
+		const realCreate = vault.create.bind(vault);
+		// Simulates a second, concurrent createMeetingNote call finishing its
+		// `vault.create` a moment before this one's — the path already exists
+		// by the time this call's create rejects.
+		vault.create = async (path: string, content: string) => {
+			await realCreate(path, content);
+			throw new Error("EEXIST");
+		};
+		const app = makeApp(vault);
+
+		const ref = await createMeetingNote(app, ev({ id: "evt-collide" }), cfg());
+
+		expect(ref.file.path).toBe(ref.notePath);
+		expect(vault.frontmatterFor(ref.file)?.event_id).toBe("evt-collide");
+	});
+
+	it("rethrows when vault.create fails and no file landed at the path", async () => {
+		const vault = new FakeVault();
+		vault.create = async () => {
+			throw new Error("disk full");
+		};
+		const app = makeApp(vault);
+
+		await expect(
+			createMeetingNote(app, ev({ id: "evt-fail" }), cfg())
+		).rejects.toThrow("disk full");
+	});
+
+	it("picks the most recently modified note when several share an event_id (sync-conflict copy)", async () => {
+		const vault = new FakeVault();
+		const older = vault.addNote("Meetings/A.md", { event_id: "evt-dup" });
+		older.stat = { mtime: 100, ctime: 100, size: 0 };
+		const newer = vault.addNote("Meetings/B.md", { event_id: "evt-dup" });
+		newer.stat = { mtime: 200, ctime: 200, size: 0 };
+		const app = makeApp(vault);
+
+		const ref = await createMeetingNote(app, ev({ id: "evt-dup" }), cfg());
+		expect(ref.file).toBe(newer);
+	});
+
+	it("tiebreaks equal mtimes by the lexicographically smallest path", async () => {
+		const vault = new FakeVault();
+		const b = vault.addNote("Meetings/B.md", { event_id: "evt-tie" });
+		b.stat = { mtime: 100, ctime: 100, size: 0 };
+		const a = vault.addNote("Meetings/A.md", { event_id: "evt-tie" });
+		a.stat = { mtime: 100, ctime: 100, size: 0 };
+		const app = makeApp(vault);
+
+		const ref = await createMeetingNote(app, ev({ id: "evt-tie" }), cfg());
+		expect(ref.file).toBe(a);
+	});
+});
+
+describe("findNoteByEventId", () => {
+	it("returns null for an empty id", () => {
+		expect(findNoteByEventId(makeApp(new FakeVault()), "")).toBeNull();
+	});
+
+	it("picks the most recently modified note among several sharing an event_id", () => {
+		const vault = new FakeVault();
+		const older = vault.addNote("Meetings/A.md", { event_id: "evt-dup" });
+		older.stat = { mtime: 100, ctime: 100, size: 0 };
+		const newer = vault.addNote("Meetings/B.md", { event_id: "evt-dup" });
+		newer.stat = { mtime: 200, ctime: 200, size: 0 };
+
+		expect(findNoteByEventId(makeApp(vault), "evt-dup")).toBe(newer);
+	});
 });
 
 describe("resolveMeetingFolder", () => {
@@ -260,6 +377,31 @@ describe("resolveMeetingFolder", () => {
 		const app = makeApp(vault);
 
 		const folder = resolveMeetingFolder(app, ev({ recurringEventId: "rec-1" }), cfg());
+		expect(folder).toBe("Projects/Weekly");
+	});
+
+	it("still follows a series' current folder when its notes' start/date frontmatter was deleted", () => {
+		const vault = new FakeVault();
+		// Both notes are unstamped (frontmatter says nothing about start/date),
+		// as if the user hand-edited them. Without a stamped max to prefer,
+		// resolution should fall back to the most recently modified match
+		// rather than treating the series as unseen and re-rendering a fresh
+		// (duplicate) folder from the template.
+		const older = vault.addNote("Projects/Weekly/Jan.md", {
+			recurring_event_id: "rec-unstamped",
+		});
+		older.stat = { mtime: 100, ctime: 100, size: 0 };
+		const newer = vault.addNote("Projects/Weekly/Feb.md", {
+			recurring_event_id: "rec-unstamped",
+		});
+		newer.stat = { mtime: 200, ctime: 200, size: 0 };
+		const app = makeApp(vault);
+
+		const folder = resolveMeetingFolder(
+			app,
+			ev({ recurringEventId: "rec-unstamped" }),
+			cfg()
+		);
 		expect(folder).toBe("Projects/Weekly");
 	});
 
@@ -390,6 +532,21 @@ describe("resolveMeetingFolder", () => {
 		expect(folder).toBe("Somewhere/Bob");
 	});
 
+	it("matches a hand-edited one_on_one_email against the event email case-insensitively", () => {
+		const vault = new FakeVault();
+		vault.addNote("Somewhere/Bob Chats/2026-05-01.md", {
+			one_on_one_with: "Bob",
+			one_on_one_email: "Bob@Acme.com ",
+			start: "2026-05-01T10:00:00",
+		});
+		const folder = resolveMeetingFolder(
+			makeApp(vault),
+			ev({ oneOnOnePartner: "Bob", oneOnOnePartnerEmail: "bob@acme.com" }),
+			cfg({ oneOnOneSeparately: true })
+		);
+		expect(folder).toBe("Somewhere/Bob Chats");
+	});
+
 	it("lets a date-format token nest folders ({{start:YYYY/MM}}) while segments stay sanitized", () => {
 		const app = makeApp(new FakeVault());
 		const folder = resolveMeetingFolder(
@@ -477,6 +634,49 @@ describe("templateStaticRoot", () => {
 		expect(templateStaticRoot("{{series}}")).toBe("");
 		expect(templateStaticRoot("{{series}}/notes")).toBe("");
 	});
+
+	it("truncates a partial segment before the token, rather than matching nothing", () => {
+		// Notes actually land in "Meetings/Q2026" — "Meetings/Q" would match none of them.
+		expect(templateStaticRoot("Meetings/Q{{year}}")).toBe("Meetings");
+	});
+
+	it("returns '' when the token is mid-segment with no preceding '/'", () => {
+		expect(templateStaticRoot("Q{{year}}")).toBe("");
+	});
+
+	it("keeps the whole literal path when there's no token at all", () => {
+		expect(templateStaticRoot("Meetings")).toBe("Meetings");
+	});
+});
+
+describe("sanitizeName", () => {
+	it("collapses a dots-only name to the Untitled fallback", () => {
+		expect(sanitizeName("...")).toBe("Untitled");
+	});
+
+	it("strips a trailing dot (would otherwise break Windows folder names)", () => {
+		expect(sanitizeName("Q3 Planning.")).toBe("Q3 Planning");
+	});
+
+	it("strips a leading dot (would otherwise make an Obsidian-hidden folder)", () => {
+		expect(sanitizeName(".hidden")).toBe("hidden");
+	});
+});
+
+describe("parseStampDate", () => {
+	it("parses a bare YYYY-MM-DD stamp as local midnight, not UTC midnight", () => {
+		const d = parseStampDate("2026-07-11");
+		expect(d.getFullYear()).toBe(2026);
+		expect(d.getMonth()).toBe(6); // 0-indexed
+		expect(d.getDate()).toBe(11);
+		expect(d.getHours()).toBe(0);
+	});
+
+	it("parses a full ISO stamp as-is", () => {
+		const d = parseStampDate("2026-07-11T14:30:00");
+		expect(d.getHours()).toBe(14);
+		expect(d.getMinutes()).toBe(30);
+	});
 });
 
 describe("isAdhocId", () => {
@@ -518,6 +718,18 @@ describe("scanMeetingNotes", () => {
 		expect(b?.eventId).toBeNull();
 		expect(b?.stamp).toBeNull();
 		expect(b?.hasMeetingUrl).toBe(false);
+	});
+
+	it("falls back to date when start is present but not a non-empty string", () => {
+		const vault = new FakeVault();
+		vault.addNote("Meetings/c.md", {
+			start: "",
+			date: "2026-02-02",
+		});
+		const app = makeApp(vault);
+
+		const entry = scanMeetingNotes(app).find((e) => e.file.path === "Meetings/c.md");
+		expect(entry?.stamp).toBe("2026-02-02");
 	});
 });
 

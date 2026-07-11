@@ -3,9 +3,21 @@ import { normalizePath } from "obsidian";
 // Characters Obsidian/most filesystems reject in file names, plus wikilink-hostile ones.
 const ILLEGAL = /[\\/:*?"<>|#^[\]]/g;
 
-/** Makes a string safe to use as a single file or folder name (never a path). */
+/**
+ * Makes a string safe to use as a single file or folder name (never a path).
+ * Leading/trailing dots and spaces are stripped after that: a lone "." or
+ * ".." would otherwise collapse into the 1:1 root or a scan root, trailing
+ * dots break Windows folder names, and a leading dot makes an Obsidian-hidden
+ * folder.
+ */
 export function sanitizeName(name: string): string {
-	return name.replace(ILLEGAL, " ").replace(/\s+/g, " ").trim() || "Untitled";
+	const cleaned = name
+		.replace(ILLEGAL, " ")
+		.replace(/\s+/g, " ")
+		.trim()
+		.replace(/^[.\s]+/, "")
+		.replace(/[.\s]+$/, "");
+	return cleaned || "Untitled";
 }
 
 /** True for a folder segment that is empty, or made up only of dots ("", ".", "..", "..."), once trimmed. */
@@ -43,11 +55,18 @@ export function normalizeFolderPath(input: string): string {
 /**
  * The literal, token-free prefix of a folder template (e.g. "Meetings" from
  * "Meetings/{{year}}"), for callers that need a single stable folder to scope
- * a scan to rather than resolving a specific event's folder. Returns "" when
- * the template starts with a token (e.g. "{{series}}/notes") — the caller
- * decides its own fallback rather than this silently sweeping "Meetings".
+ * a scan to rather than resolving a specific event's folder. Truncated to the
+ * last *complete* segment before the first token, so "Meetings/Q{{year}}"
+ * yields "Meetings" rather than "Meetings/Q" (which would match nothing —
+ * notes actually land in "Meetings/Q2026"). Returns "" when the template
+ * starts with a token, or when the token is mid-segment with no preceding
+ * "/" (e.g. "{{series}}/notes" or "Q{{year}}") — the caller decides its own
+ * fallback rather than this silently sweeping "Meetings".
  */
 export function templateStaticRoot(template: string): string {
 	const idx = template.indexOf("{{");
-	return normalizeFolderPathOrEmpty(idx === -1 ? template : template.slice(0, idx));
+	if (idx === -1) return normalizeFolderPathOrEmpty(template);
+	const prefix = template.slice(0, idx);
+	const lastSlash = prefix.lastIndexOf("/");
+	return normalizeFolderPathOrEmpty(lastSlash === -1 ? "" : prefix.slice(0, lastSlash));
 }

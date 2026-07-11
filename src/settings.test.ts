@@ -39,4 +39,50 @@ describe("migrateSettings", () => {
 			Object.assign({}, DEFAULT_SETTINGS, migrated).oneOffFolderTemplate
 		).toBe(DEFAULT_SETTINGS.oneOffFolderTemplate);
 	});
+
+	it("drops a null folder template on the passthrough branch so the default wins", () => {
+		const migrated = migrateSettings({ oneOffFolderTemplate: null });
+		expect(migrated).not.toHaveProperty("oneOffFolderTemplate");
+		expect(
+			Object.assign({}, DEFAULT_SETTINGS, migrated).oneOffFolderTemplate
+		).toBe(DEFAULT_SETTINGS.oneOffFolderTemplate);
+	});
+
+	it("drops an empty-string folder template so the default wins", () => {
+		const migrated = migrateSettings({
+			oneOffFolderTemplate: "Meetings/{{year}}",
+			seriesFolderTemplate: "",
+		});
+		expect(migrated).not.toHaveProperty("seriesFolderTemplate");
+		expect(
+			Object.assign({}, DEFAULT_SETTINGS, migrated).seriesFolderTemplate
+		).toBe(DEFAULT_SETTINGS.seriesFolderTemplate);
+	});
+
+	it("drops a numeric folder template so the default wins", () => {
+		const migrated = migrateSettings({
+			oneOffFolderTemplate: "Meetings/{{year}}",
+			adhocFolder: 42,
+		});
+		expect(migrated).not.toHaveProperty("adhocFolder");
+		expect(Object.assign({}, DEFAULT_SETTINGS, migrated).adhocFolder).toBe(
+			DEFAULT_SETTINGS.adhocFolder
+		);
+	});
+
+	it("drops a non-boolean oneOnOneSeparately so the default wins", () => {
+		const migrated = migrateSettings({
+			oneOffFolderTemplate: "Meetings/{{year}}",
+			oneOnOneSeparately: "yes",
+		});
+		expect(migrated).not.toHaveProperty("oneOnOneSeparately");
+		expect(
+			Object.assign({}, DEFAULT_SETTINGS, migrated).oneOnOneSeparately
+		).toBe(DEFAULT_SETTINGS.oneOnOneSeparately);
+	});
+
+	it("keeps a valid oneOffFolderTemplate untouched", () => {
+		const migrated = migrateSettings({ oneOffFolderTemplate: "Custom/{{year}}" });
+		expect(migrated.oneOffFolderTemplate).toBe("Custom/{{year}}");
+	});
 });

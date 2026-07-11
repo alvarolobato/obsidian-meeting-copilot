@@ -111,24 +111,55 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	suggestAdhocTitle: true,
 };
 
+/** Folder-template keys that must be a non-empty string, or `DEFAULT_SETTINGS` wins instead. */
+const FOLDER_TEMPLATE_KEYS = [
+	"oneOffFolderTemplate",
+	"seriesFolderTemplate",
+	"oneOnOneFolder",
+	"adhocFolder",
+] as const;
+
+/**
+ * Drops any of the folder-template keys (or `oneOnOneSeparately`) that are
+ * present but hold the wrong type, so a hand-edited or corrupted `data.json`
+ * (e.g. `oneOffFolderTemplate: null`) can't pass a bad value through
+ * `Object.assign` and crash every folder-resolution path that calls
+ * `.replace` on it. Leaving the key out entirely lets `DEFAULT_SETTINGS` win.
+ */
+function sanitizeMigrated(
+	result: Partial<SystemRecordingSettings>
+): Partial<SystemRecordingSettings> {
+	const out = { ...result } as Record<string, unknown>;
+	for (const key of FOLDER_TEMPLATE_KEYS) {
+		if (key in out && (typeof out[key] !== "string" || out[key] === "")) {
+			delete out[key];
+		}
+	}
+	if ("oneOnOneSeparately" in out && typeof out["oneOnOneSeparately"] !== "boolean") {
+		delete out["oneOnOneSeparately"];
+	}
+	return out as Partial<SystemRecordingSettings>;
+}
+
 /**
  * Migrates settings loaded from disk. A vault that predates the folder
  * templates had a single `meetingsFolder` string; that string becomes the
  * root for both the one-off and (new) series templates so an existing note
  * layout doesn't move. Pure so it can run without a vault. `loaded` is
  * untyped since the legacy `meetingsFolder` key no longer exists on
- * `SystemRecordingSettings`.
+ * `SystemRecordingSettings`, and since a hand-edited file may carry any type
+ * at all for keys that `sanitizeMigrated` then validates.
  */
 export function migrateSettings(
 	loaded: Record<string, unknown> | null
 ): Partial<SystemRecordingSettings> {
 	if (!loaded) return {};
 	if (loaded["oneOffFolderTemplate"] !== undefined) {
-		return loaded as Partial<SystemRecordingSettings>;
+		return sanitizeMigrated(loaded as Partial<SystemRecordingSettings>);
 	}
 	const legacyFolder = loaded["meetingsFolder"];
 	const base = typeof legacyFolder === "string" && legacyFolder ? legacyFolder : "Meetings";
-	return {
+	return sanitizeMigrated({
 		...(loaded as Partial<SystemRecordingSettings>),
 		oneOffFolderTemplate: base,
 		seriesFolderTemplate: `${base}/{{series}}`,
@@ -137,7 +168,7 @@ export function migrateSettings(
 		// "Meetings" tree.
 		adhocFolder: base,
 		oneOnOneFolder: `${base}/1-1s`,
-	};
+	});
 }
 
 export class SystemRecordingSettingTab extends PluginSettingTab {

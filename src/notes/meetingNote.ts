@@ -132,8 +132,9 @@ export interface MeetingNoteScanEntry {
 	eventId: string | null;
 	recurringEventId: string | null;
 	oneOnOneWith: string | null;
+	/** `one_on_one_email` frontmatter, trimmed and lowercased; null when absent/empty. */
 	oneOnOneEmail: string | null;
-	/** `start` frontmatter, falling back to `date`; null when neither is a non-empty string. */
+	/** `start` frontmatter; falls back to `date` only when `start` itself isn't a non-empty string. */
 	stamp: string | null;
 	status: string | null;
 	/** Raw `recording` frontmatter value (typically a `[[wikilink]]` string), if any. */
@@ -143,6 +144,29 @@ export interface MeetingNoteScanEntry {
 
 function nonEmptyString(v: unknown): string | null {
 	return typeof v === "string" && v.length > 0 ? v : null;
+}
+
+/**
+ * Frontmatter string, trimmed and lowercased; null when missing/empty. Used
+ * for `one_on_one_email` so a hand-edited value with different casing or
+ * stray whitespace (`Bob@Acme.com `) still lines up with the calendar's own
+ * lowercased/trimmed email rather than stranding the series.
+ */
+function normalizedEmail(v: unknown): string | null {
+	const s = nonEmptyString(v)?.trim().toLowerCase();
+	return s && s.length > 0 ? s : null;
+}
+
+const DATE_ONLY_STAMP = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Parses a `start`/`date` frontmatter stamp as a Date. A bare `YYYY-MM-DD`
+ * value (as written by hand, without a time) is treated as local midnight
+ * rather than `new Date`'s UTC midnight, which would otherwise shift the day
+ * in negative-offset timezones.
+ */
+export function parseStampDate(stamp: string): Date {
+	return new Date(DATE_ONLY_STAMP.test(stamp) ? `${stamp}T00:00:00` : stamp);
 }
 
 /**
@@ -163,8 +187,11 @@ export function scanMeetingNotes(app: App): MeetingNoteScanEntry[] {
 			eventId: nonEmptyString(fm?.["event_id"]),
 			recurringEventId: nonEmptyString(fm?.["recurring_event_id"]),
 			oneOnOneWith: nonEmptyString(fm?.["one_on_one_with"]),
-			oneOnOneEmail: nonEmptyString(fm?.["one_on_one_email"]),
-			stamp: nonEmptyString(fm?.["start"] ?? fm?.["date"]),
+			oneOnOneEmail: normalizedEmail(fm?.["one_on_one_email"]),
+			// Each field is checked on its own: `start` can exist but be a YAML
+			// Date/number/empty string, which must still fall back to `date`
+			// rather than the whole `??` short-circuiting on the first key alone.
+			stamp: nonEmptyString(fm?.["start"]) ?? nonEmptyString(fm?.["date"]),
 			status: nonEmptyString(fm?.["status"]),
 			recording: fm?.["recording"],
 			hasMeetingUrl: nonEmptyString(fm?.["meeting_url"]) !== null,
@@ -172,10 +199,42 @@ export function scanMeetingNotes(app: App): MeetingNoteScanEntry[] {
 	});
 }
 
+/** A file's modification time, or 0 when `stat` is unavailable (e.g. a test double). */
+function mtimeOf(file: TFile): number {
+	return file.stat?.mtime ?? 0;
+}
+
+/**
+ * Picks one file among several equally-identified candidates (e.g. a
+ * duplicate `event_id` from a sync-conflict copy): the most recently
+ * modified one, tiebreaking on the lexicographically smallest path so the
+ * result is deterministic rather than depending on vault iteration order.
+ * Null for an empty list.
+ */
+function preferredByRecency(files: TFile[]): TFile | null {
+	let best: TFile | null = null;
+	for (const file of files) {
+		if (
+			!best ||
+			mtimeOf(file) > mtimeOf(best) ||
+			(mtimeOf(file) === mtimeOf(best) && file.path < best.path)
+		) {
+			best = file;
+		}
+	}
+	return best;
+}
+
 /**
  * The file of the most recently-started entry (by lexicographic max `stamp`)
  * matching `predicate`; entries with no `stamp` are skipped. This is how a
  * series or a 1:1's folder "follows" wherever its notes currently live.
+ *
+ * When frontmatter was hand-deleted (no `start`/`date` on any matching note),
+ * there's no stamped entry to prefer, so this falls back to the matching
+ * entry with the greatest `file.stat.mtime` (tiebroken like
+ * `preferredByRecency`) rather than treating the series/person as unseen and
+ * duplicating its folder at the default template location.
  */
 function mostRecentMatching(
 	entries: MeetingNoteScanEntry[],
@@ -183,24 +242,34 @@ function mostRecentMatching(
 ): TFile | null {
 	let best: TFile | null = null;
 	let bestStamp = "";
+	const matching: TFile[] = [];
 	for (const e of entries) {
-		if (e.stamp === null || !predicate(e)) continue;
+		if (!predicate(e)) continue;
+		matching.push(e.file);
+		if (e.stamp === null) continue;
 		if (!best || e.stamp > bestStamp) {
 			best = e.file;
 			bestStamp = e.stamp;
 		}
 	}
-	return best;
+	return best ?? preferredByRecency(matching);
 }
 
 /**
  * Scans the vault for a note whose `event_id` frontmatter matches, so a note
  * that was moved or renamed is still found by identity rather than by the
- * path the plugin would otherwise compute for it. Returns null for an empty id.
+ * path the plugin would otherwise compute for it. Several notes can carry
+ * the same `event_id` (a sync-conflict copy); `preferredByRecency` picks a
+ * deterministic winner rather than whichever the vault iterates first.
+ * Returns null for an empty id.
  */
 export function findNoteByEventId(app: App, eventId: string): TFile | null {
 	if (!eventId) return null;
-	return scanMeetingNotes(app).find((e) => e.eventId === eventId)?.file ?? null;
+	return preferredByRecency(
+		scanMeetingNotes(app)
+			.filter((e) => e.eventId === eventId)
+			.map((e) => e.file)
+	);
 }
 
 /**
@@ -247,8 +316,12 @@ function resolveMeetingFolderFromScan(
 	cfg: MeetingNoteConfig
 ): string {
 	if (cfg.oneOnOneSeparately && ev.oneOnOnePartner) {
-		const byEmail = ev.oneOnOnePartnerEmail
-			? mostRecentMatching(entries, (e) => e.oneOnOneEmail === ev.oneOnOnePartnerEmail)
+		// Normalized once so a hand-edited event email (different casing/stray
+		// whitespace) still lines up with `scanMeetingNotes`' own normalized
+		// `oneOnOneEmail`, in both the match below and the conflict guard.
+		const partnerEmail = ev.oneOnOnePartnerEmail?.trim().toLowerCase() || null;
+		const byEmail = partnerEmail
+			? mostRecentMatching(entries, (e) => e.oneOnOneEmail === partnerEmail)
 			: null;
 		// The label fallback must not adopt a note stamped with a different
 		// email: two partners sharing a display name are different people.
@@ -261,8 +334,8 @@ function resolveMeetingFolderFromScan(
 				(e) =>
 					e.oneOnOneWith === ev.oneOnOnePartner &&
 					(e.oneOnOneEmail === null ||
-						!ev.oneOnOnePartnerEmail ||
-						e.oneOnOneEmail === ev.oneOnOnePartnerEmail)
+						!partnerEmail ||
+						e.oneOnOneEmail === partnerEmail)
 			);
 		if (home) return folderOf(home);
 		return normalizeFolderPath(
@@ -390,8 +463,37 @@ async function stampFrontmatter(
 }
 
 /**
+ * Bridges the gap between stamping a new note's `event_id` and
+ * `metadataCache` indexing it. Two `createMeetingNote` calls racing for the
+ * same event (a double-click, or the scheduler and the agenda both reacting
+ * to it) can both run their `scanMeetingNotes`-based identity lookup before
+ * the cache has indexed the first call's write, so neither sees the other's
+ * note by frontmatter — which would otherwise collapse two distinct
+ * same-title events into one note, or send the second call into a create
+ * collision. Keyed by event id, valued by the note's path; consulted before
+ * the scan and updated on every successful reuse/create.
+ */
+const recentNoteByEventId = new Map<string, string>();
+
+/** Test-only: clears the module-level recent-note cache between test cases. */
+export function __resetRecentNoteCache(): void {
+	recentNoteByEventId.clear();
+}
+
+function refFromFile(file: TFile): MeetingNoteRef {
+	return {
+		file,
+		notePath: file.path,
+		folder: folderOf(file),
+		basename: file.basename,
+	};
+}
+
+/**
  * Creates (or reuses) the meeting note and writes its frontmatter. Identity
- * comes first: a note carrying this event's `event_id` anywhere in the vault
+ * comes first: the recent-note map (see `recentNoteByEventId`), then a note
+ * carrying this event's `event_id` anywhere in the vault — found via
+ * `preferredByRecency` since a sync-conflict copy can leave more than one —
  * is reused wherever it lives, so a note the user moved is never duplicated.
  * Only when none exists does this compute a fresh path (folder resolution +
  * collision-safe basename) and create it. The body comes from the user's
@@ -403,19 +505,29 @@ export async function createMeetingNote(
 	ev: MeetingEventInfo,
 	cfg: MeetingNoteConfig
 ): Promise<MeetingNoteRef> {
+	const reuse = async (file: TFile): Promise<MeetingNoteRef> => {
+		await stampFrontmatter(app, file, ev, cfg);
+		if (ev.id) recentNoteByEventId.set(ev.id, file.path);
+		return refFromFile(file);
+	};
+
+	// Catches a just-created note before metadataCache has indexed it (see
+	// `recentNoteByEventId`); getAbstractFileByPath doesn't depend on the cache.
+	const recentPath = ev.id ? recentNoteByEventId.get(ev.id) : undefined;
+	if (recentPath) {
+		const recent = app.vault.getAbstractFileByPath(recentPath);
+		if (recent instanceof TFile) return reuse(recent);
+	}
+
 	// One scan serves both the identity lookup below and the sticky-home
 	// lookups inside `resolveMeetingFolderFromScan`.
 	const entries = scanMeetingNotes(app);
-	const byIdentity = ev.id ? entries.find((e) => e.eventId === ev.id)?.file ?? null : null;
-	if (byIdentity) {
-		await stampFrontmatter(app, byIdentity, ev, cfg);
-		return {
-			file: byIdentity,
-			notePath: byIdentity.path,
-			folder: folderOf(byIdentity),
-			basename: byIdentity.basename,
-		};
-	}
+	const byIdentity = ev.id
+		? preferredByRecency(
+				entries.filter((e) => e.eventId === ev.id).map((e) => e.file)
+			)
+		: null;
+	if (byIdentity) return reuse(byIdentity);
 
 	const folder = resolveMeetingFolderFromScan(entries, ev, cfg);
 	await ensureFolder(app, folder);
@@ -426,21 +538,25 @@ export async function createMeetingNote(
 		meetingBasename(ev, cfg.titlePattern),
 		ev.id
 	);
-	// The resolved path may carry a " 2" suffix; use its actual stem so the
-	// colocated recording shares the note's basename.
-	const basename = notePath
-		.substring(notePath.lastIndexOf("/") + 1)
-		.replace(/\.md$/, "");
 
 	const existing = app.vault.getAbstractFileByPath(notePath);
-	const file =
-		existing instanceof TFile
-			? existing
-			: await app.vault.create(notePath, renderTemplate(cfg.template, ev));
+	let file: TFile;
+	if (existing instanceof TFile) {
+		file = existing;
+	} else {
+		try {
+			file = await app.vault.create(notePath, renderTemplate(cfg.template, ev));
+		} catch (e) {
+			// A concurrent create can win the race between our exists-check
+			// above and this call; reuse whatever landed at notePath instead
+			// of failing the whole operation.
+			const won = app.vault.getAbstractFileByPath(notePath);
+			if (!(won instanceof TFile)) throw e;
+			file = won;
+		}
+	}
 
-	await stampFrontmatter(app, file, ev, cfg);
-
-	return { file, notePath, folder, basename };
+	return reuse(file);
 }
 
 /** Links the saved recording into the note's frontmatter and marks it recorded. */

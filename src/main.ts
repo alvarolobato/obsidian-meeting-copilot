@@ -28,6 +28,7 @@ import {
     MeetingEventInfo,
     MeetingNoteConfig,
     normalizeFolderPathOrEmpty,
+    parseStampDate,
     recordingLinkTarget,
     sanitizeName,
     scanMeetingNotes,
@@ -1083,7 +1084,7 @@ export default class SystemRecordingPlugin extends Plugin {
             inputs.push({
                 path: entry.file.path,
                 title,
-                start: entry.stamp ? new Date(entry.stamp) : null,
+                start: entry.stamp ? parseStampDate(entry.stamp) : null,
                 status: entry.status,
                 hasRecording,
             });
@@ -1177,8 +1178,10 @@ export default class SystemRecordingPlugin extends Plugin {
         };
         // Fall back to "now" for missing/invalid dates so time-based actions
         // (e.g. create-and-record path templates) don't produce "Invalid Date".
+        // A bare `YYYY-MM-DD` stamp (see `parseStampDate`) is treated as local
+        // midnight rather than `new Date`'s UTC midnight.
         const toDate = (v: unknown): Date => {
-            const d = new Date(typeof v === "string" ? v : NaN);
+            const d = typeof v === "string" ? parseStampDate(v) : new Date(NaN);
             return isNaN(d.getTime()) ? new Date() : d;
         };
 
@@ -2056,6 +2059,12 @@ export default class SystemRecordingPlugin extends Plugin {
         // to the path captured at start.
         const noteRef = this.currentMeetingNote;
         const notePath = noteRef?.path ?? this.currentMeetingNotePath;
+        // Captured before the block below nulls it: the recorder wrote the WAV
+        // to wherever recording *started*, which is no longer the note's folder
+        // if the note was moved mid-recording. Deriving the link from the
+        // note's current path in that case would point at a path the file was
+        // never written to, breaking auto-transcribe.
+        const recordingPath = this.currentRecordingPath;
         this.currentMeetingNotePath = null;
         this.currentMeetingNote = null;
         this.currentRecordingEventId = null;
@@ -2065,11 +2074,14 @@ export default class SystemRecordingPlugin extends Plugin {
             const file =
                 noteRef ?? this.app.vault.getAbstractFileByPath(notePath);
             if (file instanceof TFile) {
-                // Qualify the link with the recording's folder (it's colocated
-                // with the note) so duplicate basenames elsewhere can't resolve
-                // to the wrong file.
-                const slash = notePath.lastIndexOf("/");
-                const folder = slash >= 0 ? notePath.slice(0, slash) : "";
+                // Qualify the link with the folder the recording actually lives
+                // in (see `recordingPath` above), so duplicate basenames
+                // elsewhere can't resolve to the wrong file.
+                const dirOf = (p: string): string => {
+                    const slash = p.lastIndexOf("/");
+                    return slash >= 0 ? p.slice(0, slash) : "";
+                };
+                const folder = dirOf(recordingPath ?? notePath);
                 const link = folder ? `${folder}/${fileName}` : fileName;
                 try {
                     await linkRecording(this.app, file, link);

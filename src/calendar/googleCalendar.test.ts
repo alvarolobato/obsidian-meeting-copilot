@@ -135,6 +135,20 @@ describe("oneOnOnePartner", () => {
 		expect(oneOnOnePartner(undefined)).toBeNull();
 		expect(oneOnOnePartner([])).toBeNull();
 	});
+
+	it("recognizes a 1:1 when Google omits the self attendee entirely", () => {
+		const partner = oneOnOnePartner([
+			{ email: "bob@example.com", displayName: "Bob" },
+		]);
+		expect(partner).toBe("Bob");
+	});
+
+	it("returns null for a single attendee who is self (a meeting with yourself)", () => {
+		const partner = oneOnOnePartner([
+			{ email: "me@example.com", self: true },
+		]);
+		expect(partner).toBeNull();
+	});
 });
 
 describe("oneOnOnePartnerEmail", () => {
