@@ -88,7 +88,7 @@ In *Settings → Meeting Copilot → AI enrichment*, enable enrichment, then cli
 - **Google Calendar integration**: Client ID / secret, authentication, target calendar, agenda look-ahead / look-back, exclusion keywords.
 - **Recording folder** / **File name template**: for ad-hoc recordings.
 - **Meetings folder**: where calendar meeting notes (and their recordings) are created.
-- **Recording retention (days)**: recordings older than this are trashed on startup and via *Clean up old recordings*; `0` keeps them forever. Recordings linked to a note that hasn't been transcribed/enriched yet are protected.
+- **Recording retention (days)**: recordings older than this are trashed on startup and via *Clean up old recordings*; `0` keeps them forever. A recording is pruned only when its owning meeting note actually contains the transcript text — so notes without the transcript captured (e.g. enriched with *Insert transcript* off), orphan/ad-hoc recordings, and unrelated audio are never deleted.
 - **AI endpoint (shared)**: OpenAI-compatible base URL + API key used for both transcription and enrichment.
 - **Transcription**: model, language, voice-activity detection, AI post-processing, custom dictionary, and **Auto-transcribe when recording stops** (headless — no dialog).
 - **AI enrichment**: enable it, pick a chat model (via **Test connection** + dropdown); optionally enrich automatically after transcription.

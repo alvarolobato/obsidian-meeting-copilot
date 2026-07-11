@@ -92,7 +92,12 @@ export class GoogleOAuth {
 		if (res.status >= 400) {
 			// A dead refresh token is unrecoverable: clear it so the app stops
 			// retrying forever and can prompt the user to reconnect.
-			if (res.status === 400 && /invalid_grant/.test(res.text ?? "")) {
+			const errorCode = (res.json as { error?: string } | undefined)?.error;
+			if (
+				res.status === 400 &&
+				(errorCode === "invalid_grant" ||
+					/invalid_grant/.test(res.text ?? ""))
+			) {
 				await this.storage.setTokens(null);
 				this.onAuthExpired?.();
 				throw new AuthInvalidatedError(t().oauth.sessionExpired);

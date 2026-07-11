@@ -380,15 +380,22 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     async saveSettings() {
-        // Sensitive fields live in per-vault localStorage, never in data.json.
-        this.saveLocal("googleTokens", this.settings.googleTokens);
-        this.saveLocal(
-            "googleClientSecret",
-            this.settings.googleClientSecret || null
-        );
+        // Sensitive fields live in per-vault localStorage, never in the synced/
+        // committed data.json. Only strip them from data.json once we've
+        // *verified* they were durably written to localStorage — otherwise (older
+        // Obsidian without the API, or a write failure) keep them in data.json so
+        // we never silently lose the user's calendar credentials.
+        const stored =
+            this.saveLocal("googleTokens", this.settings.googleTokens) &&
+            this.saveLocal(
+                "googleClientSecret",
+                this.settings.googleClientSecret || null
+            );
         const persisted: Record<string, unknown> = { ...this.settings };
-        delete persisted.googleTokens;
-        delete persisted.googleClientSecret;
+        if (stored) {
+            delete persisted.googleTokens;
+            delete persisted.googleClientSecret;
+        }
         await this.saveData(persisted);
     }
 
@@ -397,32 +404,58 @@ export default class SystemRecordingPlugin extends Plugin {
         return `meeting-copilot/${name}`;
     }
 
-    /** Reads a JSON value from Obsidian's per-vault localStorage (null if absent/unavailable). */
-    private loadLocal<T>(name: string): T | null {
+    /** Obsidian's per-vault localStorage helpers (added in 1.8.7), if present. */
+    private localStore(): {
+        load(key: string): unknown;
+        save(key: string, value: unknown): void;
+    } | null {
         const app = this.app as unknown as {
             loadLocalStorage?(key: string): unknown;
-        };
-        const v = app.loadLocalStorage?.(this.secretKey(name));
-        if (v == null) return null;
-        if (typeof v === "string") {
-            try {
-                return JSON.parse(v) as T;
-            } catch {
-                return v as unknown as T;
-            }
-        }
-        return v as T;
-    }
-
-    /** Writes (or clears, when null) a JSON value to Obsidian's per-vault localStorage. */
-    private saveLocal(name: string, value: unknown): void {
-        const app = this.app as unknown as {
             saveLocalStorage?(key: string, value: unknown): void;
         };
-        app.saveLocalStorage?.(
-            this.secretKey(name),
-            value == null ? null : JSON.stringify(value)
-        );
+        if (
+            typeof app.loadLocalStorage === "function" &&
+            typeof app.saveLocalStorage === "function"
+        ) {
+            return {
+                load: (k) => app.loadLocalStorage!(k),
+                save: (k, v) => app.saveLocalStorage!(k, v),
+            };
+        }
+        return null;
+    }
+
+    /** Reads a JSON value from per-vault localStorage (null if absent/unavailable/corrupt). */
+    private loadLocal<T>(name: string): T | null {
+        const store = this.localStore();
+        if (!store) return null;
+        const v = store.load(this.secretKey(name));
+        if (typeof v !== "string") return null;
+        try {
+            return JSON.parse(v) as T;
+        } catch {
+            // Corrupt entry — treat as absent so we fall back to legacy/none.
+            return null;
+        }
+    }
+
+    /**
+     * Writes (or clears, when null) a JSON value to per-vault localStorage and
+     * verifies the round-trip. Returns false when the API is unavailable or the
+     * value didn't persist, so the caller can keep the value in data.json.
+     */
+    private saveLocal(name: string, value: unknown): boolean {
+        const store = this.localStore();
+        if (!store) return false;
+        const key = this.secretKey(name);
+        try {
+            store.save(key, value == null ? null : JSON.stringify(value));
+            const back = store.load(key);
+            if (value == null) return back == null;
+            return back === JSON.stringify(value);
+        } catch {
+            return false;
+        }
     }
 
     // MARK: - Recording control

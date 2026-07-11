@@ -5,3 +5,36 @@
 import moment from "moment";
 
 export { moment };
+
+// --- requestUrl: tests swap in an implementation via __setRequestUrl ---
+export interface MockRequestResponse {
+	status: number;
+	json?: unknown;
+	text?: string;
+}
+type RequestUrlImpl = (opts: {
+	url: string;
+	method?: string;
+	headers?: Record<string, string>;
+	body?: string;
+	throw?: boolean;
+}) => Promise<MockRequestResponse> | MockRequestResponse;
+
+let requestUrlImpl: RequestUrlImpl = () => ({ status: 200, json: {}, text: "" });
+
+/** Test hook: set the response `requestUrl` returns. */
+export function __setRequestUrl(fn: RequestUrlImpl): void {
+	requestUrlImpl = fn;
+}
+
+export function requestUrl(
+	opts: Parameters<RequestUrlImpl>[0]
+): Promise<MockRequestResponse> {
+	return Promise.resolve(requestUrlImpl(opts));
+}
+
+export class Notice {
+	constructor(_message?: string) {}
+}
+
+export const Platform = { isDesktop: true, isMacOS: true };

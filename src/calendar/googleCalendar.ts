@@ -68,8 +68,13 @@ export async function collectPages<T>(
 		const json = await fetchPage(pageToken);
 		if (json.items) all.push(...json.items);
 		pageToken = json.nextPageToken || undefined;
-		if (!pageToken) break;
+		if (!pageToken) return all;
 	}
+	// Bailed at the cap with more pages available. With ascending order this
+	// drops the newest items, so warn rather than silently truncate.
+	console.warn(
+		`[Meeting Copilot] calendar pagination hit ${maxPages}-page cap; some events may be omitted.`
+	);
 	return all;
 }
 
