@@ -1693,21 +1693,51 @@ export default class SystemRecordingPlugin extends Plugin {
                 }
                 // Close the loop: hand the fresh recording to the transcriber.
                 if (this.settings.autoTranscribe) {
-                    const audio = this.app.vault.getAbstractFileByPath(link);
-                    if (audio instanceof TFile) {
-                        void this.launchTranscriber(audio).catch((e) => {
+                    // The helper writes the WAV directly to disk, so Obsidian's
+                    // vault index may not have registered it as a TFile yet.
+                    // Wait for it to appear before auto-transcribing.
+                    void this.resolveFileWithRetry(link)
+                        .then((audio) => {
+                            if (!audio) {
+                                console.warn(
+                                    "[Meeting Copilot] auto-transcribe: recording not found in vault",
+                                    link
+                                );
+                                return;
+                            }
+                            return this.launchTranscriber(audio);
+                        })
+                        .catch((e) => {
                             console.warn(
                                 "[Meeting Copilot] auto-transcribe failed",
                                 e
                             );
                             if (!this.recorder.isRecording) this.hideStatusBar();
                         });
-                    }
                 }
                 return;
             }
         }
         this.insertRecordingLink(fileName);
+    }
+
+    /**
+     * Resolves a vault path to a TFile, retrying with a short backoff to give
+     * Obsidian's file watcher time to index a file just written to disk by the
+     * recorder helper (otherwise auto-transcribe would silently skip it).
+     */
+    private async resolveFileWithRetry(
+        vaultPath: string,
+        tries = 15,
+        delayMs = 300
+    ): Promise<TFile | null> {
+        for (let i = 0; i < tries; i++) {
+            const f = this.app.vault.getAbstractFileByPath(vaultPath);
+            if (f instanceof TFile) return f;
+            await new Promise((r) => setTimeout(r, delayMs));
+        }
+        const f = this.app.vault.getAbstractFileByPath(vaultPath);
+        return f instanceof TFile ? f : null;
     }
 
     /** Returns a vault-relative `.wav` path, appending -2, -3… if the name is taken. */
