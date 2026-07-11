@@ -1,7 +1,7 @@
 // English locale.
 export const en = {
 	ribbon: {
-		toggleRecording: "Start/stop meeting recording",
+		toggleRecording: "Start/Stop on-demand meeting",
 		openAgenda: "Open meeting agenda",
 	},
 	commands: {
