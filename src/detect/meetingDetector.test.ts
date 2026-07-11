@@ -87,6 +87,17 @@ describe("MeetingDetector", () => {
 		expect(det.activeCount()).toBe(0);
 	});
 
+	it("retainOnly drops untracked apps without firing onEnd", async () => {
+		const { det, onEnd } = makeDetector([new Set(["Zoom", "Google Meet"])]);
+		await det.poll();
+		expect(det.activeCount()).toBe(2);
+		det.retainOnly(new Set(["Google Meet"])); // Zoom probe disabled
+		expect(det.isActive("Zoom")).toBe(false);
+		expect(det.isActive("Google Meet")).toBe(true);
+		expect(det.activeCount()).toBe(1);
+		expect(onEnd).not.toHaveBeenCalled();
+	});
+
 	it("swallows probe errors via onError", async () => {
 		const onError = vi.fn();
 		const det = new MeetingDetector({

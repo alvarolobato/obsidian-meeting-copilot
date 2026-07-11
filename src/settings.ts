@@ -281,6 +281,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.detectZoom = value;
 						await this.plugin.saveSettings();
+						this.plugin.updateDetector();
 					})
 			);
 
@@ -293,6 +294,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.detectGoogleMeet = value;
 						await this.plugin.saveSettings();
+						this.plugin.updateDetector();
 					})
 			);
 

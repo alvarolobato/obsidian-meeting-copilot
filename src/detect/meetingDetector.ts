@@ -74,4 +74,19 @@ export class MeetingDetector {
 	activeCount(): number {
 		return this.active.size;
 	}
+
+	/**
+	 * Drops tracking for any active app not in `apps` WITHOUT firing `onEnd`.
+	 * Used when a probe is disabled: a disabled app isn't "ended", it's just no
+	 * longer watched, so it must not trigger an end transition (which could stop
+	 * a still-live recording).
+	 */
+	retainOnly(apps: Set<string>): void {
+		for (const app of [...this.active]) {
+			if (!apps.has(app)) {
+				this.active.delete(app);
+				this.misses.delete(app);
+			}
+		}
+	}
 }

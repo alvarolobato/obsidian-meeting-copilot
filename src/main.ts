@@ -580,11 +580,17 @@ export default class SystemRecordingPlugin extends Plugin {
 			window.clearInterval(this.detectorIntervalId);
 			this.detectorIntervalId = null;
 		}
+		const enabled = this.enabledProbeApps();
 		// Don't poll if disabled, off-platform, or no probe is enabled (an empty
-		// probe set would otherwise be read as "all meetings ended").
-		const anyProbe =
-			this.settings.detectZoom || this.settings.detectGoogleMeet;
-		if (!this.settings.detectMeetings || !anyProbe || !Platform.isMacOS) {
+		// probe set would otherwise be read as "all meetings ended"). Drop the
+		// detector so a later re-enable starts from a clean state (no stale
+		// "active" app that would false-end an unrelated recording).
+		if (
+			!this.settings.detectMeetings ||
+			enabled.size === 0 ||
+			!Platform.isMacOS
+		) {
+			this.detector = null;
 			return;
 		}
 		if (!this.detector) {
@@ -594,6 +600,9 @@ export default class SystemRecordingPlugin extends Plugin {
 				onEnd: (app) => this.onMeetingEnded(app),
 				onError: (e) => console.error("Meeting detection probe failed", e),
 			});
+		} else {
+			// A probe may have just been disabled — forget it silently (not an end).
+			this.detector.retainOnly(enabled);
 		}
 		const seconds = Math.min(
 			120,
@@ -605,6 +614,14 @@ export default class SystemRecordingPlugin extends Plugin {
 			seconds * 1000
 		);
 		this.registerInterval(this.detectorIntervalId);
+	}
+
+	/** The conferencing app names currently enabled for detection. */
+	private enabledProbeApps(): Set<string> {
+		const apps = new Set<string>();
+		if (this.settings.detectZoom) apps.add("Zoom");
+		if (this.settings.detectGoogleMeet) apps.add("Google Meet");
+		return apps;
 	}
 
 	/** Collects the set of conferencing apps currently in a meeting. */
@@ -1265,7 +1282,7 @@ export default class SystemRecordingPlugin extends Plugin {
      * helper's identity/path), so surface clear, actionable instructions for it.
      */
     private notifyRecordingError(message: string): void {
-        if (/not authorized|screen (capture|recording)/i.test(message)) {
+        if (/screen[\s-]?(capture|recording)/i.test(message)) {
             new Notice(t().notices.screenPermission, 15000);
         } else {
             new Notice(t().notices.recordingError(message));
