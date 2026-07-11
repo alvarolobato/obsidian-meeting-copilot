@@ -72,6 +72,7 @@ import {
     populateMeetingMenu,
     RowHandlers,
 } from "./ui/agenda/components/meetingRow";
+import { registerIcons, RECORD_ICON } from "./ui/icons";
 
 export default class SystemRecordingPlugin extends Plugin {
     settings: SystemRecordingSettings;
@@ -123,8 +124,9 @@ export default class SystemRecordingPlugin extends Plugin {
         initTranscribeEngine(this.manifest.dir ?? null);
 
         // Ribbon icon
+        registerIcons();
         this.ribbonIconEl = this.addRibbonIcon(
-            "microphone",
+            RECORD_ICON,
             t().ribbon.toggleRecording,
             () => this.toggleRecording()
         );
