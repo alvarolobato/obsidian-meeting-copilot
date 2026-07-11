@@ -1184,6 +1184,70 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /**
+     * Runs the speaker-separated pass when the split sidecars are present and
+     * the endpoint is known to emit timestamps. Returns the diarized transcript,
+     * or null when separation doesn't apply (feature off, or no sidecars on
+     * disk) or the endpoint returned no segments this pass and we fell back to
+     * the mixed file. On that fallback it also invalidates the cached probe so
+     * future meetings don't keep paying for the extra passes.
+     */
+    private async tryDiarizedTranscribe(
+        recording: TFile
+    ): Promise<string | null> {
+        if (!this.shouldSeparateSpeakers()) return null;
+        // Discover the split sidecars by naming convention so separation works
+        // for both the auto-transcribe after stop and a manual re-run on an old
+        // recording. The helper writes them straight to disk, so check the
+        // adapter (which bypasses the vault-index lag) before waiting on the
+        // TFile: a recording with no sidecars must not stall the retry loop.
+        const sidecars = sidecarPathsFor(recording.path);
+        const meFile = await this.resolveExistingFile(sidecars.me);
+        const themFile = await this.resolveExistingFile(sidecars.them);
+        if (!meFile || !themFile) return null;
+
+        // speech.json is optional: a missing or malformed sidecar yields
+        // undefined windows, and the merge then keeps every segment.
+        let windows: SpeechWindows | undefined;
+        const speech = await this.resolveExistingFile(sidecars.speech);
+        if (speech) {
+            windows = parseSpeechWindows(await this.app.vault.read(speech));
+        }
+        const result = await transcribeDiarized(
+            this.app,
+            meFile,
+            themFile,
+            this.buildTranscribeConfig(),
+            windows
+        );
+        if (result.diarized) return result.text;
+
+        // The endpoint didn't return timestamps this pass (a misconfiguration
+        // slipping past the probe). Invalidate the cached probe so we stop
+        // paying for three passes every meeting, and tell the user how to
+        // re-check. The mixed pass runs back in launchTranscriber.
+        console.warn(
+            "[Meeting Copilot] diarization returned no segments; using mixed audio"
+        );
+        this.settings.sttTimestampsSupported = null;
+        await this.saveSettings();
+        new Notice(t().notices.diarizationNoTimestamps);
+        return null;
+    }
+
+    /**
+     * Resolves a vault path to a TFile only when the file actually exists on
+     * disk. Checks the vault adapter first (no index lag) so a sidecar that was
+     * never written returns immediately, then reuses the retry helper so a
+     * just-written file gets time to land in the vault index.
+     */
+    private async resolveExistingFile(
+        vaultPath: string
+    ): Promise<TFile | null> {
+        if (!(await this.app.vault.adapter.exists(vaultPath))) return null;
+        return this.resolveFileWithRetry(vaultPath);
+    }
+
+    /**
      * Transcribes an audio file with the vendored engine (headless — no modal,
      * no separate transcript file). The transcript text is routed through the
      * same insert+enrich path used elsewhere.
@@ -1202,64 +1266,18 @@ export default class SystemRecordingPlugin extends Plugin {
         this.transcribingPaths.add(recording.path);
         this.setActionStatus(t().statusBar.transcribing, "busy");
         try {
-            // Discover the split sidecars by naming convention so separation
-            // works for both the auto-transcribe after stop and a manual re-run
-            // on an old recording. Any sidecar may be absent (write failed, or
-            // the recording predates the feature); the mixed wav always exists.
-            const sidecars = sidecarPathsFor(recording.path);
-            const meFile = this.app.vault.getAbstractFileByPath(sidecars.me);
-            const themFile = this.app.vault.getAbstractFileByPath(sidecars.them);
-
-            let text: string;
-            let diarized = false;
-            let speechFile: TFile | null = null;
-            if (
-                this.shouldSeparateSpeakers() &&
-                meFile instanceof TFile &&
-                themFile instanceof TFile
-            ) {
-                // speech.json is optional: a missing or malformed sidecar yields
-                // undefined windows, and the merge then keeps every segment.
-                let windows: SpeechWindows | undefined;
-                const speech = this.app.vault.getAbstractFileByPath(
-                    sidecars.speech
-                );
-                if (speech instanceof TFile) {
-                    speechFile = speech;
-                    windows = parseSpeechWindows(
-                        await this.app.vault.read(speech)
-                    );
-                }
-                const result = await transcribeDiarized(
-                    this.app,
-                    meFile,
-                    themFile,
-                    this.buildTranscribeConfig(),
-                    windows
-                );
-                if (result.diarized) {
-                    text = result.text;
-                    diarized = true;
-                } else {
-                    // The endpoint didn't return timestamps this pass (a rare
-                    // misconfiguration slipping past the probe); fall back to the
-                    // mixed file. One extra pass is the price of the fallback.
-                    console.warn(
-                        "[Meeting Copilot] diarization returned no segments; using mixed audio"
-                    );
-                    text = await transcribeAudio(
-                        this.app,
-                        recording,
-                        this.buildTranscribeConfig()
-                    );
-                }
-            } else {
-                text = await transcribeAudio(
+            // Try the speaker-separated pass; a null means it didn't apply or
+            // fell back, in which case we transcribe the mixed wav (which always
+            // exists) with a single call.
+            const diarizedText = await this.tryDiarizedTranscribe(recording);
+            const diarized = diarizedText !== null;
+            const text =
+                diarizedText ??
+                (await transcribeAudio(
                     this.app,
                     recording,
                     this.buildTranscribeConfig()
-                );
-            }
+                ));
 
             const trimmed = text.trim();
             if (!trimmed) {
@@ -1287,20 +1305,9 @@ export default class SystemRecordingPlugin extends Plugin {
             if (!noteFound) {
                 new Notice(t().notices.transcribeNoNote(recording.basename));
             }
-            // Retention only sweeps audio extensions, so the speech.json would
-            // linger forever; drop it once its transcript is in. Kept on
-            // failure/fallback so a retry can still filter. The .me/.them wavs
-            // are wavs and are already swept.
-            if (diarized && speechFile) {
-                try {
-                    await this.app.fileManager.trashFile(speechFile);
-                } catch (e) {
-                    console.warn(
-                        "[Meeting Copilot] failed to delete speech.json",
-                        e
-                    );
-                }
-            }
+            // The .me/.them/.speech sidecars are left in place: a later manual
+            // re-transcribe reuses them, and the retention sweep ages them out
+            // on the same rule as the audio.
         } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
             // The engine throws the partial text (marker-prefixed) for a

@@ -84,27 +84,25 @@ if #available(macOS 13.0, *) {
                 let finalURL = URL(fileURLWithPath: finalOutputPath)
                 try? FileManager.default.moveItem(at: tempOutputURL, to: finalURL)
 
-                var stopped: [String: Any] = ["status": "stopped", "duration": Int(duration), "file": finalOutputPath]
+                let stopped: [String: Any] = ["status": "stopped", "duration": Int(duration), "file": finalOutputPath]
 
-                // When split, move the sidecars next to the final path. A missing
-                // sidecar just drops its field; it never fails the recording.
+                // When split, relocate the sidecars next to the final recording.
+                // Discovery downstream is by naming convention, so we don't
+                // report the paths back; a missing sidecar is skipped and never
+                // fails the recording.
                 if split {
-                    let dir = finalURL.deletingLastPathComponent()
-                    let stem = finalURL.deletingPathExtension().lastPathComponent
-                    let sidecars: [(temp: URL, final: URL, key: String)] = [
-                        (mixer.meSidecarURL, dir.appendingPathComponent("\(stem).me.wav"), "meFile"),
-                        (mixer.themSidecarURL, dir.appendingPathComponent("\(stem).them.wav"), "themFile"),
-                        (mixer.speechSidecarURL, dir.appendingPathComponent("\(stem).speech.json"), "speechFile"),
+                    let finalSidecars = AudioMixer.sidecarURLs(forBase: finalURL)
+                    let moves: [(temp: URL, final: URL)] = [
+                        (mixer.meSidecarURL, finalSidecars.me),
+                        (mixer.themSidecarURL, finalSidecars.them),
+                        (mixer.speechSidecarURL, finalSidecars.speech),
                     ]
-                    for sidecar in sidecars {
-                        guard FileManager.default.fileExists(atPath: sidecar.temp.path) else { continue }
-                        if FileManager.default.fileExists(atPath: sidecar.final.path) {
-                            try? FileManager.default.removeItem(at: sidecar.final)
+                    for move in moves {
+                        guard FileManager.default.fileExists(atPath: move.temp.path) else { continue }
+                        if FileManager.default.fileExists(atPath: move.final.path) {
+                            try? FileManager.default.removeItem(at: move.final)
                         }
-                        do {
-                            try FileManager.default.moveItem(at: sidecar.temp, to: sidecar.final)
-                            stopped[sidecar.key] = sidecar.final.path
-                        } catch {}
+                        try? FileManager.default.moveItem(at: move.temp, to: move.final)
                     }
                 }
 

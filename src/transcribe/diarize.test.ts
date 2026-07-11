@@ -75,6 +75,18 @@ describe("mergeDiarized", () => {
 			const me = [seg("first thing", 0, 2), seg("second thing", 1, 3)];
 			expect(mergeDiarized(me, [])).toBe("Me: first thing second thing");
 		});
+
+		it("drops a duplicate separated from its twin by another segment (A, B, A')", () => {
+			// A' overlaps A but a different segment B was kept between them. A check
+			// against only the previous kept segment would compare A' to B, miss the
+			// match, and keep the duplicate.
+			const me = [
+				seg("alpha", 10.0, 12.0),
+				seg("beta", 11.8, 14.0),
+				seg("alpha", 11.9, 13.9),
+			];
+			expect(mergeDiarized(me, [])).toBe("Me: alpha beta");
+		});
 	});
 
 	describe("speech-window filtering", () => {
@@ -100,12 +112,25 @@ describe("mergeDiarized", () => {
 			expect(mergeDiarized(me, [], windows)).toBe("Me: edge touch");
 		});
 
-		it("drops everything when the stream has an empty window list but windows are provided", () => {
+		it("keeps every segment when the stream's window list is empty", () => {
 			const me = [seg("anything", 0, 2)];
 			const windows: SpeechWindows = { me: [], them: [[0, 5]] };
-			// An empty window array for a stream means no detected speech, so its
-			// segments are all treated as ghosts and dropped.
-			expect(mergeDiarized(me, [], windows)).toBe("");
+			// An empty window array means the recorder's RMS gate found no speech,
+			// but Whisper transcribed segments anyway. Whisper is the stronger
+			// signal, so we keep them rather than filter against nothing.
+			expect(mergeDiarized(me, [], windows)).toBe("Me: anything");
+		});
+
+		it("keeps a quiet-mic speaker the recorder's gate missed", () => {
+			// Quiet speech (~-40dBFS) sits under the recorder's fixed RMS gate, so
+			// the mic window list comes back empty even though the speaker is real
+			// and Whisper transcribed them. This must never silently erase them.
+			const me = [seg("i can barely be heard", 5, 8)];
+			const them = [seg("loud and clear", 0, 2)];
+			const windows: SpeechWindows = { me: [], them: [[0, 3]] };
+			expect(mergeDiarized(me, them, windows)).toBe(
+				["Them: loud and clear", "Me: i can barely be heard"].join("\n")
+			);
 		});
 
 		it("keeps all segments when windows are omitted", () => {

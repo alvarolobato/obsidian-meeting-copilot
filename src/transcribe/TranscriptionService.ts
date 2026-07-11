@@ -15,6 +15,7 @@ import {
 import {
 	initializeI18n,
 	initializeTranslations,
+	t,
 } from "./vendor/i18n/index";
 import { PathUtils } from "./vendor/utils/PathUtils";
 import { createSerialQueue } from "../util/serialize";
@@ -116,6 +117,34 @@ function extractSegments(result: ControllerResult): DiarSegment[] {
 	return result.segments;
 }
 
+function resultText(result: ControllerResult): string {
+	return typeof result === "string" ? result : result.text;
+}
+
+/**
+ * A pass that produced no segments but non-blank text is a capability miss: the
+ * endpoint transcribed the audio yet ignored the timestamp request, so we have
+ * nothing to place on the shared clock and can't diarize. Distinguished from a
+ * legitimately silent stream (no segments AND no text), which is fine, the
+ * merge labels every line from the other stream and two silent streams give "".
+ */
+export function isCapabilityMiss(segments: DiarSegment[], text: string): boolean {
+	return segments.length === 0 && text.trim().length > 0;
+}
+
+/**
+ * Whether an error thrown by a transcription pass is a user cancellation (which
+ * must propagate) rather than a recoverable failure. Mirrors the cases the
+ * vendored controller itself treats as cancellation.
+ */
+export function isDiarizationCancelled(error: unknown, signal?: AbortSignal): boolean {
+	return (
+		(signal?.aborted ?? false) ||
+		(error instanceof DOMException && error.name === "AbortError") ||
+		(error instanceof Error && error.message === t("errors.transcriptionCancelledByUser"))
+	);
+}
+
 /**
  * Runs the vendored transcription engine headlessly and returns the transcript
  * text. The endpoint is injected via {@link setTranscribeBaseUrl}; the key is
@@ -143,14 +172,17 @@ export interface DiarizedResult {
  * Both passes run inside the same serial queue as {@link transcribeAudio} so
  * the process-global endpoint seam can't be overwritten mid-flight.
  *
- * Dictionary correction is only applied to the joined text in the normal
- * (mixed-file) path. The vendored controller corrects `result.text` but leaves
- * the timestamped segments untouched, and the diarized output is built from
- * those segments, so no dictionary correction reaches it. Known v1 limitation.
+ * Two vendored post-passes only touch the joined text in the normal
+ * (mixed-file) path, never the segments the diarized output is rebuilt from, so
+ * neither reaches the diarized transcript. Known v1 limitation:
+ *   - dictionary correction (applyDictionaryCorrection on result.text), and
+ *   - the hallucination cleaner (postProcessMergedText / cleanText in the
+ *     strategy), which likewise runs on merged text only.
  *
- * If either pass returns no segments (the endpoint didn't honor the timestamp
- * request), this resolves with `diarized: false` so the caller can fall back to
- * transcribing the mixed-down file.
+ * If a pass is a capability miss (no segments but non-blank text, i.e. the
+ * endpoint ignored the timestamp request) this resolves with `diarized: false`
+ * so the caller can fall back to transcribing the mixed-down file. A truly
+ * silent stream (no segments, no text) is not a miss and we proceed.
  */
 export function transcribeDiarized(
 	app: App,
@@ -168,19 +200,40 @@ export function transcribeDiarized(
 		// aligned clocks.
 		const diarCfg: TranscribeConfig = { ...cfg, vadMode: "disabled" };
 
-		const meResult = await runController(app, meFile, diarCfg, signal);
-		if (signal?.aborted) {
-			throw new DOMException("Transcription aborted", "AbortError");
-		}
-		const themResult = await runController(app, themFile, diarCfg, signal);
+		try {
+			const meResult = await runController(app, meFile, diarCfg, signal);
+			if (signal?.aborted) {
+				throw new DOMException("Transcription aborted", "AbortError");
+			}
 
-		const meSegments = extractSegments(meResult);
-		const themSegments = extractSegments(themResult);
+			// Classify the me pass before spending a full them pass. If the
+			// endpoint ignored the timestamp request we can't diarize either
+			// stream, so bail now: me + fallback is 2 passes instead of the
+			// me + them + fallback 3 we'd pay by checking after both passes.
+			const meSegments = extractSegments(meResult);
+			if (isCapabilityMiss(meSegments, resultText(meResult))) {
+				return { text: "", diarized: false };
+			}
 
-		if (meSegments.length === 0 || themSegments.length === 0) {
+			const themResult = await runController(app, themFile, diarCfg, signal);
+			const themSegments = extractSegments(themResult);
+			if (isCapabilityMiss(themSegments, resultText(themResult))) {
+				return { text: "", diarized: false };
+			}
+
+			// Both passes honored timestamps. A stream empty here is legitimately
+			// silent; mergeDiarized handles one empty side, and two give "".
+			return { text: mergeDiarized(meSegments, themSegments, windows), diarized: true };
+		} catch (error) {
+			if (isDiarizationCancelled(error, signal)) {
+				throw error;
+			}
+			// A partial mono pass throws the partial-marker text (one flaky chunk).
+			// That must not kill the whole transcription: the mixed wav can still
+			// be transcribed, so warn and let the caller fall back to it rather
+			// than letting the throw escape and leave no transcript written.
+			console.warn("Diarized transcription pass failed; falling back to mixed file", error);
 			return { text: "", diarized: false };
 		}
-
-		return { text: mergeDiarized(meSegments, themSegments, windows), diarized: true };
 	});
 }

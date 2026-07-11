@@ -76,6 +76,8 @@ export const en = {
 			`Transcribed "${audio}" but found no meeting note to add it to.`,
 		transcribeNoEndpoint:
 			"Set the AI endpoint (base URL + API key) in settings before transcribing.",
+		diarizationNoTimestamps:
+			"Speaker separation was skipped: the endpoint returned no timestamps this time. Run 'Test connection' to re-check.",
 	},
 	transcript: {
 		// Prepended to a speaker-separated transcript. Tells the enrichment model

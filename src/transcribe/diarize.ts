@@ -32,13 +32,13 @@ function withinAnyWindow(seg: DiarSegment, windows: Array<[number, number]>): bo
 	return windows.some(([ws, we]) => rangesTouch(seg.start, seg.end, ws, we));
 }
 
-function speakerRank(speaker: Speaker): number {
-	return speaker === "me" ? 0 : 1;
-}
-
-function label(speaker: Speaker): string {
-	return speaker === "me" ? "Me" : "Them";
-}
+// One table for the me-first pairing: rank orders a start-time tie (me before
+// them) and label is what we print. Both used to live in their own one-line
+// mappers encoding the same thing.
+const SPEAKERS: Record<Speaker, { rank: number; label: string }> = {
+	me: { rank: 0, label: "Me" },
+	them: { rank: 1, label: "Them" },
+};
 
 /**
  * Sort a single stream by start, drop the duplicate a segment picks up from an
@@ -60,22 +60,42 @@ function prepareStream(segments: DiarSegment[], windows?: Array<[number, number]
 
 	const deduped: DiarSegment[] = [];
 	for (const seg of sorted) {
-		const prev = deduped[deduped.length - 1];
-		const isDuplicate = prev !== undefined && prev.text === seg.text && seg.start < prev.end;
+		// A chunk-overlap duplicate sits on top of an already-kept segment with
+		// the same text. Scan back over recent kept segments while they still
+		// overlap this one in time; since the list is sorted by start, stop once
+		// a kept segment ends at or before this one starts. Comparing only the
+		// immediately previous kept segment missed a duplicate pair split by an
+		// unrelated segment landing between them, e.g. A, B, A'.
+		let isDuplicate = false;
+		for (let i = deduped.length - 1; i >= 0; i--) {
+			const kept = deduped[i];
+			if (kept === undefined || kept.end <= seg.start) {
+				break;
+			}
+			if (kept.text === seg.text) {
+				isDuplicate = true;
+				break;
+			}
+		}
 		if (!isDuplicate) {
 			deduped.push(seg);
 		}
 	}
 
-	if (windows === undefined) {
+	// Filter only against a non-empty window list. Whisper hallucinates filler
+	// ("thank you", "bye") over silence, and in a normal meeting the mic is
+	// mostly silence, so a segment outside every detected speech window is almost
+	// certainly one of those ghosts, drop it.
+	//
+	// An EMPTY window list is the opposite signal: the recorder's speech gate
+	// (a fixed absolute RMS threshold) found nothing, but Whisper still produced
+	// transcribable segments. Quiet speech at ~-40dBFS sits under that gate while
+	// Whisper transcribes it fine, so filtering here would silently erase a
+	// quiet-but-real speaker. Whisper finding speech is stronger evidence than
+	// our crude gate, so an empty list means keep everything.
+	if (windows === undefined || windows.length === 0) {
 		return deduped;
 	}
-	// Whisper hallucinates filler ("thank you", "bye") over silence, and the mic
-	// stream is mostly silence in a normal meeting (you speak a fraction of the
-	// time). Anything that doesn't land in a detected speech window of its own
-	// stream is almost certainly one of those ghosts, so drop it. An empty
-	// window list means the recorder found no speech on this stream, so every
-	// segment is treated as a ghost.
 	return deduped.filter((seg) => withinAnyWindow(seg, windows));
 }
 
@@ -94,7 +114,7 @@ export function mergeDiarized(me: DiarSegment[], them: DiarSegment[], windows?: 
 	];
 	// Interleave by time. On a tie "me" goes first, so the order is stable.
 	labeled.sort(
-		(a, b) => a.seg.start - b.seg.start || speakerRank(a.speaker) - speakerRank(b.speaker)
+		(a, b) => a.seg.start - b.seg.start || SPEAKERS[a.speaker].rank - SPEAKERS[b.speaker].rank
 	);
 
 	const lines: Array<{ speaker: Speaker; text: string }> = [];
@@ -108,5 +128,5 @@ export function mergeDiarized(me: DiarSegment[], them: DiarSegment[], windows?: 
 		}
 	}
 
-	return lines.map((line) => `${label(line.speaker)}: ${line.text}`).join("\n");
+	return lines.map((line) => `${SPEAKERS[line.speaker].label}: ${line.text}`).join("\n");
 }

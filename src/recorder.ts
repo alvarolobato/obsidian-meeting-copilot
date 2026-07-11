@@ -8,9 +8,6 @@ export interface RecorderStatus {
     duration?: number;
     file?: string;
     message?: string;
-    meFile?: string;
-    themFile?: string;
-    speechFile?: string;
 }
 
 export interface RecorderStartOptions {
