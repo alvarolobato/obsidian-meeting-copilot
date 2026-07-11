@@ -45,7 +45,7 @@ export interface SystemRecordingSettings {
 	sttLanguage: string;
 	postProcessingEnabled: boolean;
 	dictionaryCorrectionEnabled: boolean;
-	/** Custom dictionary, one `misheard => correct` rule per line (English). */
+	/** Custom dictionary, one `misheard => correct` rule per line. Applied for all transcription languages. */
 	dictionary: string;
 	// Enrichment.
 	enableEnrichment: boolean;
