@@ -376,6 +376,13 @@ async function stampFrontmatter(
 		if (cfg.oneOnOneSeparately && ev.oneOnOnePartner) {
 			f.one_on_one_with = ev.oneOnOnePartner;
 			if (ev.oneOnOnePartnerEmail) f.one_on_one_email = ev.oneOnOnePartnerEmail;
+			else delete f.one_on_one_email;
+		} else {
+			// Clear stale 1:1 identity: the toggle was switched off, or the
+			// event is no longer a 1:1. Leaving it would keep steering the
+			// sticky 1:1 lookup toward a folder that no longer applies.
+			delete f.one_on_one_with;
+			delete f.one_on_one_email;
 		}
 		f.attendees = ev.attendees;
 		if (!f.status) f.status = "scheduled";

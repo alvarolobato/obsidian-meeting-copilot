@@ -555,6 +555,48 @@ describe("createMeetingNote — 1:1 stamping follows the toggle", () => {
 		expect(fm?.one_on_one_with).toBe("Bob");
 		expect(fm?.one_on_one_email).toBe("bob@example.com");
 	});
+
+	it("clears stale one_on_one_with/one_on_one_email once the toggle is off", async () => {
+		const vault = new FakeVault();
+		vault.addNote("Meetings/1-1s/Bob/note.md", {
+			event_id: "evt-1on1-stale",
+			one_on_one_with: "Bob",
+			one_on_one_email: "bob@example.com",
+		});
+		const app = makeApp(vault);
+
+		const ref = await createMeetingNote(
+			app,
+			ev({
+				id: "evt-1on1-stale",
+				oneOnOnePartner: "Bob",
+				oneOnOnePartnerEmail: "bob@example.com",
+			}),
+			cfg({ oneOnOneSeparately: false })
+		);
+		const fm = vault.frontmatterFor(ref.file);
+		expect(fm?.one_on_one_with).toBeUndefined();
+		expect(fm?.one_on_one_email).toBeUndefined();
+	});
+
+	it("clears stale 1:1 fields when the event is no longer a 1:1 (toggle on)", async () => {
+		const vault = new FakeVault();
+		vault.addNote("Meetings/1-1s/Bob/note.md", {
+			event_id: "evt-grew",
+			one_on_one_with: "Bob",
+			one_on_one_email: "bob@example.com",
+		});
+		const app = makeApp(vault);
+
+		const ref = await createMeetingNote(
+			app,
+			ev({ id: "evt-grew", oneOnOnePartner: null, oneOnOnePartnerEmail: null }),
+			cfg({ oneOnOneSeparately: true })
+		);
+		const fm = vault.frontmatterFor(ref.file);
+		expect(fm?.one_on_one_with).toBeUndefined();
+		expect(fm?.one_on_one_email).toBeUndefined();
+	});
 });
 
 describe("createMeetingNote — vault-root notes", () => {

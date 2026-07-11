@@ -47,11 +47,9 @@ A series is identified by `recurring_event_id`. When creating a note for a new o
 
 For a series with no notes yet, fall through to routing rules (item 5), then the default folder template (item 4).
 
-### 3. Series hub note
+### 3. Series hub note (rejected)
 
-On the first occurrence of a series, create a folder note alongside it: `<folder>/<Series>.md` with `recurring_event_id` in frontmatter, series metadata, and an occurrence list (a Bases/Dataview query over `recurring_event_id`, matching how the dashboard already queries frontmatter). It's the natural place for a standing agenda and running action items across occurrences.
-
-The hub doubles as the series anchor: **new occurrences are created next to the hub note**. If no hub exists (pre-existing series, user deleted it), fall back to the folder of the most recent note with that `recurring_event_id`. This keeps the anchor deterministic, syncable with the vault, and visible to the user, with zero hidden state.
+The original proposal here was a folder note per series (`<folder>/<Series>.md` with `recurring_event_id` frontmatter and an occurrence list) doubling as the series anchor. **Rejected** (see Decisions): the extra file per series isn't worth it, and the most-recent-note rule from item 2 already gives a deterministic, vault-syncable anchor with zero hidden state. Nothing anchors a series except where its notes currently live.
 
 ### 4. Folder path templates
 
@@ -77,7 +75,7 @@ organizer ~ "@acme.com"       -> Clients/Acme/Meetings
 calendar = "team@elastic.co"  -> Meetings/Team/{{year}}
 ```
 
-Optional (setting, default on): when a *new series* matches no rule, ask once with a folder picker, "Where should this series live?", and create the hub note there. One question per series, never per occurrence.
+A "where should this series live?" prompt for unmatched new series was considered and **rejected** (see Decisions): folder resolution is deterministic, and moving the folder afterward is the way to relocate a series.
 
 ### 6. Moves keep note and recording together
 
@@ -91,13 +89,13 @@ The recording is saved next to the note with the same basename. Listen to `vault
 
 Each step is independently shippable:
 
-1. Identity-first resolution (smallest change, fixes duplicate-on-move).
-2. Sticky series home via most-recent-note (no new UI yet).
-3. Folder path templates.
-4. Series hub notes (anchor + occurrence list).
-5. Routing rules and the new-series prompt.
-6. Rename listener for colocated recordings.
-7. Migration command.
+1. Identity-first resolution (smallest change, fixes duplicate-on-move). — shipped in #42
+2. Sticky series home via most-recent-note (no new UI yet). — shipped in #42
+3. Folder path templates. — shipped in #42
+4. First-class 1:1 and ad-hoc routing (replaced hub notes and routing rules for now). — shipped in #42
+5. Routing rules (future work, if template + 1:1 routing proves insufficient).
+6. Rename listener for colocated recordings (future work).
+7. Migration command (future work).
 
 ## Rejected alternatives
 
@@ -105,12 +103,12 @@ Each step is independently shippable:
 - **Title-based identity.** Titles change; ids don't. Title matching stays available only as an opt-in heuristic for grouping ad-hoc meetings that have no `recurring_event_id`.
 - **Deep date sharding (`Meetings/2026/07/…`) as default.** Possible via templates, but burying notes two folders deep hurts more than it helps at typical volumes.
 
-## Open questions
+## Open questions (answered — see Decisions)
 
-1. Hub note vs most-recent-note as the series anchor: hub is proposed as primary. Worth the extra file per series?
-2. Should the "where should this series live?" prompt be on by default, or is that one popup too many?
-3. Do 1:1s deserve first-class treatment (per-person folder keyed on the other attendee) instead of being a routing-rule example?
-4. Ad-hoc meetings currently land in the base folder. Route them too (they have attendees only after enrichment), or leave them in an inbox folder to be moved by hand?
+1. Hub note vs most-recent-note as the series anchor → most-recent-note, no hub file.
+2. "Where should this series live?" prompt → no prompt.
+3. First-class 1:1 treatment → yes, behind the "Handle 1:1s separately" toggle with a per-person folder.
+4. Ad-hoc meetings → their own configurable folder.
 
 ## Appendix: the nightshift-program meetings folder
 
