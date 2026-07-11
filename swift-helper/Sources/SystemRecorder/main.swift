@@ -16,6 +16,9 @@ guard args.count >= 6,
 let finalOutputPath = args[3]
 let stopFilePath = args[5]
 
+// Optional flag after the required args. Absent = exactly today's behavior.
+let split = args.count > 6 && args[6] == "--split"
+
 // Record to a temp file, then move to final path when done
 let tempOutputURL = URL(fileURLWithPath: NSTemporaryDirectory())
     .appendingPathComponent("system-recorder-\(ProcessInfo.processInfo.processIdentifier).wav")
@@ -36,7 +39,7 @@ if #available(macOS 13.0, *) {
     let mixer: AudioMixer
 
     do {
-        mixer = try AudioMixer(outputURL: tempOutputURL)
+        mixer = try AudioMixer(outputURL: tempOutputURL, split: split)
     } catch {
         emitJSON(["status": "error", "message": "Failed to create audio writer: \(error.localizedDescription)"])
         exit(1)
@@ -81,7 +84,31 @@ if #available(macOS 13.0, *) {
                 let finalURL = URL(fileURLWithPath: finalOutputPath)
                 try? FileManager.default.moveItem(at: tempOutputURL, to: finalURL)
 
-                emitJSON(["status": "stopped", "duration": Int(duration), "file": finalOutputPath])
+                var stopped: [String: Any] = ["status": "stopped", "duration": Int(duration), "file": finalOutputPath]
+
+                // When split, move the sidecars next to the final path. A missing
+                // sidecar just drops its field; it never fails the recording.
+                if split {
+                    let dir = finalURL.deletingLastPathComponent()
+                    let stem = finalURL.deletingPathExtension().lastPathComponent
+                    let sidecars: [(temp: URL, final: URL, key: String)] = [
+                        (mixer.meSidecarURL, dir.appendingPathComponent("\(stem).me.wav"), "meFile"),
+                        (mixer.themSidecarURL, dir.appendingPathComponent("\(stem).them.wav"), "themFile"),
+                        (mixer.speechSidecarURL, dir.appendingPathComponent("\(stem).speech.json"), "speechFile"),
+                    ]
+                    for sidecar in sidecars {
+                        guard FileManager.default.fileExists(atPath: sidecar.temp.path) else { continue }
+                        if FileManager.default.fileExists(atPath: sidecar.final.path) {
+                            try? FileManager.default.removeItem(at: sidecar.final)
+                        }
+                        do {
+                            try FileManager.default.moveItem(at: sidecar.temp, to: sidecar.final)
+                            stopped[sidecar.key] = sidecar.final.path
+                        } catch {}
+                    }
+                }
+
+                emitJSON(stopped)
                 exit(0)
             }
             return
