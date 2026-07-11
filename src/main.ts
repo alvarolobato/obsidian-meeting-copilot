@@ -648,15 +648,18 @@ export default class SystemRecordingPlugin extends Plugin {
         );
     }
 
-    /** Adds the shared meeting actions (record/transcribe/enrich/links) to a menu. */
+    /** Adds a "Meeting Copilot" submenu with the shared meeting actions. */
     private addNoteMeetingMenu(menu: Menu, file: TFile): void {
-        menu.addSeparator();
-        populateMeetingMenu(
-            menu,
-            this.agendaMeetingFromNote(file),
-            this.noteRowHandlers(),
-            { includeNavigation: false }
-        );
+        menu.addItem((item) => {
+            item.setTitle(t().agenda.menuTitle).setIcon("mic");
+            const sub = item.setSubmenu();
+            populateMeetingMenu(
+                sub,
+                this.agendaMeetingFromNote(file),
+                this.noteRowHandlers(),
+                { includeNavigation: false }
+            );
+        });
     }
 
     /**

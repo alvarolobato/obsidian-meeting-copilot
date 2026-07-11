@@ -117,6 +117,7 @@ export const en = {
 			linkCopied: "Meeting link copied",
 			noRecording: "No recording for this meeting yet",
 		},
+		menuTitle: "Meeting Copilot",
 	},
 	dashboard: {
 		attention: {
