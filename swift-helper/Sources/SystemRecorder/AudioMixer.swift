@@ -18,15 +18,36 @@ final class AudioMixer: @unchecked Sendable {
     private let systemTempURL: URL
     private let micTempURL: URL
 
-    init(outputURL: URL) throws {
+    private let split: Bool
+
+    // Sidecars written next to the temp mixed output when split is on.
+    // main.swift moves these next to the final recording on stop.
+    let meSidecarURL: URL
+    let themSidecarURL: URL
+    let speechSidecarURL: URL
+
+    // Speech-activity analysis. RMS is computed on float samples in [-1, 1];
+    // a window above this threshold counts as speech.
+    private let speechRMSThreshold: Float = 0.015
+    private let speechWindowSeconds = 0.5
+    private let speechMergeGapSeconds = 1.0
+
+    init(outputURL: URL, split: Bool = false) throws {
         self.outputURL = outputURL
+        self.split = split
 
         let tempDir = NSTemporaryDirectory()
         let pid = ProcessInfo.processInfo.processIdentifier
         systemTempURL = URL(fileURLWithPath: tempDir).appendingPathComponent("sysrec-system-\(pid).wav")
         micTempURL = URL(fileURLWithPath: tempDir).appendingPathComponent("sysrec-mic-\(pid).wav")
 
-        for url in [outputURL, systemTempURL, micTempURL] {
+        let dir = outputURL.deletingLastPathComponent()
+        let stem = outputURL.deletingPathExtension().lastPathComponent
+        meSidecarURL = dir.appendingPathComponent("\(stem).me.wav")
+        themSidecarURL = dir.appendingPathComponent("\(stem).them.wav")
+        speechSidecarURL = dir.appendingPathComponent("\(stem).speech.json")
+
+        for url in [outputURL, systemTempURL, micTempURL, meSidecarURL, themSidecarURL, speechSidecarURL] {
             if FileManager.default.fileExists(atPath: url.path) {
                 try FileManager.default.removeItem(at: url)
             }
@@ -212,10 +233,103 @@ final class AudioMixer: @unchecked Sendable {
 
         try? outputFile.write(from: mixBuffer)
 
+        if split {
+            writeSplitSidecars(systemBuffer: systemBuffer, micBuffer: micBuffer)
+        }
+
         // Cleanup temp files
         try? FileManager.default.removeItem(at: systemTempURL)
         try? FileManager.default.removeItem(at: micTempURL)
 
         return Double(maxFrames) / systemFormat.sampleRate
+    }
+
+    // MARK: - Split sidecars (me = mic, them = system)
+
+    // Emit the two streams as mono sidecars plus a speech-activity JSON.
+    // Downstream transcription runs with VAD off, and Whisper invents text on
+    // long silence. The mic stream is mostly silence, so the plugin drops
+    // transcript segments that fall outside these speech windows.
+    private func writeSplitSidecars(systemBuffer: AVAudioPCMBuffer, micBuffer: AVAudioPCMBuffer?) {
+        // them.wav from the system stream; me.wav from the mic stream when present.
+        writeMonoSidecar(from: systemBuffer, to: themSidecarURL)
+        if let mic = micBuffer {
+            writeMonoSidecar(from: mic, to: meSidecarURL)
+        }
+
+        let themIntervals = speechIntervals(from: systemBuffer)
+        let meIntervals = micBuffer.map { speechIntervals(from: $0) } ?? []
+
+        let speech: [String: Any] = ["me": meIntervals, "them": themIntervals]
+        if let data = try? JSONSerialization.data(withJSONObject: speech) {
+            try? data.write(to: speechSidecarURL)
+        }
+    }
+
+    // Downmix to mono by averaging channels, keeping the stream's native rate.
+    // Writes Int16 interleaved via AVAudioFile, letting it convert the float buffer.
+    private func writeMonoSidecar(from source: AVAudioPCMBuffer, to url: URL) {
+        let frames = Int(source.frameLength)
+        guard frames > 0, let srcData = source.floatChannelData else { return }
+        let channels = Int(source.format.channelCount)
+        let sampleRate = source.format.sampleRate
+
+        guard let monoFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false),
+              let monoBuffer = AVAudioPCMBuffer(pcmFormat: monoFormat, frameCapacity: AVAudioFrameCount(frames)),
+              let dst = monoBuffer.floatChannelData?[0] else { return }
+        monoBuffer.frameLength = AVAudioFrameCount(frames)
+
+        for i in 0..<frames {
+            var sum: Float = 0
+            for ch in 0..<channels {
+                sum += srcData[ch][i]
+            }
+            dst[i] = sum / Float(channels)
+        }
+
+        let wavFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: sampleRate, channels: 1, interleaved: true)!
+        guard let file = try? AVAudioFile(forWriting: url, settings: wavFormat.settings) else { return }
+        try? file.write(from: monoBuffer)
+    }
+
+    // Fixed 0.5 s windows, RMS per window, threshold to speech, then merge
+    // windows separated by less than the gap into [startSec, endSec] intervals.
+    private func speechIntervals(from source: AVAudioPCMBuffer) -> [[Double]] {
+        let frames = Int(source.frameLength)
+        guard frames > 0, let data = source.floatChannelData else { return [] }
+        let channels = Int(source.format.channelCount)
+        let sampleRate = source.format.sampleRate
+        let windowFrames = max(1, Int(speechWindowSeconds * sampleRate))
+
+        var speechWindows: [(start: Double, end: Double)] = []
+        var frame = 0
+        while frame < frames {
+            let windowEnd = min(frame + windowFrames, frames)
+            var sumSquares: Double = 0
+            var count = 0
+            for i in frame..<windowEnd {
+                for ch in 0..<channels {
+                    let sample = Double(data[ch][i])
+                    sumSquares += sample * sample
+                    count += 1
+                }
+            }
+            let rms = count > 0 ? (sumSquares / Double(count)).squareRoot() : 0
+            if rms > Double(speechRMSThreshold) {
+                speechWindows.append((Double(frame) / sampleRate, Double(windowEnd) / sampleRate))
+            }
+            frame += windowFrames
+        }
+
+        var intervals: [[Double]] = []
+        for window in speechWindows {
+            if var last = intervals.last, window.start - last[1] < speechMergeGapSeconds {
+                last[1] = window.end
+                intervals[intervals.count - 1] = last
+            } else {
+                intervals.append([window.start, window.end])
+            }
+        }
+        return intervals
     }
 }
