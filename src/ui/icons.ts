@@ -12,9 +12,9 @@ const RECORD_ICON_SVG = `<g transform="scale(4.1667)" fill="none" stroke="curren
 <path d="M8 2v4"/>
 <path d="M16 2v4"/>
 <path d="M3 10h7"/>
-<rect x="16" y="12" width="3" height="5" rx="1.5"/>
-<path d="M14.5 16v.5a3 3 0 0 0 6 0V16"/>
-<path d="M17.5 19.5V21"/>
+<rect x="15.5" y="11" width="4" height="6" rx="2"/>
+<path d="M13.5 15.5v1a4 4 0 0 0 8 0v-1"/>
+<path d="M17.5 20.5V22"/>
 </g>`;
 
 /** Registers Meeting Copilot's custom icons. Call once during plugin load. */
