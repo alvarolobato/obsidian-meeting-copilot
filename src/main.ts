@@ -24,6 +24,7 @@ import {
     MeetingEventInfo,
     MeetingNoteConfig,
     recordingLinkTarget,
+    sanitizeName,
     upsertSection,
 } from "./notes/meetingNote";
 import {
@@ -52,7 +53,13 @@ import {
 } from "./transcribe/TranscriptionService";
 import { parseDictionary } from "./transcribe/dictionary";
 import type { TranscriptionModel } from "./transcribe/vendor/ApiSettings";
-import { ENRICH_SYSTEM_PROMPT, fillPrompt } from "./enrich/prompt";
+import {
+    buildTitlePrompt,
+    ENRICH_SYSTEM_PROMPT,
+    fillPrompt,
+    TITLE_SYSTEM_PROMPT,
+} from "./enrich/prompt";
+import { RenameModal } from "./ui/renameModal";
 import { t } from "./i18n";
 import { TypedEventBus } from "./util/events";
 import {
@@ -627,17 +634,16 @@ export default class SystemRecordingPlugin extends Plugin {
 	}
 
 	/**
-	 * When a detected meeting ends, offer to stop recording — but only for
-	 * ad-hoc/detection recordings (no calendar event id), since calendar-driven
-	 * recordings already get a stop prompt from the scheduler's event-end.
+	 * When a detected meeting ends, stop the recording automatically — but only
+	 * for ad-hoc/detection recordings (no calendar event id). Calendar-driven
+	 * recordings are left to the scheduler's own event-end handling.
 	 */
 	private onMeetingEnded(app: string): void {
 		if (!this.recorder.isRecording || this.currentRecordingEventId !== null) {
 			return;
 		}
-		this.promptMeeting(t().detect.ended(app), t().detect.stopPrompt, () => {
-			this.stopRecording();
-		});
+		new Notice(t().detect.endedStopping(app));
+		this.stopRecording();
 	}
 
 	/**
@@ -1414,6 +1420,13 @@ export default class SystemRecordingPlugin extends Plugin {
             // Pass the fresh transcript so enrichment works even when
             // insertTranscript is off and the note has no transcript yet.
             await this.enrichMeetingNote(enrichTarget, transcriptText ?? undefined);
+            // After the AI summary, offer a generated title for unplanned meetings.
+            if (this.settings.suggestAdhocTitle && this.isAdhocNote(enrichTarget)) {
+                await this.suggestAdhocTitle(
+                    enrichTarget,
+                    transcriptText ?? undefined
+                );
+            }
         }
         return enrichTarget !== null;
     }
@@ -1515,6 +1528,135 @@ export default class SystemRecordingPlugin extends Plugin {
             this.setActionStatus(t().statusBar.enrichFailed, "error");
         } finally {
             this.enrichingPaths.delete(file.path);
+        }
+    }
+
+    /** True for unplanned meetings (ad-hoc/detected), whose event_id we prefix "adhoc-". */
+    private isAdhocNote(file: TFile): boolean {
+        const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as
+            | Record<string, unknown>
+            | undefined;
+        const id = fm?.["event_id"];
+        return typeof id === "string" && id.startsWith("adhoc-");
+    }
+
+    /**
+     * Asks the LLM for a title based on the notes/transcript and offers to
+     * rename the note, keeping the date/time prefix. No-op on empty content.
+     */
+    private async suggestAdhocTitle(
+        file: TFile,
+        transcriptOverride?: string
+    ): Promise<void> {
+        const { apiBaseUrl, apiKey, enrichModel } = this.settings;
+        if (!apiBaseUrl || !apiKey || !enrichModel) return;
+        try {
+            const content = await this.app.vault.read(file);
+            const notes = extractSection(content, "## Notes");
+            const transcript =
+                transcriptOverride && transcriptOverride.trim().length > 0
+                    ? transcriptOverride
+                    : extractTranscript(content);
+            if (!notes && !transcript) return;
+
+            this.setActionStatus(t().adhoc.suggestingTitle, "busy");
+            const raw = await chatComplete({
+                baseUrl: apiBaseUrl,
+                apiKey,
+                model: enrichModel,
+                system: TITLE_SYSTEM_PROMPT,
+                user: buildTitlePrompt(notes, transcript),
+            });
+            this.clearActionStatus();
+            const title = this.cleanSuggestedTitle(raw);
+            if (!title) return;
+
+            const prefix = this.datePrefixOf(file);
+            const suggested = prefix ? `${prefix} ${title}` : title;
+            new RenameModal(this.app, {
+                heading: t().adhoc.titleModal.heading,
+                desc: t().adhoc.titleModal.desc,
+                value: suggested,
+                renameLabel: t().adhoc.titleModal.rename,
+                keepLabel: t().adhoc.titleModal.keep,
+                onRename: (value) => {
+                    void this.renameMeetingNote(file, value, prefix);
+                },
+            }).open();
+        } catch (e) {
+            console.warn("[Meeting Copilot] title suggestion failed", e);
+            this.clearActionStatus();
+        }
+    }
+
+    /** Reduces an LLM response to a single clean filename-safe title line. */
+    private cleanSuggestedTitle(raw: string): string {
+        const firstLine = raw.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+        const unquoted = firstLine
+            .replace(/^["'“”‘’]+|["'“”‘’]+$/g, "")
+            .replace(/[.。]+$/, "")
+            .trim();
+        return sanitizeName(unquoted).slice(0, 100).trim();
+    }
+
+    /** The leading `YYYY-MM-DD [HHmm]` portion of a note's basename, if present. */
+    private datePrefixOf(file: TFile): string {
+        const m = file.basename.match(/^(\d{4}-\d{2}-\d{2}(?:\s+\d{3,4})?)/);
+        if (m?.[1]) return m[1];
+        const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as
+            | Record<string, unknown>
+            | undefined;
+        const date = fm?.["date"];
+        return typeof date === "string" ? date : "";
+    }
+
+    /**
+     * Renames the note file and syncs the H1 + frontmatter title. The new name
+     * is expected to already include the date prefix; `titlePrefix` is stripped
+     * to derive the human title for the H1/frontmatter.
+     */
+    private async renameMeetingNote(
+        file: TFile,
+        newBasename: string,
+        titlePrefix: string
+    ): Promise<void> {
+        try {
+            const safeBase = sanitizeName(newBasename);
+            const folder = file.parent?.path ?? "";
+            let target = normalizePath(
+                folder ? `${folder}/${safeBase}.md` : `${safeBase}.md`
+            );
+            // Avoid clobbering an existing note.
+            if (
+                target !== file.path &&
+                this.app.vault.getAbstractFileByPath(target)
+            ) {
+                target = normalizePath(
+                    folder ? `${folder}/${safeBase} 2.md` : `${safeBase} 2.md`
+                );
+            }
+            const humanTitle =
+                titlePrefix && safeBase.startsWith(titlePrefix)
+                    ? safeBase.slice(titlePrefix.length).trim() || safeBase
+                    : safeBase;
+
+            if (target !== file.path) {
+                await this.app.fileManager.renameFile(file, target);
+            }
+            const content = await this.app.vault.read(file);
+            const updated = content.replace(/^#\s+.*$/m, `# ${humanTitle}`);
+            if (updated !== content) await this.app.vault.modify(file, updated);
+            await this.app.fileManager.processFrontMatter(file, (f) => {
+                (f as Record<string, unknown>).title = humanTitle;
+            });
+            new Notice(t().adhoc.titleModal.renamed(humanTitle));
+            this.agendaEvents.emit("changed", undefined);
+        } catch (e) {
+            new Notice(
+                t().notices.recordingError(
+                    e instanceof Error ? e.message : String(e)
+                )
+            );
         }
     }
 

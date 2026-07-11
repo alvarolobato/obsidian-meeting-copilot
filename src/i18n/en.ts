@@ -18,12 +18,21 @@ export const en = {
 	adhoc: {
 		defaultTitle: "Meeting",
 		started: "Recording unplanned meeting — rename the note title if you like",
+		suggestingTitle: "Suggesting a title…",
+		titleModal: {
+			heading: "Rename this meeting?",
+			desc: "Suggested title based on the discussion. Edit it or keep the current name.",
+			rename: "Rename",
+			keep: "Keep current",
+			renamed: (name: string) => `Renamed to “${name}”`,
+			failed: "Couldn't suggest a title",
+		},
 	},
 	detect: {
 		detected: (app: string) => `${app} meeting detected`,
 		recordPrompt: "Create note & record",
-		ended: (app: string) => `${app} meeting ended`,
-		stopPrompt: "Stop recording",
+		endedStopping: (app: string) =>
+			`${app} meeting ended — stopping recording`,
 	},
 	notices: {
 		autoRecordEnabled: "Calendar auto-recording enabled",
@@ -186,6 +195,10 @@ export const en = {
 		actionItemsAsTasks: {
 			name: "Action items as tasks",
 			desc: "When enriching, lift the AI's action items into checkboxes under '## Action items' so the obsidian-tasks plugin can track them. Existing and completed tasks are preserved.",
+		},
+		suggestAdhocTitle: {
+			name: "Suggest a title for unplanned meetings",
+			desc: "After enriching an unplanned (ad-hoc or detected) meeting, ask the LLM for a title and offer to rename the note, keeping the date prefix. Scheduled meetings keep their calendar title.",
 		},
 		calendarHeading: "Google Calendar integration",
 		clientId: {

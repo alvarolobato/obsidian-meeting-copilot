@@ -716,3 +716,13 @@ table.mc-attention td {
 .mc-hide-ai .callout[data-callout="ai-notes"] {
 	display: none;
 }
+
+/* AI title-suggestion rename modal. */
+.mc-rename-desc {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	margin-top: 0;
+}
+.mc-rename-input {
+	width: 100%;
+}

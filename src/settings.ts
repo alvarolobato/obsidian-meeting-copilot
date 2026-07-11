@@ -54,6 +54,8 @@ export interface SystemRecordingSettings {
 	enrichPrompt: string;
 	enrichOnTranscribe: boolean;
 	hideAiNotes: boolean;
+	/** After enriching an ad-hoc meeting, ask the LLM for a title and offer to rename. */
+	suggestAdhocTitle: boolean;
 }
 
 export { STT_MODELS, inferSttApiType, type SttApiType };
@@ -95,6 +97,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	enrichPrompt: DEFAULT_ENRICH_PROMPT,
 	enrichOnTranscribe: true,
 	hideAiNotes: false,
+	suggestAdhocTitle: true,
 };
 
 export class SystemRecordingSettingTab extends PluginSettingTab {
@@ -578,6 +581,18 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.actionItemsAsTasks)
 					.onChange(async (value) => {
 						this.plugin.settings.actionItemsAsTasks = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName(s.settings.suggestAdhocTitle.name)
+			.setDesc(s.settings.suggestAdhocTitle.desc)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.suggestAdhocTitle)
+					.onChange(async (value) => {
+						this.plugin.settings.suggestAdhocTitle = value;
 						await this.plugin.saveSettings();
 					})
 			);

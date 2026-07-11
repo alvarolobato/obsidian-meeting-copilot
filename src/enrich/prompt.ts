@@ -46,6 +46,31 @@ Rules:
 - Be substantive but tight: do not quote the transcript verbatim or narrate it turn by turn.
 - Output only the Markdown notes — no preamble, no closing remarks, and no top-level "#" heading.`;
 
+/** System role for generating a concise meeting title. */
+export const TITLE_SYSTEM_PROMPT =
+	"You write short, specific titles for meeting notes.";
+
+/**
+ * Builds the user prompt asking for a concise title from the notes/transcript.
+ * Keep this tight — the response is used directly as a filename, so it must be
+ * a single plain line.
+ */
+export function buildTitlePrompt(notes: string, transcript: string): string {
+	const n = notes.trim() || "(none)";
+	const t = transcript.trim() || "(none)";
+	return `Suggest a concise, specific title for the following notes — at most 8 words, in Title Case. Do not include dates, quotes, markdown, or trailing punctuation. Output only the title on a single line.
+
+Notes:
+"""
+${n}
+"""
+
+Transcript:
+"""
+${t}
+"""`;
+}
+
 const PLACEHOLDER = /\{\{(title|date|attendees|notes|transcript)\}\}/g;
 
 /** Fills a prompt template with the context, defaulting empty fields to "(none)". */
