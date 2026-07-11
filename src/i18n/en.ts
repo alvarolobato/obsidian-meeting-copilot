@@ -19,6 +19,10 @@ export const en = {
 		defaultTitle: "Meeting",
 		started: "Recording unplanned meeting — rename the note title if you like",
 	},
+	detect: {
+		detected: (app: string) => `${app} meeting detected`,
+		recordPrompt: "Create note & record",
+	},
 	notices: {
 		autoRecordEnabled: "Calendar auto-recording enabled",
 		autoRecordDisabled: "Calendar auto-recording disabled",
@@ -221,6 +225,23 @@ export const en = {
 		agendaLookBack: {
 			name: "Agenda look-back (days)",
 			desc: "How many past days you can navigate back to in the agenda (0–30).",
+		},
+		detectionHeading: "Meeting detection (macOS)",
+		detectMeetings: {
+			name: "Detect meetings automatically",
+			desc: "Watch for an in-progress meeting and offer to record it (even without a calendar event). Shows a native notification you'll see when Obsidian is minimized. macOS only.",
+		},
+		detectZoom: {
+			name: "Detect Zoom",
+			desc: "Detect an active Zoom call via its in-meeting helper process (only running during a call, not when Zoom is merely open).",
+		},
+		detectGoogleMeet: {
+			name: "Detect Google Meet",
+			desc: "Detect a live meet.google.com tab in Chrome, Brave, Edge, or Arc. Requires granting Obsidian Automation permission the first time.",
+		},
+		detectionInterval: {
+			name: "Detection interval (seconds)",
+			desc: "How often to check for a meeting in progress (3–120).",
 		},
 		endpointHeading: "AI endpoint",
 		apiBaseUrl: {

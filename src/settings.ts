@@ -27,6 +27,11 @@ export interface SystemRecordingSettings {
 	calendarId: string;
 	exclusionKeywords: string;
 	openMeetAutomatically: boolean;
+	// Meeting detection (Tier 1, macOS).
+	detectMeetings: boolean;
+	detectZoom: boolean;
+	detectGoogleMeet: boolean;
+	detectionIntervalSeconds: number;
 	agendaLookAheadDays: number;
 	agendaLookBackDays: number;
 	// Shared OpenAI-compatible endpoint + credentials (transcription + enrichment).
@@ -70,6 +75,10 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	calendarId: "primary",
 	exclusionKeywords: "",
 	openMeetAutomatically: true,
+	detectMeetings: false,
+	detectZoom: true,
+	detectGoogleMeet: true,
+	detectionIntervalSeconds: 10,
 	agendaLookAheadDays: 7,
 	agendaLookBackDays: 7,
 	apiBaseUrl: "https://api.openai.com/v1",
@@ -239,6 +248,66 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 							Number.isFinite(n) && n >= 0 ? Math.min(n, 30) : 7;
 						await this.plugin.saveSettings();
 						this.plugin.refreshAgenda();
+					});
+			});
+
+		// ---- Meeting detection (macOS) ----
+		new Setting(containerEl)
+			.setName(s.settings.detectionHeading)
+			.setHeading();
+
+		new Setting(containerEl)
+			.setName(s.settings.detectMeetings.name)
+			.setDesc(s.settings.detectMeetings.desc)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.detectMeetings)
+					.onChange(async (value) => {
+						this.plugin.settings.detectMeetings = value;
+						await this.plugin.saveSettings();
+						this.plugin.updateDetector();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName(s.settings.detectZoom.name)
+			.setDesc(s.settings.detectZoom.desc)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.detectZoom)
+					.onChange(async (value) => {
+						this.plugin.settings.detectZoom = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName(s.settings.detectGoogleMeet.name)
+			.setDesc(s.settings.detectGoogleMeet.desc)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.detectGoogleMeet)
+					.onChange(async (value) => {
+						this.plugin.settings.detectGoogleMeet = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName(s.settings.detectionInterval.name)
+			.setDesc(s.settings.detectionInterval.desc)
+			.addText((text) => {
+				text.inputEl.type = "number";
+				text
+					.setValue(
+						String(this.plugin.settings.detectionIntervalSeconds)
+					)
+					.onChange(async (value) => {
+						const n = Number.parseInt(value, 10);
+						this.plugin.settings.detectionIntervalSeconds =
+							Number.isFinite(n) && n >= 3 ? Math.min(n, 120) : 10;
+						await this.plugin.saveSettings();
+						this.plugin.updateDetector();
 					});
 			});
 

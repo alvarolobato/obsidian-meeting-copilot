@@ -73,6 +73,9 @@ import {
     RowHandlers,
 } from "./ui/agenda/components/meetingRow";
 import { registerIcons, RECORD_ICON } from "./ui/icons";
+import { notifyOs, requestNotificationPermission } from "./ui/osNotification";
+import { MeetingDetector } from "./detect/meetingDetector";
+import { googleMeetActive, zoomInMeeting } from "./detect/probe";
 
 export default class SystemRecordingPlugin extends Plugin {
     settings: SystemRecordingSettings;
@@ -97,6 +100,9 @@ export default class SystemRecordingPlugin extends Plugin {
 		},
 	});
 	private scheduler: CalendarScheduler | null = null;
+	/** Tier 1 meeting detector + its poll interval id (macOS only). */
+	private detector: MeetingDetector | null = null;
+	private detectorIntervalId: number | null = null;
 	/** Note the in-progress recording belongs to, so we can link it back on stop. */
 	private currentMeetingNotePath: string | null = null;
 	/**
@@ -256,6 +262,8 @@ export default class SystemRecordingPlugin extends Plugin {
         };
 
 		this.updateScheduler();
+		requestNotificationPermission();
+		this.updateDetector();
     }
 
     onunload() {
@@ -555,6 +563,89 @@ export default class SystemRecordingPlugin extends Plugin {
 		void this.scheduler?.poll();
 	}
 
+	// MARK: - Meeting detection (Tier 1, macOS)
+
+	/** Starts/stops the meeting-detection poller based on settings (macOS only). */
+	updateDetector(): void {
+		if (this.detectorIntervalId !== null) {
+			window.clearInterval(this.detectorIntervalId);
+			this.detectorIntervalId = null;
+		}
+		if (!this.settings.detectMeetings || !Platform.isMacOS) {
+			// Reset transition state so a re-enable re-detects an ongoing meeting.
+			this.detector = null;
+			return;
+		}
+		if (!this.detector) {
+			this.detector = new MeetingDetector({
+				probe: () => this.probeMeetings(),
+				onStart: (app) => this.onMeetingDetected(app),
+				onEnd: () => {
+					/* end is informational; no action for now */
+				},
+				onError: (e) => console.error("Meeting detection probe failed", e),
+			});
+		}
+		const seconds = Math.min(
+			120,
+			Math.max(3, this.settings.detectionIntervalSeconds)
+		);
+		void this.detector.poll();
+		this.detectorIntervalId = window.setInterval(
+			() => void this.detector?.poll(),
+			seconds * 1000
+		);
+		this.registerInterval(this.detectorIntervalId);
+	}
+
+	/** Collects the set of conferencing apps currently in a meeting. */
+	private async probeMeetings(): Promise<Set<string>> {
+		const active = new Set<string>();
+		const checks: Promise<void>[] = [];
+		if (this.settings.detectZoom) {
+			checks.push(
+				zoomInMeeting().then((on) => {
+					if (on) active.add("Zoom");
+				})
+			);
+		}
+		if (this.settings.detectGoogleMeet) {
+			checks.push(
+				googleMeetActive().then((on) => {
+					if (on) active.add("Google Meet");
+				})
+			);
+		}
+		await Promise.all(checks);
+		return active;
+	}
+
+	/** Offers to record when a meeting is detected — unless we're already recording. */
+	private onMeetingDetected(app: string): void {
+		if (this.recorder.isRecording) return;
+		this.promptMeeting(t().detect.detected(app), t().detect.recordPrompt, () => {
+			void this.startAdHocMeeting();
+		});
+	}
+
+	/**
+	 * Prompts the user to act on a meeting. When Obsidian is unfocused we use a
+	 * native OS notification (visible while minimized); otherwise an in-app
+	 * actionable Notice. Falls back to the Notice if the OS notification fails.
+	 */
+	private promptMeeting(
+		message: string,
+		actionLabel: string,
+		onAction: () => void
+	): void {
+		const focused =
+			typeof document !== "undefined" && document.hasFocus
+				? document.hasFocus()
+				: true;
+		if (!focused && notifyOs(message, actionLabel, onAction)) return;
+		actionNotice(message, actionLabel, onAction);
+	}
+
 	private async fetchCalendarEvents(
 		minMs: number,
 		maxMs: number
@@ -592,7 +683,7 @@ export default class SystemRecordingPlugin extends Plugin {
 		) {
 			window.open(event.meetLink, "_blank");
 		}
-		actionNotice(
+		this.promptMeeting(
 			t().event.started(event.summary),
 			t().event.createNoteAndRecord,
 			() => {
