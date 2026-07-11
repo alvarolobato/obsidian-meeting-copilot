@@ -15,10 +15,10 @@ function empty(): LanguageDictionaries {
  * Each non-empty, non-comment line is `misheard => correct`. Multiple source
  * spellings can share one target with `a | b => correct`.
  *
- * The engine picks a dictionary by the transcription language (and only merges
- * `en`+`ja`+`zh` when language is `auto`), so a rule stored under one language
- * would silently not apply under another. The rules here are language-agnostic
- * name/term fixes, so they're added to every bucket to work for any language.
+ * The engine picks a dictionary by the transcription language. Rules here are
+ * language-agnostic name/term fixes, so they're mirrored into every bucket.
+ * The auto-language path reads only the `en` bucket (canonical) to avoid
+ * duplicating rules; all buckets are identical, so any one is sufficient.
  */
 export function parseDictionary(raw: string): LanguageDictionaries {
 	const dict = empty();

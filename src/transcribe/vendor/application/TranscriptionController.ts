@@ -492,26 +492,7 @@ export class TranscriptionController {
 		// Get current language setting
 			const currentLanguage = this.settings.language;
 
-		if (currentLanguage === 'auto') {
-			// parseDictionary populates all language buckets with the same rules,
-			// so reading one bucket is sufficient — reading all four would triple/
-			// quadruple every rule in the correction prompt and rule list.
-			const canonical = this.settings.userDictionaries.en;
-			const allEntries = this.convertDictionaryToEntries(canonical);
-
-			if (allEntries.length > 0) {
-				const multiDict = {
-					name: 'user-dictionary-multi',
-					language: 'multi',
-					enabled: true,
-					useGPTCorrection: useGPTCorrection,
-					definiteCorrections: canonical.definiteCorrections,
-					contextualCorrections: canonical.contextualCorrections ?? [],
-					entries: allEntries
-				};
-				corrector.addDictionary(multiDict);
-			}
-		} else if (currentLanguage === 'ja' || currentLanguage === 'en' || currentLanguage === 'zh' || currentLanguage === 'ko') {
+		if (currentLanguage === 'ja' || currentLanguage === 'en' || currentLanguage === 'zh' || currentLanguage === 'ko') {
 			// For a known language, use that language's bucket.
 			const userDictionary = this.settings.userDictionaries[currentLanguage as 'ja' | 'en' | 'zh' | 'ko'];
 			const entries = this.convertDictionaryToEntries(userDictionary);
@@ -529,15 +510,15 @@ export class TranscriptionController {
 				corrector.addDictionary(langDict);
 			}
 		} else {
-			// Unknown language (e.g. 'es', 'de', 'fr'): fall back to the 'en' bucket,
-			// which holds all of the user's rules since parseDictionary mirrors them
-			// across every bucket.
+			// 'auto' and unknown ISO codes (e.g. 'es', 'de', 'fr') both fall back
+			// to the 'en' bucket. parseDictionary mirrors every rule into all buckets,
+			// so en is canonical and sufficient for any language.
 			const userDictionary = this.settings.userDictionaries.en;
 			const entries = this.convertDictionaryToEntries(userDictionary);
 
 			if (entries.length > 0) {
 				const langDict = {
-					name: 'user-dictionary-fallback',
+					name: 'user-dictionary-multi',
 					language: 'multi',
 					enabled: true,
 					useGPTCorrection: useGPTCorrection,
@@ -607,21 +588,6 @@ export class TranscriptionController {
 		);
 
 		return entries;
-	}
-
-	/**
-	 * Convert all language dictionaries to entries
-	 */
-	private convertAllDictionariesToEntries(): CorrectionDictionaryEntry[] {
-		const allEntries: CorrectionDictionaryEntry[] = [];
-		const languages: ('ja' | 'en' | 'zh' | 'ko')[] = ['ja', 'en', 'zh', 'ko'];
-
-			for (const lang of languages) {
-				const dict = this.settings.userDictionaries[lang];
-				allEntries.push(...this.convertDictionaryToEntries(dict));
-			}
-
-		return allEntries;
 	}
 
 	/**

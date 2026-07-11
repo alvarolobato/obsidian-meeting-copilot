@@ -339,6 +339,7 @@ export default class SystemRecordingPlugin extends Plugin {
         delete bag.enrichBaseUrl;
         delete bag.enrichApiKey;
         delete bag.sttModelId;
+        delete bag.vadMode;
         // Guard against corrupt/hand-edited data selecting an unknown engine
         // family, which would silently fall through to the GPT-4o path.
         this.settings.sttApiType = clampApiType(this.settings.sttApiType);
