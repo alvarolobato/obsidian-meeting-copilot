@@ -933,7 +933,12 @@ export default class SystemRecordingPlugin extends Plugin {
 			templateStaticRoot(this.settings.oneOffFolderTemplate),
 			templateStaticRoot(this.settings.seriesFolderTemplate),
 			normalizeFolderPathOrEmpty(this.settings.adhocFolder),
-			normalizeFolderPathOrEmpty(this.settings.oneOnOneFolder),
+			// Only claimed while the 1:1 feature is on: with it off the
+			// plugin never writes there, and a user's own folder of the same
+			// name must not become attention/retention territory.
+			...(this.settings.oneOnOneSeparately
+				? [normalizeFolderPathOrEmpty(this.settings.oneOnOneFolder)]
+				: []),
 		].filter((r) => r.length > 0);
 		return [...new Set(roots)];
 	}

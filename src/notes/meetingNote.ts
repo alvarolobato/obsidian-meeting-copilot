@@ -157,6 +157,17 @@ function normalizedEmail(v: unknown): string | null {
 	return s && s.length > 0 ? s : null;
 }
 
+/**
+ * A `start`/`date` frontmatter value as a sortable stamp string. YAML parsers
+ * can surface an unquoted ISO timestamp as a Date object rather than a
+ * string; without this coercion such a note would look unstamped (invisible
+ * to sticky-home resolution, flagged as date-less in the attention table).
+ */
+function stampString(v: unknown): string | null {
+	if (v instanceof Date && !Number.isNaN(v.getTime())) return localIso(v);
+	return nonEmptyString(v);
+}
+
 const DATE_ONLY_STAMP = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
@@ -191,7 +202,7 @@ export function scanMeetingNotes(app: App): MeetingNoteScanEntry[] {
 			// Each field is checked on its own: `start` can exist but be a YAML
 			// Date/number/empty string, which must still fall back to `date`
 			// rather than the whole `??` short-circuiting on the first key alone.
-			stamp: nonEmptyString(fm?.["start"]) ?? nonEmptyString(fm?.["date"]),
+			stamp: stampString(fm?.["start"]) ?? stampString(fm?.["date"]),
 			status: nonEmptyString(fm?.["status"]),
 			recording: fm?.["recording"],
 			hasMeetingUrl: nonEmptyString(fm?.["meeting_url"]) !== null,
@@ -528,22 +539,21 @@ export async function createMeetingNote(
 
 	// Catches a just-created note before metadataCache has indexed it (see
 	// `recentNoteByEventId`); getAbstractFileByPath doesn't depend on the cache.
-	// The mapping can go stale: the note may have been deleted and its path
-	// reclaimed by a DIFFERENT meeting's note. Trust it only while the file's
-	// cached `event_id` is still this event's (or the cache hasn't indexed the
-	// file yet — the very lag the map exists to bridge); otherwise drop the
-	// entry and fall through to the frontmatter scan.
+	// The mapping can go stale two ways: the note was deleted and its path
+	// reclaimed by a DIFFERENT meeting's note, or the user stripped the
+	// `event_id` to detach the note from its event. Trust it only while the
+	// cache hasn't indexed the file at all (the very lag the map exists to
+	// bridge) or while the cached frontmatter still carries this event's id;
+	// otherwise drop the entry and fall through to the frontmatter scan.
 	const recentPath = ev.id ? recentNoteByEventId.get(ev.id) : undefined;
 	if (recentPath && ev.id) {
 		const recent = app.vault.getAbstractFileByPath(recentPath);
-		const cachedId = recent instanceof TFile
-			? frontmatterOf(app, recent)?.["event_id"]
-			: undefined;
-		if (
-			recent instanceof TFile &&
-			(cachedId === undefined || cachedId === ev.id)
-		) {
-			return reuse(recent);
+		if (recent instanceof TFile) {
+			const cache = app.metadataCache.getFileCache(recent);
+			const cachedId = (
+				cache?.frontmatter as Record<string, unknown> | undefined
+			)?.["event_id"];
+			if (!cache || cachedId === ev.id) return reuse(recent);
 		}
 		recentNoteByEventId.delete(ev.id);
 	}
