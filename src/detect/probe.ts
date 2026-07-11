@@ -26,7 +26,10 @@ export async function zoomInMeeting(): Promise<boolean> {
 	return ok;
 }
 
-// AppleScript: is any supported browser showing a live Google Meet tab?
+// AppleScript: is any supported browser showing a live Google Meet call tab?
+// A real meeting URL is meet.google.com/<room-code> where the code contains
+// hyphens (e.g. abc-defg-hij); exclude the landing page and /new so a freshly
+// opened tab or the "start a meeting" page don't count as an active call.
 const GOOGLE_MEET_SCRIPT = `
 set meetFound to false
 tell application "System Events"
@@ -37,7 +40,8 @@ tell application "System Events"
 				tell application browserName
 					repeat with w in windows
 						repeat with t in tabs of w
-							if URL of t contains "meet.google.com/" and (URL of t does not end with "meet.google.com/") then
+							set u to URL of t
+							if u contains "meet.google.com/" and u contains "-" and u does not contain "meet.google.com/new" then
 								set meetFound to true
 								exit repeat
 							end if

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MeetingDetector } from "./meetingDetector";
 
-function makeDetector(sequence: Set<string>[]) {
+function makeDetector(sequence: Set<string>[], endMissThreshold = 1) {
 	let i = 0;
 	const probe = vi.fn(() =>
 		Promise.resolve(
@@ -10,7 +10,7 @@ function makeDetector(sequence: Set<string>[]) {
 	);
 	const onStart = vi.fn();
 	const onEnd = vi.fn();
-	const det = new MeetingDetector({ probe, onStart, onEnd });
+	const det = new MeetingDetector({ probe, onStart, onEnd, endMissThreshold });
 	return { det, probe, onStart, onEnd };
 }
 
@@ -62,6 +62,29 @@ describe("MeetingDetector", () => {
 		await det.poll();
 		await det.poll();
 		expect(onStart).toHaveBeenCalledTimes(2);
+	});
+
+	it("requires consecutive misses before onEnd (hysteresis)", async () => {
+		let i = 0;
+		const seq = [
+			new Set(["Zoom"]),
+			new Set<string>(), // 1 miss — flicker, no end yet
+			new Set(["Zoom"]), // recovered
+			new Set<string>(), // miss 1
+			new Set<string>(), // miss 2 — end fires
+		];
+		const onStart = vi.fn();
+		const onEnd = vi.fn();
+		const det = new MeetingDetector({
+			probe: () => Promise.resolve(seq[Math.min(i++, seq.length - 1)] ?? new Set()),
+			onStart,
+			onEnd,
+			endMissThreshold: 2,
+		});
+		for (let n = 0; n < 5; n++) await det.poll();
+		expect(onStart).toHaveBeenCalledTimes(1); // never re-fired (flicker absorbed)
+		expect(onEnd).toHaveBeenCalledTimes(1);
+		expect(det.activeCount()).toBe(0);
 	});
 
 	it("swallows probe errors via onError", async () => {

@@ -21,6 +21,9 @@ export function requestNotificationPermission(): void {
  * callers can fall back to an in-app Notice otherwise. `onClick` fires when the
  * user clicks the notification (we also try to bring Obsidian to the front).
  */
+/** The last notification we showed, so we can supersede it instead of stacking. */
+let lastNotification: Notification | null = null;
+
 export function notifyOs(
 	title: string,
 	body: string,
@@ -29,17 +32,28 @@ export function notifyOs(
 	try {
 		const N = window.Notification;
 		if (!N || N.permission !== "granted") return false;
-		const notification = new N(title, { body });
-		if (onClick) {
-			notification.onclick = (): void => {
-				try {
-					window.focus();
-				} catch {
-					// Best-effort focus; clicking usually foregrounds the app on macOS.
-				}
-				onClick();
-			};
+		// Supersede any prior prompt so stale ones don't accumulate.
+		try {
+			lastNotification?.close();
+		} catch {
+			// ignore
 		}
+		const notification = new N(title, { body });
+		lastNotification = notification;
+		notification.onclick = (): void => {
+			try {
+				window.focus();
+			} catch {
+				// Best-effort focus; clicking usually foregrounds the app on macOS.
+			}
+			try {
+				notification.close();
+			} catch {
+				// ignore
+			}
+			if (lastNotification === notification) lastNotification = null;
+			onClick?.();
+		};
 		return true;
 	} catch {
 		return false;

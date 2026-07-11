@@ -11,17 +11,28 @@ export interface MeetingDetectorDeps {
 	probe: () => Promise<Set<string>>;
 	/** Fired once when an app transitions into a meeting. */
 	onStart: (app: string) => void;
-	/** Fired once when an app's meeting ends. */
+	/** Fired once when an app's meeting ends (after the miss threshold). */
 	onEnd: (app: string) => void;
 	/** Optional error sink for probe failures. */
 	onError?: (e: unknown) => void;
+	/**
+	 * How many consecutive polls an active app must be absent before `onEnd`
+	 * fires. Guards against probe flicker (a transient pgrep/osascript failure)
+	 * prematurely stopping a recording. Default 2.
+	 */
+	endMissThreshold?: number;
 }
 
 export class MeetingDetector {
 	private active = new Set<string>();
+	/** Consecutive missed polls per active app (for end hysteresis). */
+	private misses = new Map<string, number>();
 	private polling = false;
+	private readonly endMissThreshold: number;
 
-	constructor(private readonly deps: MeetingDetectorDeps) {}
+	constructor(private readonly deps: MeetingDetectorDeps) {
+		this.endMissThreshold = Math.max(1, deps.endMissThreshold ?? 2);
+	}
 
 	/** One detection pass. Safe to call on an interval; overlapping calls are ignored. */
 	async poll(): Promise<void> {
@@ -34,11 +45,17 @@ export class MeetingDetector {
 					this.active.add(app);
 					this.deps.onStart(app);
 				}
+				this.misses.delete(app);
 			}
 			for (const app of [...this.active]) {
-				if (!current.has(app)) {
+				if (current.has(app)) continue;
+				const misses = (this.misses.get(app) ?? 0) + 1;
+				if (misses >= this.endMissThreshold) {
 					this.active.delete(app);
+					this.misses.delete(app);
 					this.deps.onEnd(app);
+				} else {
+					this.misses.set(app, misses);
 				}
 			}
 		} catch (e) {
@@ -51,5 +68,10 @@ export class MeetingDetector {
 	/** True while the given app is considered in a meeting. */
 	isActive(app: string): boolean {
 		return this.active.has(app);
+	}
+
+	/** Number of apps currently considered in a meeting. */
+	activeCount(): number {
+		return this.active.size;
 	}
 }

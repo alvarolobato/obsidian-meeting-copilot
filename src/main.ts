@@ -125,6 +125,8 @@ export default class SystemRecordingPlugin extends Plugin {
 	private enrichingPaths = new Set<string>();
 	/** Audio paths currently being transcribed, to prevent overlapping runs. */
 	private transcribingPaths = new Set<string>();
+	/** Note paths currently being offered an AI title, to prevent duplicate modals. */
+	private titleSuggestingPaths = new Set<string>();
 	/** One-shot startup retention sweep, cleared on unload. */
 	private retentionTimeout: number | null = null;
 	/** Serializes retention sweeps so the startup timer and the command can't overlap. */
@@ -578,9 +580,11 @@ export default class SystemRecordingPlugin extends Plugin {
 			window.clearInterval(this.detectorIntervalId);
 			this.detectorIntervalId = null;
 		}
-		if (!this.settings.detectMeetings || !Platform.isMacOS) {
-			// Reset transition state so a re-enable re-detects an ongoing meeting.
-			this.detector = null;
+		// Don't poll if disabled, off-platform, or no probe is enabled (an empty
+		// probe set would otherwise be read as "all meetings ended").
+		const anyProbe =
+			this.settings.detectZoom || this.settings.detectGoogleMeet;
+		if (!this.settings.detectMeetings || !anyProbe || !Platform.isMacOS) {
 			return;
 		}
 		if (!this.detector) {
@@ -645,6 +649,9 @@ export default class SystemRecordingPlugin extends Plugin {
 	 * left to the scheduler's own event-end handling.
 	 */
 	private onMeetingEnded(app: string): void {
+		// Only stop once *all* detected meetings have ended, so ending one of
+		// several concurrent calls doesn't truncate a still-active recording.
+		if (this.detector && this.detector.activeCount() > 0) return;
 		if (!this.recorder.isRecording || !this.isAdhocRecording()) {
 			return;
 		}
@@ -653,9 +660,11 @@ export default class SystemRecordingPlugin extends Plugin {
 	}
 
 	/**
-	 * Prompts the user to act on a meeting. When Obsidian is unfocused we use a
-	 * native OS notification (visible while minimized); otherwise an in-app
-	 * actionable Notice. Falls back to the Notice if the OS notification fails.
+	 * Prompts the user to act on a meeting. Always shows an in-app actionable
+	 * Notice (so the prompt is there when they return to Obsidian) and, when
+	 * Obsidian is unfocused, additionally fires a native OS notification that's
+	 * visible while minimized. The OS notification is best-effort (needs a
+	 * granted permission); the in-app Notice is the guaranteed path.
 	 */
 	private promptMeeting(
 		message: string,
@@ -666,7 +675,7 @@ export default class SystemRecordingPlugin extends Plugin {
 			typeof document !== "undefined" && document.hasFocus
 				? document.hasFocus()
 				: true;
-		if (!focused && notifyOs(message, actionLabel, onAction)) return;
+		if (!focused) notifyOs(message, actionLabel, onAction);
 		actionNotice(message, actionLabel, onAction);
 	}
 
@@ -1256,7 +1265,7 @@ export default class SystemRecordingPlugin extends Plugin {
      * helper's identity/path), so surface clear, actionable instructions for it.
      */
     private notifyRecordingError(message: string): void {
-        if (/not authorized|screen (capture|recording)|permission/i.test(message)) {
+        if (/not authorized|screen (capture|recording)/i.test(message)) {
             new Notice(t().notices.screenPermission, 15000);
         } else {
             new Notice(t().notices.recordingError(message));
@@ -1582,6 +1591,9 @@ export default class SystemRecordingPlugin extends Plugin {
     ): Promise<void> {
         const { apiBaseUrl, apiKey, enrichModel } = this.settings;
         if (!apiBaseUrl || !apiKey || !enrichModel) return;
+        // Guard against a metadata-cache lag racing two offers for the same note.
+        if (this.titleSuggestingPaths.has(file.path)) return;
+        this.titleSuggestingPaths.add(file.path);
         try {
             const content = await this.app.vault.read(file);
             const notes = extractSection(content, "## Notes");
@@ -1623,6 +1635,8 @@ export default class SystemRecordingPlugin extends Plugin {
         } catch (e) {
             console.warn("[Meeting Copilot] title suggestion failed", e);
             this.clearActionStatus();
+        } finally {
+            this.titleSuggestingPaths.delete(file.path);
         }
     }
 
@@ -1636,13 +1650,19 @@ export default class SystemRecordingPlugin extends Plugin {
         return sanitizeName(unquoted).slice(0, 100).trim();
     }
 
-    /** The leading `YYYY-MM-DD [HHmm]` portion of a note's basename, if present. */
+    /** The leading `YYYY-MM-DD [HHmm]` portion of a note's basename, or from frontmatter. */
     private datePrefixOf(file: TFile): string {
         const m = file.basename.match(/^(\d{4}-\d{2}-\d{2}(?:\s+\d{3,4})?)/);
         if (m?.[1]) return m[1];
         const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as
             | Record<string, unknown>
             | undefined;
+        // Prefer `start` (YYYY-MM-DDTHH:MM:SS) so we keep the time component.
+        const start = fm?.["start"];
+        if (typeof start === "string") {
+            const sm = start.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/);
+            if (sm) return `${sm[1]} ${sm[2]}${sm[3]}`;
+        }
         const date = fm?.["date"];
         return typeof date === "string" ? date : "";
     }
@@ -1660,17 +1680,18 @@ export default class SystemRecordingPlugin extends Plugin {
         try {
             const safeBase = sanitizeName(newBasename);
             const folder = file.parent?.path ?? "";
-            let target = normalizePath(
-                folder ? `${folder}/${safeBase}.md` : `${safeBase}.md`
-            );
-            // Avoid clobbering an existing note.
-            if (
+            const pathFor = (base: string): string =>
+                normalizePath(folder ? `${folder}/${base}.md` : `${base}.md`);
+            // Avoid clobbering an existing note (try " 2", " 3", …).
+            let target = pathFor(safeBase);
+            for (
+                let n = 2;
                 target !== file.path &&
-                this.app.vault.getAbstractFileByPath(target)
+                this.app.vault.getAbstractFileByPath(target) &&
+                n < 1000;
+                n++
             ) {
-                target = normalizePath(
-                    folder ? `${folder}/${safeBase} 2.md` : `${safeBase} 2.md`
-                );
+                target = pathFor(`${safeBase} ${n}`);
             }
             const humanTitle =
                 titlePrefix && safeBase.startsWith(titlePrefix)
@@ -1907,8 +1928,8 @@ export default class SystemRecordingPlugin extends Plugin {
      */
     private async resolveFileWithRetry(
         vaultPath: string,
-        tries = 15,
-        delayMs = 300
+        tries = 20,
+        delayMs = 500
     ): Promise<TFile | null> {
         for (let i = 0; i < tries; i++) {
             const f = this.app.vault.getAbstractFileByPath(vaultPath);
