@@ -7,12 +7,14 @@ import {
 } from "./dashboard";
 
 describe("buildDashboardBlock", () => {
-	it("is vault-wide (no FROM), gated to plugin-owned notes by event_id", () => {
+	it("is vault-wide (no FROM), gated to meeting notes by event_id/meeting_url", () => {
 		const block = buildDashboardBlock();
 		expect(block).not.toContain("FROM ");
-		expect(block).toContain("WHERE event_id AND start >= now");
-		expect(block).toContain("WHERE event_id AND start < now");
-		expect(block).toContain("TASK WHERE !completed AND event_id");
+		expect(block).toContain("WHERE (event_id OR meeting_url) AND start >= now");
+		expect(block).toContain("WHERE (event_id OR meeting_url) AND start < now");
+		expect(block).toContain(
+			"TASK WHERE !completed AND (file.frontmatter.event_id OR file.frontmatter.meeting_url)"
+		);
 		expect(block.startsWith(DASHBOARD_START)).toBe(true);
 		expect(block.endsWith(DASHBOARD_END)).toBe(true);
 	});

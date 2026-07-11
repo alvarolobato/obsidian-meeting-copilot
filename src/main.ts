@@ -27,7 +27,7 @@ import {
     linkRecording,
     MeetingEventInfo,
     MeetingNoteConfig,
-    normalizeFolderPath,
+    normalizeFolderPathOrEmpty,
     recordingLinkTarget,
     sanitizeName,
     scanMeetingNotes,
@@ -925,11 +925,14 @@ export default class SystemRecordingPlugin extends Plugin {
 	 * whose note was deleted.
 	 */
 	private configuredMeetingRoots(): string[] {
+		// The empty-returning normalizer, deliberately: a folder setting that
+		// normalizes to nothing must not claim the "Meetings" fallback as
+		// plugin territory for the attention scan or the retention sweep.
 		const roots = [
 			templateStaticRoot(this.settings.oneOffFolderTemplate),
 			templateStaticRoot(this.settings.seriesFolderTemplate),
-			normalizeFolderPath(this.settings.adhocFolder),
-			normalizeFolderPath(this.settings.oneOnOneFolder),
+			normalizeFolderPathOrEmpty(this.settings.adhocFolder),
+			normalizeFolderPathOrEmpty(this.settings.oneOnOneFolder),
 		].filter((r) => r.length > 0);
 		return [...new Set(roots)];
 	}
@@ -1914,24 +1917,32 @@ export default class SystemRecordingPlugin extends Plugin {
                 ext: f.extension,
                 mtime: f.stat.mtime,
             }));
-            // Scope retention to: the actual parent folder of every
-            // plugin-owned note (so a recording colocated with a series/1:1
-            // folder that moved elsewhere is still covered), plus the
-            // configured roots (belt for a recording whose note was
-            // deleted), plus the recordings folder.
-            const noteFolders = new Set<string>();
+            // Scope retention to the configured roots plus the recordings
+            // folder, and additionally the exact audio files linked from
+            // plugin-owned notes (so a recording colocated with a series/1:1
+            // folder that moved elsewhere is still covered). Exact paths, not
+            // the notes' parent folders: sweeping a moved note's folder would
+            // make every old audio file in that unrelated subtree eligible.
+            const ownedRecordings = new Set<string>();
             for (const entry of scanMeetingNotes(this.app)) {
-                if (entry.eventId) noteFolders.add(folderOf(entry.file));
+                if (!entry.eventId) continue;
+                const link = recordingLinkTarget(entry.recording);
+                if (!link) continue;
+                const dest = this.app.metadataCache.getFirstLinkpathDest(
+                    link,
+                    entry.file.path
+                );
+                if (dest instanceof TFile) ownedRecordings.add(dest.path);
             }
             const folders = [
                 ...new Set([
-                    ...noteFolders,
                     ...this.configuredMeetingRoots(),
                     this.settings.recordingFolder.trim() || "recordings",
                 ]),
             ].filter((f) => f.length > 0);
             const expired = findExpiredRecordings(files, {
                 folders,
+                extraPaths: ownedRecordings,
                 retentionDays: this.settings.retentionDays,
                 now: Date.now(),
                 protectedPaths: this.currentRecordingPath

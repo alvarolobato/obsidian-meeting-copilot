@@ -9,9 +9,11 @@ export const ATTENTION_BLOCK_LANG = "meeting-copilot-attention";
  * Builds the managed Dataview block (upcoming / past meetings + open action
  * items). Deliberately vault-wide — no `FROM` — since meeting notes can live
  * under any of several folders (per-series, per-1:1, ad-hoc, or wherever the
- * user moved them); scoping to one folder would miss most of them. `event_id`
- * gates every query to plugin-owned notes, rather than any note that merely
- * carries a `meeting_url`. Pure so it can be tested without a vault.
+ * user moved them); scoping to one folder would miss most of them. Queries
+ * match `event_id` (plugin-owned) or `meeting_url` (legacy/manual meeting
+ * notes the pre-template dashboard also listed). The task query reads the
+ * fields via `file.frontmatter` because tasks stopped inheriting page fields
+ * in newer Dataview releases. Pure so it can be tested without a vault.
  */
 export function buildDashboardBlock(): string {
 	const cols =
@@ -25,20 +27,20 @@ export function buildDashboardBlock(): string {
 		cols,
 		// Compare against the current instant (`now`, not `date(now)` midnight)
 		// so same-day meetings that already ended fall under Past.
-		"WHERE event_id AND start >= now",
+		"WHERE (event_id OR meeting_url) AND start >= now",
 		"SORT start ASC",
 		"```",
 		"",
 		"## Past meetings",
 		"```dataview",
 		cols,
-		"WHERE event_id AND start < now",
+		"WHERE (event_id OR meeting_url) AND start < now",
 		"SORT start DESC",
 		"```",
 		"",
 		"## Open action items",
 		"```dataview",
-		"TASK WHERE !completed AND event_id",
+		"TASK WHERE !completed AND (file.frontmatter.event_id OR file.frontmatter.meeting_url)",
 		"GROUP BY file.link",
 		"```",
 		"",

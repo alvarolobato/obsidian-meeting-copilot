@@ -345,6 +345,61 @@ describe("resolveMeetingFolder", () => {
 		expect(folder).toBe("Meetings/AC DC sync");
 	});
 
+	it("does not adopt a same-label 1:1 folder stamped with a different email", () => {
+		const vault = new FakeVault();
+		vault.addNote("Meetings/1-1s/Bob/2026-05-01.md", {
+			one_on_one_with: "Bob",
+			one_on_one_email: "bob@acme.com",
+			start: "2026-05-01T10:00:00",
+		});
+		const app = makeApp(vault);
+
+		const folder = resolveMeetingFolder(
+			app,
+			ev({ oneOnOnePartner: "Bob", oneOnOnePartnerEmail: "bob@other.com" }),
+			cfg({ oneOnOneSeparately: true })
+		);
+		expect(folder).toBe("Meetings/1-1s/Bob");
+		// Same target name is fine (resolveNotePath disambiguates the note);
+		// the point is it must NOT have matched via the other Bob's history.
+		// A moved folder makes the difference observable:
+		vault.addNote("Elsewhere/Bob acme/2026-05-02.md", {
+			one_on_one_with: "Bob",
+			one_on_one_email: "bob@acme.com",
+			start: "2026-05-02T10:00:00",
+		});
+		const folder2 = resolveMeetingFolder(
+			makeApp(vault),
+			ev({ oneOnOnePartner: "Bob", oneOnOnePartnerEmail: "bob@other.com" }),
+			cfg({ oneOnOneSeparately: true })
+		);
+		expect(folder2).toBe("Meetings/1-1s/Bob");
+	});
+
+	it("still adopts a label-only 1:1 folder (no email stamp) for an event with an email", () => {
+		const vault = new FakeVault();
+		vault.addNote("Somewhere/Bob/2026-05-01.md", {
+			one_on_one_with: "Bob",
+			start: "2026-05-01T10:00:00",
+		});
+		const folder = resolveMeetingFolder(
+			makeApp(vault),
+			ev({ oneOnOnePartner: "Bob", oneOnOnePartnerEmail: "bob@acme.com" }),
+			cfg({ oneOnOneSeparately: true })
+		);
+		expect(folder).toBe("Somewhere/Bob");
+	});
+
+	it("lets a date-format token nest folders ({{start:YYYY/MM}}) while segments stay sanitized", () => {
+		const app = makeApp(new FakeVault());
+		const folder = resolveMeetingFolder(
+			app,
+			ev({ start: new Date("2026-07-10T14:00:00") }),
+			cfg({ oneOffFolderTemplate: "Meetings/{{start:YYYY/MM}}" })
+		);
+		expect(folder).toBe("Meetings/2026/07");
+	});
+
 	it("collapses a token that renders empty instead of inserting 'Untitled'", () => {
 		const app = makeApp(new FakeVault());
 		const folder = resolveMeetingFolder(

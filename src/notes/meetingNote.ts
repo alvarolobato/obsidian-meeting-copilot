@@ -1,8 +1,18 @@
 import { App, normalizePath, TFile } from "obsidian";
 import { renderTemplate, renderTemplateWith } from "./template";
-import { normalizeFolderPath, sanitizeName, templateStaticRoot } from "./paths";
+import {
+	normalizeFolderPath,
+	normalizeFolderPathOrEmpty,
+	sanitizeName,
+	templateStaticRoot,
+} from "./paths";
 
-export { normalizeFolderPath, sanitizeName, templateStaticRoot };
+export {
+	normalizeFolderPath,
+	normalizeFolderPathOrEmpty,
+	sanitizeName,
+	templateStaticRoot,
+};
 
 /** Prefix marking an ad-hoc (unplanned) meeting's synthetic id, e.g. "adhoc-1699999999999". */
 export const ADHOC_ID_PREFIX = "adhoc-";
@@ -194,18 +204,29 @@ export function findNoteByEventId(app: App, eventId: string): TFile | null {
 }
 
 /**
- * Renders a folder template with each substituted token's value sanitized as
- * a single path segment (via `sanitizeName`) before splicing it in, so e.g. a
- * `{{series}}` value containing "/" or ".." can't inject an extra folder or
- * walk outside the template's root. "/" written literally in the template
- * (outside any `{{…}}`) still separates folders as usual.
+ * Tokens whose rendered value comes from the event's dates plus a
+ * user-authored format string, never from calendar-controlled text. A "/"
+ * they produce (e.g. `{{start:YYYY/MM}}`) is the user's own folder layout,
+ * so it may nest; each resulting segment is still sanitized.
+ */
+const DATE_TOKENS = new Set(["date", "start", "end", "year", "month", "duration"]);
+
+/**
+ * Renders a folder template with each substituted token's value sanitized
+ * before splicing it in. Text tokens (`{{series}}`, `{{title}}`, …) carry
+ * calendar-controlled data, so their value is flattened to a single path
+ * segment — a "/" or ".." in an event title can't inject an extra folder or
+ * walk outside the template's root. Date tokens may nest (see `DATE_TOKENS`).
+ * "/" written literally in the template still separates folders as usual.
  */
 function renderFolderTemplate(template: string, ev: MeetingEventInfo): string {
 	// An empty token value collapses (its segment is dropped by
 	// `normalizeFolderPath`) instead of becoming sanitizeName's "Untitled".
-	return renderTemplateWith(template, ev, (value) =>
-		value.trim().length > 0 ? sanitizeName(value) : ""
-	);
+	return renderTemplateWith(template, ev, (value, name) => {
+		if (value.trim().length === 0) return "";
+		if (DATE_TOKENS.has(name)) return normalizeFolderPathOrEmpty(value);
+		return sanitizeName(value);
+	});
 }
 
 /**
@@ -229,9 +250,20 @@ function resolveMeetingFolderFromScan(
 		const byEmail = ev.oneOnOnePartnerEmail
 			? mostRecentMatching(entries, (e) => e.oneOnOneEmail === ev.oneOnOnePartnerEmail)
 			: null;
+		// The label fallback must not adopt a note stamped with a different
+		// email: two partners sharing a display name are different people.
+		// Notes with no email stamp (predating email tracking, or a partner
+		// without an email) stay matchable by label.
 		const home =
 			byEmail ??
-			mostRecentMatching(entries, (e) => e.oneOnOneWith === ev.oneOnOnePartner);
+			mostRecentMatching(
+				entries,
+				(e) =>
+					e.oneOnOneWith === ev.oneOnOnePartner &&
+					(e.oneOnOneEmail === null ||
+						!ev.oneOnOnePartnerEmail ||
+						e.oneOnOneEmail === ev.oneOnOnePartnerEmail)
+			);
 		if (home) return folderOf(home);
 		return normalizeFolderPath(
 			`${cfg.oneOnOneFolder}/${sanitizeName(ev.oneOnOnePartner)}`

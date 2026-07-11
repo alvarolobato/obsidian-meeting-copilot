@@ -17,6 +17,11 @@ export interface RetentionConfig {
 	now: number;
 	/** Paths that must never be removed (e.g. the in-progress recording). */
 	protectedPaths?: Set<string>;
+	/** Exact recording paths eligible regardless of `folders` (e.g. a recording
+	 *  linked from a meeting note the user moved outside every scoped folder).
+	 *  Deliberately path-precise, never a folder: a moved note must not turn
+	 *  its new neighborhood into sweepable territory. */
+	extraPaths?: Set<string>;
 }
 
 const AUDIO_EXTENSIONS = new Set(["wav", "m4a", "mp3", "webm", "ogg", "flac"]);
@@ -49,14 +54,16 @@ export function findExpiredRecordings(
 ): AudioFileInfo[] {
 	if (cfg.retentionDays <= 0) return [];
 	const folders = cfg.folders.map(normalizeFolder).filter(Boolean);
+	const extra = cfg.extraPaths;
 	// No valid scope → never sweep (avoid trashing unrelated vault audio).
-	if (folders.length === 0) return [];
+	if (folders.length === 0 && !extra?.size) return [];
 	const cutoff = cfg.now - cfg.retentionDays * DAY_MS;
 	return files.filter(
 		(f) =>
 			isAudioExt(f.ext) &&
 			f.mtime < cutoff &&
-			folders.some((folder) => underFolder(f.path, folder)) &&
+			(folders.some((folder) => underFolder(f.path, folder)) ||
+				extra?.has(f.path) === true) &&
 			!cfg.protectedPaths?.has(f.path)
 	);
 }

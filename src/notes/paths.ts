@@ -17,9 +17,10 @@ function isDotsOnly(segment: string): boolean {
  * Splits a path on "/", sanitizing each segment and dropping any that are
  * empty or only dots, so a value carrying "/", ".", or ".." can never inject
  * an extra folder or walk outside the intended root. Returns "" when nothing
- * is left.
+ * is left — use this over `normalizeFolderPath` when claiming a fallback
+ * folder would be wrong (e.g. scoping a scan or a retention sweep).
  */
-function joinSegments(input: string): string {
+export function normalizeFolderPathOrEmpty(input: string): string {
 	const segments = input
 		.trim()
 		.replace(/\/+$/, "")
@@ -31,11 +32,12 @@ function joinSegments(input: string): string {
 }
 
 /**
- * Normalizes a user- or template-rendered folder path (see `joinSegments`
- * above), falling back to "Meetings" when nothing is left.
+ * Normalizes a user- or template-rendered folder path (see
+ * `normalizeFolderPathOrEmpty` above), falling back to "Meetings" when
+ * nothing is left.
  */
 export function normalizeFolderPath(input: string): string {
-	return joinSegments(input) || "Meetings";
+	return normalizeFolderPathOrEmpty(input) || "Meetings";
 }
 
 /**
@@ -47,5 +49,5 @@ export function normalizeFolderPath(input: string): string {
  */
 export function templateStaticRoot(template: string): string {
 	const idx = template.indexOf("{{");
-	return joinSegments(idx === -1 ? template : template.slice(0, idx));
+	return normalizeFolderPathOrEmpty(idx === -1 ? template : template.slice(0, idx));
 }

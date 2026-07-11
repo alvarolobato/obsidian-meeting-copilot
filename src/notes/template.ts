@@ -21,19 +21,19 @@ export function renderTemplate(template: string, ev: MeetingEventInfo): string {
 
 /**
  * Same substitution as `renderTemplate`, but passes each resolved value
- * through `transform` before it's spliced in. Folder-template rendering uses
- * this to sanitize each token's value as a single path segment, so e.g. a
- * `{{series}}` value containing "/" can't inject an extra folder — literal
- * "/" written in the template itself is untouched, since it isn't part of any
- * `{{…}}` match.
+ * (along with its token name) through `transform` before it's spliced in.
+ * Folder-template rendering uses this to sanitize each token's value, so
+ * e.g. a `{{series}}` value containing "/" can't inject an extra folder —
+ * literal "/" written in the template itself is untouched, since it isn't
+ * part of any `{{…}}` match.
  */
 export function renderTemplateWith(
 	template: string,
 	ev: MeetingEventInfo,
-	transform: (value: string) => string
+	transform: (value: string, name: string) => string
 ): string {
 	return template.replace(VAR_RE, (_m, name: string, fmt?: string) =>
-		transform(resolveVariable(name, fmt, ev))
+		transform(resolveVariable(name, fmt, ev), name)
 	);
 }
 
