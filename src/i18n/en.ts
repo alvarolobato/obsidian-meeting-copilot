@@ -1,11 +1,11 @@
 // English locale.
 export const en = {
 	ribbon: {
-		toggleRecording: "Toggle recording",
+		toggleRecording: "Start/stop meeting recording",
 		openAgenda: "Open meeting agenda",
 	},
 	commands: {
-		startRecording: "Start recording",
+		startRecording: "Start unplanned meeting",
 		stopRecording: "Stop recording",
 		authenticateCalendar: "Authenticate calendar",
 		toggleCalendarAutoRecording: "Toggle calendar auto-recording",
@@ -14,6 +14,10 @@ export const en = {
 		toggleAiNotes: "Toggle AI notes visibility",
 		cleanupRecordings: "Clean up old recordings",
 		createDashboard: "Create/update meetings dashboard",
+	},
+	adhoc: {
+		defaultTitle: "Meeting",
+		started: "Recording unplanned meeting — rename the note title if you like",
 	},
 	notices: {
 		autoRecordEnabled: "Calendar auto-recording enabled",

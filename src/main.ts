@@ -98,6 +98,11 @@ export default class SystemRecordingPlugin extends Plugin {
 	private scheduler: CalendarScheduler | null = null;
 	/** Note the in-progress recording belongs to, so we can link it back on stop. */
 	private currentMeetingNotePath: string | null = null;
+	/**
+	 * Live reference to that note. Preferred over the path on stop so renaming
+	 * the note mid-recording (Obsidian updates `TFile.path`) still links back.
+	 */
+	private currentMeetingNote: TFile | null = null;
 	/** Calendar event id of the in-progress meeting recording, for agenda state. */
 	private currentRecordingEventId: string | null = null;
 	/** Vault-relative path of the in-progress recording, protected from retention. */
@@ -171,7 +176,7 @@ export default class SystemRecordingPlugin extends Plugin {
         this.addCommand({
             id: "start-recording",
             name: t().commands.startRecording,
-            callback: () => this.startRecording(),
+            callback: () => void this.startAdHocMeeting(),
         });
 
         this.addCommand({
@@ -338,7 +343,78 @@ export default class SystemRecordingPlugin extends Plugin {
         if (this.recorder.isRecording) {
             this.stopRecording();
         } else {
-            void this.startRecording();
+            void this.startAdHocMeeting();
+        }
+    }
+
+    /**
+     * Starts an unplanned meeting: creates a meeting note (default title, ready
+     * to rename), opens it with the title selected, and records beside it. On
+     * stop the recording follows the same link → transcribe → enrich pipeline
+     * as calendar meetings.
+     */
+    private async startAdHocMeeting(): Promise<void> {
+        if (!Platform.isMacOS) {
+            new Notice(t().notices.macOnly);
+            return;
+        }
+        if (this.recorder.isRecording) {
+            new Notice(t().notices.alreadyRecording);
+            return;
+        }
+        const now = new Date();
+        const info: MeetingEventInfo = {
+            // A stable non-empty id makes it a recognized meeting note right
+            // away and avoids note-path collisions with other ad-hoc meetings.
+            id: `adhoc-${now.getTime()}`,
+            summary: t().adhoc.defaultTitle,
+            start: now,
+            end: new Date(now.getTime() + 60 * 60 * 1000),
+            meetLink: null,
+            location: "",
+            htmlLink: "",
+            attendees: [],
+            organizer: null,
+            iCalUID: null,
+            recurringEventId: null,
+        };
+        try {
+            const ref = await createMeetingNote(this.app, info, this.noteConfig());
+            const leaf = this.app.workspace.getLeaf(false);
+            await leaf.openFile(ref.file);
+            this.selectNoteTitle(leaf);
+            await this.startRecording({
+                folder: ref.folder,
+                basename: ref.basename,
+                notePath: ref.notePath,
+                eventId: info.id,
+                note: ref.file,
+            });
+            new Notice(t().adhoc.started);
+        } catch (e) {
+            new Notice(
+                t().notices.recordingError(
+                    e instanceof Error ? e.message : String(e)
+                )
+            );
+        }
+    }
+
+    /** Selects the H1 title in a freshly opened note so the user can rename it. */
+    private selectNoteTitle(leaf: import("obsidian").WorkspaceLeaf): void {
+        const view = leaf.view instanceof MarkdownView ? leaf.view : null;
+        if (!view) return;
+        const editor = view.editor;
+        for (let i = 0; i < editor.lineCount(); i++) {
+            const line = editor.getLine(i);
+            if (line.startsWith("# ")) {
+                editor.setSelection(
+                    { line: i, ch: 2 },
+                    { line: i, ch: line.length }
+                );
+                editor.focus();
+                return;
+            }
         }
     }
 
@@ -347,6 +423,7 @@ export default class SystemRecordingPlugin extends Plugin {
         basename: string;
         notePath: string;
         eventId?: string;
+        note?: TFile;
     }) {
         if (this.recorder.isRecording) {
             new Notice(t().notices.alreadyRecording);
@@ -393,6 +470,7 @@ export default class SystemRecordingPlugin extends Plugin {
                     meeting.basename
                 );
                 this.currentMeetingNotePath = meeting.notePath;
+                this.currentMeetingNote = meeting.note ?? null;
                 this.currentRecordingEventId = meeting.eventId ?? null;
             } else {
                 const folder = this.settings.recordingFolder;
@@ -402,6 +480,7 @@ export default class SystemRecordingPlugin extends Plugin {
                 const fileName = this.formatFileName(this.settings.fileNameTemplate);
                 relativePath = await this.uniqueWavPath(adapter, folder, fileName);
                 this.currentMeetingNotePath = null;
+                this.currentMeetingNote = null;
                 this.currentRecordingEventId = null;
             }
 
@@ -1093,6 +1172,7 @@ export default class SystemRecordingPlugin extends Plugin {
         this.currentRecordingPath = null;
         this.hideStatusBar();
         this.currentMeetingNotePath = null;
+        this.currentMeetingNote = null;
         this.currentRecordingEventId = null;
         this.agendaEvents.emit("changed", undefined);
     }
@@ -1476,13 +1556,18 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     private async attachRecording(fileName: string) {
-        const notePath = this.currentMeetingNotePath;
+        // Prefer the live TFile (survives a rename during recording); fall back
+        // to the path captured at start.
+        const noteRef = this.currentMeetingNote;
+        const notePath = noteRef?.path ?? this.currentMeetingNotePath;
         this.currentMeetingNotePath = null;
+        this.currentMeetingNote = null;
         this.currentRecordingEventId = null;
         this.currentRecordingPath = null;
         this.agendaEvents.emit("changed", undefined);
         if (notePath) {
-            const file = this.app.vault.getAbstractFileByPath(notePath);
+            const file =
+                noteRef ?? this.app.vault.getAbstractFileByPath(notePath);
             if (file instanceof TFile) {
                 // Qualify the link with the recording's folder (it's colocated
                 // with the note) so duplicate basenames elsewhere can't resolve
