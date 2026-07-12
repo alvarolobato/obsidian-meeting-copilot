@@ -8,6 +8,7 @@ import {
 	DEFAULT_TITLE_PATTERN,
 	findNoteByEventId,
 	formatTranscriptCallout,
+	insertTranscript,
 	isAdhocId,
 	type MeetingEventInfo,
 	type MeetingNoteConfig,
@@ -54,15 +55,29 @@ class FakeVault {
 	// Paths whose metadataCache lookup should behave as if the cache hasn't
 	// indexed the file yet (simulates the lag `recentNoteByEventId` bridges).
 	private staleCache = new Set<string>();
+	private contents = new Map<string, string>();
 	created: string[] = [];
 
 	/** Seeds an existing note; returns its TFile so a test can reference it. */
-	addNote(path: string, frontmatter: Record<string, unknown> = {}): TFile {
+	addNote(
+		path: string,
+		frontmatter: Record<string, unknown> = {},
+		content = ""
+	): TFile {
 		const file = makeTFile(path);
 		this.entries.set(path, { file, frontmatter });
+		if (content) this.contents.set(path, content);
 		const slash = path.lastIndexOf("/");
 		this.folders.add(slash === -1 ? "" : path.slice(0, slash));
 		return file;
+	}
+
+	async read(file: TFile): Promise<string> {
+		return this.contents.get(file.path) ?? "";
+	}
+
+	async modify(file: TFile, data: string): Promise<void> {
+		this.contents.set(file.path, data);
 	}
 
 	getMarkdownFiles(): TFile[] {
@@ -247,6 +262,24 @@ describe("stripTranscript", () => {
 	it("returns content unchanged when there is no transcript", () => {
 		const input = "# T\n\n## Notes\n\nfoo";
 		expect(stripTranscript(input)).toBe(input);
+	});
+});
+
+describe("insertTranscript", () => {
+	it("writes the transcript body and stamps the transcript_saved flag", async () => {
+		const vault = new FakeVault();
+		const file = vault.addNote(
+			"Meetings/m.md",
+			{ status: "recorded" },
+			"# M\n\n## Notes\n\nmy note\n"
+		);
+		await insertTranscript(makeApp(vault), file, "Ann: hi\nBob: hey");
+		const fm = vault.frontmatterFor(file);
+		expect(fm?.transcript_saved).toBe(true);
+		expect(fm?.status).toBe("transcribed");
+		const body = await vault.read(file);
+		expect(body).toContain("Transcript");
+		expect(body).toContain("Ann: hi");
 	});
 });
 
