@@ -212,7 +212,7 @@ export function migrateSettings(
 
 export class SystemRecordingSettingTab extends PluginSettingTab {
     plugin: SystemRecordingPlugin;
-    /** Model ids fetched from the endpoint (populated by "Test connection"), shared by transcription + enrichment. */
+    /** Model ids fetched from the endpoint (populated by "Load models"), shared by transcription + enrichment. */
     private models: string[] = [];
     /** Per-model capabilities from the endpoint (LiteLLM), or null when the endpoint doesn't expose them (plain OpenAI). Drives the transcription-model filter. */
     private capabilities: Map<string, ModelCapability> | null = null;
@@ -549,8 +549,8 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 			.setHeading();
 
 		// Model id sent on the wire (dropdown once models are loaded, else free
-		// text). Use "Load models" / "Test connection" in the AI endpoint
-		// section above to populate the list.
+		// text). Use "Load models" in the AI endpoint section above to
+		// populate the list.
 		const sttModelSetting = new Setting(containerEl)
 			.setName(s.settings.sttModel.name)
 			.setDesc(s.settings.sttModel.desc);
@@ -1198,7 +1198,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 
     /**
      * Model picker used by both transcription and enrichment. Shows a dropdown
-     * of the models fetched from the endpoint (via "Test connection"), keeping
+     * of the models fetched from the endpoint (via "Load models"), keeping
      * the current value selectable even if the endpoint didn't list it. Falls
      * back to a free-text field when no models have been loaded yet so the user
      * can still type a model id offline. An optional `filter` narrows the

@@ -79,7 +79,7 @@ export const en = {
 		transcribeNoEndpoint:
 			"Set the AI endpoint (base URL + API key) in settings before transcribing.",
 		diarizationNoTimestamps:
-			"Speaker separation was skipped: the endpoint returned no timestamps this time. Run 'Test connection' to re-check.",
+			"Speaker separation was skipped: the endpoint returned no timestamps this time. Run 'Load models' to re-check.",
 	},
 	transcript: {
 		// Prepended to a speaker-separated transcript. Tells the enrichment model
@@ -297,7 +297,7 @@ export const en = {
 		},
 		apiKey: {
 			name: "API key",
-			desc: "Sent as a Bearer token for transcription and enrichment. Stored in this vault's plugin data. Use 'Test connection' to verify it and load the available models.",
+			desc: "Sent as a Bearer token for transcription and enrichment. Stored in this vault's plugin data. Use 'Load models' to verify it and load the available models.",
 		},
 		endpointActions: {
 			name: "Connection",
@@ -306,7 +306,7 @@ export const en = {
 		transcriptionHeading: "Transcription",
 		sttModel: {
 			name: "Transcription model",
-			desc: "Model sent to the endpoint. Run 'Test connection' above to list the models your endpoint exposes — when it reports capabilities, the list is narrowed to speech-to-text models. Chat models like gpt-4o can't transcribe; use gpt-4o-transcribe or whisper. You can also type a gateway deployment name such as llm-gateway/whisper.",
+			desc: "Model sent to the endpoint. Run 'Load models' above to list the models your endpoint exposes — when it reports capabilities, the list is narrowed to speech-to-text models. Chat models like gpt-4o can't transcribe; use gpt-4o-transcribe or whisper. You can also type a gateway deployment name such as llm-gateway/whisper.",
 		},
 		sttApiType: {
 			name: "Engine (advanced)",
@@ -376,11 +376,11 @@ export const en = {
 		},
 		enrichModel: {
 			name: "Model",
-			desc: "Chat model used for enrichment. Use 'Test connection' to load the models your endpoint exposes, then pick one from the dropdown.",
+			desc: "Chat model used for enrichment. Use 'Load models' to load the models your endpoint exposes, then pick one from the dropdown.",
 		},
 		testConnection: {
-			button: "Test connection",
-			testing: "Testing…",
+			button: "Load models",
+			testing: "Loading…",
 			noBaseUrl: "Set the API base URL first.",
 			success: (n: number) =>
 				`Connected. Loaded ${n} model${n === 1 ? "" : "s"}.`,
