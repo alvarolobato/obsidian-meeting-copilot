@@ -145,16 +145,36 @@ function oneOnOneOther(
 }
 
 /**
- * The other participant's display name (or email) for a 1:1. Null for group
- * meetings, a missing self flag, or an unnamed/emailless partner.
+ * Turns an email address into a human-friendly name for folder/label use, e.g.
+ * "sophie.smith@acme.com" → "Sophie Smith". Only a fallback for attendees that
+ * carry no display name — we never want a raw address as a 1:1 folder name.
+ */
+export function humanizeEmailName(email: string): string {
+	const local = (email.split("@")[0] ?? "").trim();
+	const words = local
+		.split(/[._+-]+/)
+		.map((w) => w.trim())
+		.filter((w) => w.length > 0)
+		.map((w) => w.charAt(0).toUpperCase() + w.slice(1));
+	return words.join(" ") || email.trim();
+}
+
+/**
+ * The other participant's full name for a 1:1, used to name their folder. Uses
+ * the invite's display name when present; otherwise humanizes the email local
+ * part (never the raw address). Null for group meetings, a missing self flag,
+ * or an unnamed/emailless partner.
  */
 export function oneOnOnePartner(
 	raw: RawAttendee[] | undefined,
 	ctx: OneOnOneContext = {}
 ): string | null {
 	const other = oneOnOneOther(raw, ctx);
-	const name = (other?.displayName || other?.email || "").trim();
-	return name.length > 0 ? name : null;
+	if (!other) return null;
+	const display = (other.displayName ?? "").trim();
+	if (display.length > 0) return display;
+	const email = (other.email ?? "").trim();
+	return email.length > 0 ? humanizeEmailName(email) : null;
 }
 
 /**

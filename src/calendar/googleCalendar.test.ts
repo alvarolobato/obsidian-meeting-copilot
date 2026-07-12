@@ -1,10 +1,26 @@
 import { describe, it, expect, vi } from "vitest";
 import {
 	collectPages,
+	humanizeEmailName,
 	isDeclinedByUser,
 	oneOnOnePartner,
 	oneOnOnePartnerEmail,
 } from "./googleCalendar";
+
+describe("humanizeEmailName", () => {
+	it("title-cases the local part split on separators", () => {
+		expect(humanizeEmailName("sophie.smith@acme.com")).toBe("Sophie Smith");
+		expect(humanizeEmailName("bob_jones-work@x.io")).toBe("Bob Jones Work");
+	});
+
+	it("keeps an unsplittable local part as a single word", () => {
+		expect(humanizeEmailName("jsmith@x.io")).toBe("Jsmith");
+	});
+
+	it("returns the trimmed input when there is no usable local part", () => {
+		expect(humanizeEmailName("@x.io")).toBe("@x.io");
+	});
+});
 
 describe("isDeclinedByUser", () => {
 	it("is true only when the self attendee declined", () => {
@@ -97,12 +113,12 @@ describe("oneOnOnePartner", () => {
 		expect(partner).toBe("Bob");
 	});
 
-	it("falls back to email when the partner has no displayName", () => {
+	it("humanizes the email into a full name when the partner has no displayName", () => {
 		const partner = oneOnOnePartner([
 			{ email: "me@example.com", self: true },
-			{ email: "bob@example.com" },
+			{ email: "sophie.smith@example.com" },
 		]);
-		expect(partner).toBe("bob@example.com");
+		expect(partner).toBe("Sophie Smith");
 	});
 
 	it("returns null when no attendee is marked self", () => {

@@ -73,7 +73,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	fileNameTemplate: "recording-YYYY-MM-DD-HHmmss",
 	oneOffFolderTemplate: "Meetings/{{year}}",
 	seriesFolderTemplate: "Meetings/{{series}}",
-	oneOnOneSeparately: false,
+	oneOnOneSeparately: true,
 	oneOnOneFolder: "Meetings/1-1s",
 	adhocFolder: "Meetings/Ad-hoc",
 	noteTitlePattern: DEFAULT_TITLE_PATTERN,
@@ -163,10 +163,10 @@ export function migrateSettings(
 		...(loaded as Partial<SystemRecordingSettings>),
 		oneOffFolderTemplate: base,
 		seriesFolderTemplate: `${base}/{{series}}`,
-		// Ad-hoc notes used to land directly in `meetingsFolder`; keep that
-		// exact location rather than nesting them under a brand-new top-level
-		// "Meetings" tree.
-		adhocFolder: base,
+		// Nest ad-hoc notes under an "Ad-hoc" subfolder of the legacy folder,
+		// matching the new default and the sibling `1-1s` nesting, rather than
+		// dropping them loose alongside scheduled meetings.
+		adhocFolder: `${base}/Ad-hoc`,
 		oneOnOneFolder: `${base}/1-1s`,
 	});
 }

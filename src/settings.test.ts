@@ -8,9 +8,9 @@ describe("migrateSettings", () => {
 		expect(migrated.seriesFolderTemplate).toBe("Work/Meetings/{{series}}");
 	});
 
-	it("keeps ad-hoc notes at the legacy folder itself, and nests 1:1s under it", () => {
+	it("nests ad-hoc notes and 1:1s under the legacy folder", () => {
 		const migrated = migrateSettings({ meetingsFolder: "Work/Meetings" });
-		expect(migrated.adhocFolder).toBe("Work/Meetings");
+		expect(migrated.adhocFolder).toBe("Work/Meetings/Ad-hoc");
 		expect(migrated.oneOnOneFolder).toBe("Work/Meetings/1-1s");
 	});
 
@@ -19,7 +19,7 @@ describe("migrateSettings", () => {
 		expect(migrateSettings({ meetingsFolder: "" }).oneOffFolderTemplate).toBe(
 			"Meetings"
 		);
-		expect(migrateSettings({}).adhocFolder).toBe("Meetings");
+		expect(migrateSettings({}).adhocFolder).toBe("Meetings/Ad-hoc");
 		expect(migrateSettings({}).oneOnOneFolder).toBe("Meetings/1-1s");
 	});
 
