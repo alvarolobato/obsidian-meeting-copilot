@@ -5,7 +5,7 @@
  * backend behind them, so the only reliable way to know is to ask it with a
  * throwaway clip and look at what comes back. The WAV generation and response
  * parsing are pure so they can be unit-tested without a network stack; only
- * `probeTimestampSupport` itself talks to the endpoint.
+ * `probeSttSupport` itself talks to the endpoint.
  */
 import { requestUrl } from "obsidian";
 
@@ -123,11 +123,18 @@ function buildMultipartBody(
 	};
 }
 
-export interface ProbeTimestampSupportOptions {
+export interface ProbeSttSupportOptions {
 	baseUrl: string;
 	apiKey: string;
 	/** The model id actually sent on the wire (a gateway deployment name, or the canonical id). */
 	wireModel: string;
+	/**
+	 * Ask for `verbose_json` + segment granularities so timestamp support can be
+	 * detected too. Only Whisper honors that shape — gpt-4o `*-transcribe`
+	 * models reject verbose_json with a 400 — so leave this off for non-Whisper
+	 * families to check transcription support alone (plain `json`).
+	 */
+	withTimestamps?: boolean;
 }
 
 /**
@@ -135,27 +142,88 @@ export interface ProbeTimestampSupportOptions {
  * HTTP, or parse failure) and must not be persisted as a definitive answer,
  * otherwise a transient 429 or timeout would stick as "unsupported" forever.
  */
-export type TimestampSupport = "supported" | "unsupported" | "unknown";
+export type SupportVerdict = "supported" | "unsupported" | "unknown";
 
 /**
- * Sends a throwaway clip to `${baseUrl}/audio/transcriptions` asking for
- * `verbose_json` with segment timestamps, then reports whether a `segments`
- * array came back. Only a clean 2xx we could parse yields a real verdict;
- * anything else (network error, non-2xx, unparseable body) is "unknown" so the
- * caller can leave the stored result untouched rather than record a false "no".
+ * What a single `/audio/transcriptions` probe tells us about a model:
+ * - `transcription`: whether the model can transcribe at all (a 2xx means yes;
+ *   a client rejection like 400/404/415/422 means the endpoint refused the
+ *   model/route, i.e. it's not a transcription model).
+ * - `timestamps`: whether that transcription came back with a `segments` array
+ *   (only meaningful when `transcription` is "supported").
  */
-export async function probeTimestampSupport(
-	opts: ProbeTimestampSupportOptions
-): Promise<TimestampSupport> {
+export interface SttSupport {
+	transcription: SupportVerdict;
+	timestamps: SupportVerdict;
+}
+
+/** A probe verdict plus a short diagnostic, so an "unknown" outcome can tell the user *why* (HTTP status or transport error) instead of failing silently. */
+export interface SttProbeResult extends SttSupport {
+	/** HTTP status of the probe response, or null if the request never completed. */
+	status: number | null;
+	/** Human-readable summary of the outcome (e.g. "HTTP 500", "network error: …"). */
+	detail: string;
+}
+
+/** HTTP statuses where the endpoint understood the request but refused this model/route — treated as "this model can't transcribe". */
+const MODEL_REJECTED_STATUSES = new Set([400, 404, 405, 415, 422]);
+
+/**
+ * Derives an {@link SttSupport} verdict from a probe's HTTP status and parsed
+ * body. Split out from the request so it can be unit-tested without a network
+ * stack. A 2xx means the model transcribes; a client rejection means it
+ * doesn't; anything else (auth, rate limit, server error) is "unknown" on both
+ * axes. Timestamps are only judged when the request actually asked for them
+ * (`checkedTimestamps`) — otherwise their verdict is "unknown".
+ */
+export function classifySttResponse(
+	status: number,
+	json: unknown,
+	checkedTimestamps: boolean
+): SttSupport {
+	if (status >= 200 && status < 300) {
+		return {
+			transcription: "supported",
+			timestamps: !checkedTimestamps
+				? "unknown"
+				: responseHasSegmentsArray(json)
+					? "supported"
+					: "unsupported",
+		};
+	}
+	if (MODEL_REJECTED_STATUSES.has(status)) {
+		return { transcription: "unsupported", timestamps: "unsupported" };
+	}
+	return { transcription: "unknown", timestamps: "unknown" };
+}
+
+/**
+ * Sends a throwaway clip to `${baseUrl}/audio/transcriptions` and reports
+ * whether the model transcribes and (when `withTimestamps` is set) whether it
+ * returned segment timestamps — see {@link classifySttResponse}. A
+ * network/parse failure yields "unknown" on both axes so the caller can leave
+ * stored results untouched rather than record a false "no".
+ */
+export async function probeSttSupport(
+	opts: ProbeSttSupportOptions
+): Promise<SttProbeResult> {
+	const withTimestamps = opts.withTimestamps === true;
 	try {
-		const { body, contentType } = buildMultipartBody(
-			[
-				["model", opts.wireModel],
-				["response_format", "verbose_json"],
-				["timestamp_granularities[]", "segment"],
-			],
-			{ name: "probe.wav", type: "audio/wav", data: makeProbeWav() }
-		);
+		const fields: Array<[string, string]> = withTimestamps
+			? [
+					["model", opts.wireModel],
+					["response_format", "verbose_json"],
+					["timestamp_granularities[]", "segment"],
+				]
+			: [
+					["model", opts.wireModel],
+					["response_format", "json"],
+				];
+		const { body, contentType } = buildMultipartBody(fields, {
+			name: "probe.wav",
+			type: "audio/wav",
+			data: makeProbeWav(),
+		});
 		const res = await requestUrl({
 			url: `${opts.baseUrl.replace(/\/+$/, "")}/audio/transcriptions`,
 			method: "POST",
@@ -166,11 +234,17 @@ export async function probeTimestampSupport(
 			body,
 			throw: false,
 		});
-		if (res.status < 200 || res.status >= 300) return "unknown";
-		return responseHasSegmentsArray(res.json)
-			? "supported"
-			: "unsupported";
-	} catch {
-		return "unknown";
+		// Touch res.json inside the try so a body that throws on parse lands in
+		// the catch as "unknown" rather than crashing the caller.
+		const support = classifySttResponse(res.status, res.json, withTimestamps);
+		return { ...support, status: res.status, detail: `HTTP ${res.status}` };
+	} catch (e) {
+		const msg = e instanceof Error ? e.message : String(e);
+		return {
+			transcription: "unknown",
+			timestamps: "unknown",
+			status: null,
+			detail: `network error: ${msg}`,
+		};
 	}
 }

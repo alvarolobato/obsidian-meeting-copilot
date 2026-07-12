@@ -96,6 +96,7 @@ import { registerIcons, RECORD_ICON } from "./ui/icons";
 import { notifyOs, requestNotificationPermission } from "./ui/osNotification";
 import { MeetingDetector } from "./detect/meetingDetector";
 import { googleMeetActive, zoomInMeeting } from "./detect/probe";
+import { execFile } from "child_process";
 
 export default class SystemRecordingPlugin extends Plugin {
     settings: SystemRecordingSettings;
@@ -365,6 +366,14 @@ export default class SystemRecordingPlugin extends Plugin {
         // Guard against corrupt/hand-edited data selecting an unknown engine
         // family, which would silently fall through to the GPT-4o path.
         this.settings.sttApiType = clampApiType(this.settings.sttApiType);
+        // The UI no longer exposes a separate no-timestamps Whisper: collapse
+        // the retired "whisper-1" family into the timestamp-intent one. Real
+        // transcriptions downgrade back to plain whisper-1 on the wire when the
+        // endpoint doesn't actually return timestamps (see resolveEngineFamily),
+        // so nothing breaks for backends that reject verbose_json.
+        if (this.settings.sttApiType === "whisper-1") {
+            this.settings.sttApiType = "whisper-1-ts";
+        }
         // Keep the OAuth refresh token and client secret out of the synced/
         // committed data.json: load them from per-vault localStorage instead,
         // migrating any legacy plaintext copies that still live in data.json.
@@ -593,17 +602,28 @@ export default class SystemRecordingPlugin extends Plugin {
 
             const adapter = this.app.vault.adapter;
 
-            // Meeting recordings live beside their note (same folder + basename);
-            // ad-hoc recordings fall back to the template in the recordings folder.
+            // Meeting recordings go under a "Recordings" subfolder of the note's
+            // own folder (configurable; empty = colocate beside the note). Ad-hoc
+            // recordings with no note fall back to the flat recordings folder.
             let relativePath: string;
             if (meeting) {
                 // A note at the vault root has folder "" (nothing to create).
+                // Ensure the note's folder before its (nested) Recordings child,
+                // so the subfolder mkdir can't fail on a missing parent.
                 if (meeting.folder && !(await adapter.exists(meeting.folder))) {
                     await adapter.mkdir(meeting.folder);
                 }
+                const recFolder = this.recordingFolderFor(meeting.folder);
+                if (
+                    recFolder &&
+                    recFolder !== meeting.folder &&
+                    !(await adapter.exists(recFolder))
+                ) {
+                    await adapter.mkdir(recFolder);
+                }
                 relativePath = await this.uniqueWavPath(
                     adapter,
-                    meeting.folder,
+                    recFolder,
                     meeting.basename
                 );
                 this.currentMeetingNotePath = meeting.notePath;
@@ -1330,15 +1350,32 @@ export default class SystemRecordingPlugin extends Plugin {
         );
     }
 
+    /**
+     * The engine family to send on the wire. The timestamp-intent Whisper
+     * (`whisper-1-ts`) asks for `verbose_json`, which backends that don't emit
+     * timestamps reject outright — so downgrade it to plain `whisper-1` unless
+     * a fresh probe confirmed this endpoint + model actually returns segments.
+     * Other families pass through unchanged.
+     */
+    private resolveEngineFamily(): SttApiType {
+        const s = this.settings;
+        if (s.sttApiType !== "whisper-1-ts") return s.sttApiType;
+        const key = probeKey(s.apiBaseUrl, s.sttModel);
+        const timestampsConfirmed =
+            s.sttTimestampsProbeKey === key && s.sttTimestampsSupported === true;
+        return timestampsConfirmed ? "whisper-1-ts" : "whisper-1";
+    }
+
     /** Maps plugin settings onto the vendored transcription engine's config. */
     private buildTranscribeConfig(): TranscribeConfig {
         const s = this.settings;
         return {
             baseUrl: s.apiBaseUrl,
             apiKey: s.apiKey,
-            // sttApiType selects the engine family (routing/chunking/timestamps);
-            // sttModel is the actual name sent on the wire (may be a gateway id).
-            model: s.sttApiType as TranscriptionModel,
+            // The engine family selects routing/chunking/timestamps; sttModel is
+            // the actual name sent on the wire (may be a gateway id). Whisper
+            // downgrades to no-timestamps when the endpoint can't emit them.
+            model: this.resolveEngineFamily() as TranscriptionModel,
             modelOverride: s.sttModel,
             chatModel: s.enrichModel,
             language: s.sttLanguage || "auto",
@@ -1553,9 +1590,37 @@ export default class SystemRecordingPlugin extends Plugin {
     private notifyRecordingError(message: string): void {
         if (/screen[\s-]?(capture|recording)/i.test(message)) {
             new Notice(t().notices.screenPermission, 15000);
+            // Take the user straight to the pane they need to toggle instead of
+            // making them hunt through System Settings.
+            this.openScreenRecordingSettings();
         } else {
             new Notice(t().notices.recordingError(message));
         }
+    }
+
+    /** Whether we've already opened the Screen Recording pane this session, so a retry loop doesn't reopen System Settings repeatedly. */
+    private screenSettingsOpened = false;
+
+    /**
+     * Opens macOS System Settings directly at Privacy & Security → Screen
+     * Recording so the user can grant Obsidian access. Best-effort and
+     * macOS-only; opened at most once per session. macOS can't be made to grant
+     * the permission programmatically (and won't re-show the initial prompt once
+     * the grant is stale after a rename), so surfacing the exact pane is the
+     * most we can automate.
+     */
+    private openScreenRecordingSettings(): void {
+        if (!Platform.isMacOS || this.screenSettingsOpened) return;
+        this.screenSettingsOpened = true;
+        execFile(
+            "open",
+            [
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+            ],
+            (err) => {
+                if (err) console.warn("Failed to open Screen Recording settings", err);
+            }
+        );
     }
 
     // MARK: - UI helpers
@@ -2045,7 +2110,7 @@ export default class SystemRecordingPlugin extends Plugin {
             const folders = [
                 ...new Set([
                     ...this.configuredMeetingRoots(),
-                    this.settings.recordingFolder.trim() || "recordings",
+                    this.settings.recordingFolder.trim() || "Recordings",
                 ]),
             ].filter((f) => f.length > 0);
             const expired = findExpiredRecordings(files, {
@@ -2249,6 +2314,19 @@ export default class SystemRecordingPlugin extends Plugin {
         }
         const f = this.app.vault.getAbstractFileByPath(vaultPath);
         return f instanceof TFile ? f : null;
+    }
+
+    /**
+     * The folder a meeting note's recording should be written to: the configured
+     * "Recordings" subfolder of the note's own folder, or the note's folder
+     * itself when the subfolder is blank (colocated, pre-0.2 behavior).
+     */
+    private recordingFolderFor(noteFolder: string): string {
+        const sub = this.settings.recordingSubfolder
+            .trim()
+            .replace(/^\/+|\/+$/g, "");
+        if (!sub) return noteFolder;
+        return normalizePath(noteFolder ? `${noteFolder}/${sub}` : sub);
     }
 
     /** Returns a vault-relative `.wav` path, appending -2, -3… if the name is taken. */

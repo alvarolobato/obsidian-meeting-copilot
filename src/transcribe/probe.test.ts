@@ -4,9 +4,10 @@ const { requestUrl } = vi.hoisted(() => ({ requestUrl: vi.fn() }));
 vi.mock("obsidian", () => ({ requestUrl }));
 
 import {
+	classifySttResponse,
 	makeProbeWav,
 	probeKey,
-	probeTimestampSupport,
+	probeSttSupport,
 	responseHasSegmentsArray,
 } from "./probe";
 
@@ -85,7 +86,48 @@ describe("responseHasSegmentsArray", () => {
 	});
 });
 
-describe("probeTimestampSupport", () => {
+describe("classifySttResponse", () => {
+	it("reports transcription + timestamps for a 2xx with segments (timestamps checked)", () => {
+		expect(classifySttResponse(200, { segments: [] }, true)).toEqual({
+			transcription: "supported",
+			timestamps: "supported",
+		});
+	});
+
+	it("reports timestamps unsupported for a 2xx with no segments (timestamps checked)", () => {
+		expect(classifySttResponse(200, { text: "hi" }, true)).toEqual({
+			transcription: "supported",
+			timestamps: "unsupported",
+		});
+	});
+
+	it("leaves timestamps 'unknown' on a 2xx when they weren't requested", () => {
+		expect(classifySttResponse(200, { text: "hi" }, false)).toEqual({
+			transcription: "supported",
+			timestamps: "unknown",
+		});
+	});
+
+	it("treats a client rejection (400/404/415/422) as 'model can't transcribe'", () => {
+		for (const status of [400, 404, 405, 415, 422]) {
+			expect(classifySttResponse(status, undefined, true)).toEqual({
+				transcription: "unsupported",
+				timestamps: "unsupported",
+			});
+		}
+	});
+
+	it("is 'unknown' on auth/rate-limit/server errors", () => {
+		for (const status of [401, 403, 429, 500, 503]) {
+			expect(classifySttResponse(status, undefined, true)).toEqual({
+				transcription: "unknown",
+				timestamps: "unknown",
+			});
+		}
+	});
+});
+
+describe("probeSttSupport", () => {
 	const opts = {
 		baseUrl: "https://gw.example.com/v1",
 		apiKey: "sk-test",
@@ -96,24 +138,55 @@ describe("probeTimestampSupport", () => {
 		requestUrl.mockReset();
 	});
 
-	it("is 'supported' when a 2xx response carries a segments array", async () => {
+	it("detects transcription + timestamps when asked for timestamps", async () => {
 		requestUrl.mockResolvedValue({ status: 200, json: { segments: [] } });
-		expect(await probeTimestampSupport(opts)).toBe("supported");
+		expect(
+			await probeSttSupport({ ...opts, withTimestamps: true })
+		).toMatchObject({
+			transcription: "supported",
+			timestamps: "supported",
+			status: 200,
+		});
 	});
 
-	it("is 'unsupported' when a 2xx response has no segments field", async () => {
+	it("requests plain json (no timestamp verdict) when not asked for timestamps", async () => {
 		requestUrl.mockResolvedValue({ status: 200, json: { text: "hi" } });
-		expect(await probeTimestampSupport(opts)).toBe("unsupported");
+		const result = await probeSttSupport({ ...opts, withTimestamps: false });
+		expect(result).toMatchObject({
+			transcription: "supported",
+			timestamps: "unknown",
+		});
+		expect(requestUrl).toHaveBeenCalledTimes(1);
 	});
 
-	it("is 'unknown' on a non-2xx response (e.g. a transient 429)", async () => {
+	it("marks a rejected model as non-transcription", async () => {
+		requestUrl.mockResolvedValue({ status: 400, json: undefined });
+		expect(await probeSttSupport(opts)).toMatchObject({
+			transcription: "unsupported",
+			timestamps: "unsupported",
+			status: 400,
+		});
+	});
+
+	it("is 'unknown' on a transient error, reporting the status", async () => {
 		requestUrl.mockResolvedValue({ status: 429, json: undefined });
-		expect(await probeTimestampSupport(opts)).toBe("unknown");
+		expect(await probeSttSupport(opts)).toMatchObject({
+			transcription: "unknown",
+			timestamps: "unknown",
+			status: 429,
+			detail: "HTTP 429",
+		});
 	});
 
-	it("is 'unknown' when the request throws (network/DNS error)", async () => {
+	it("is 'unknown' when the request throws, reporting the error", async () => {
 		requestUrl.mockRejectedValue(new Error("getaddrinfo ENOTFOUND"));
-		expect(await probeTimestampSupport(opts)).toBe("unknown");
+		const result = await probeSttSupport(opts);
+		expect(result).toMatchObject({
+			transcription: "unknown",
+			timestamps: "unknown",
+			status: null,
+		});
+		expect(result.detail).toContain("ENOTFOUND");
 	});
 
 	it("is 'unknown' when the body can't be parsed as JSON", async () => {
@@ -123,7 +196,9 @@ describe("probeTimestampSupport", () => {
 				throw new Error("invalid json");
 			},
 		});
-		expect(await probeTimestampSupport(opts)).toBe("unknown");
+		expect(
+			await probeSttSupport({ ...opts, withTimestamps: true })
+		).toMatchObject({ transcription: "unknown", timestamps: "unknown" });
 	});
 });
 
