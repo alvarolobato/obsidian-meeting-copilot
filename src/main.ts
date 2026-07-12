@@ -607,6 +607,10 @@ export default class SystemRecordingPlugin extends Plugin {
             }
 
             const adapter = this.app.vault.adapter;
+            // Sampled once so the path extension and the helper's --format
+            // can't diverge if the settings toggle flips during the awaits
+            // below.
+            const format = this.recordingFormat();
 
             // Meeting recordings go under a "Recordings" subfolder of the note's
             // own folder (configurable; empty = colocate beside the note). Ad-hoc
@@ -630,7 +634,8 @@ export default class SystemRecordingPlugin extends Plugin {
                 relativePath = await this.uniqueRecordingPath(
                     adapter,
                     recFolder,
-                    meeting.basename
+                    meeting.basename,
+                    format
                 );
                 this.currentMeetingNotePath = meeting.notePath;
                 this.currentMeetingNote = meeting.note ?? null;
@@ -641,7 +646,12 @@ export default class SystemRecordingPlugin extends Plugin {
                     await adapter.mkdir(folder);
                 }
                 const fileName = this.formatFileName(this.settings.fileNameTemplate);
-                relativePath = await this.uniqueRecordingPath(adapter, folder, fileName);
+                relativePath = await this.uniqueRecordingPath(
+                    adapter,
+                    folder,
+                    fileName,
+                    format
+                );
                 this.currentMeetingNotePath = null;
                 this.currentMeetingNote = null;
                 this.currentRecordingEventId = null;
@@ -661,7 +671,7 @@ export default class SystemRecordingPlugin extends Plugin {
             this.screenSettingsOpened = false;
             this.recorder.start(binaryPath, absolutePath, {
                 split: this.shouldSeparateSpeakers(),
-                format: this.recordingFormat(),
+                format,
             });
             this.recordingStartTime = Date.now();
             this.startDurationTimer();
@@ -2198,6 +2208,17 @@ export default class SystemRecordingPlugin extends Plugin {
                         TFile
                 );
                 if (primaryAlive) continue;
+                // A primary recording whose own basename happens to end in
+                // `.me`/`.them` matches the sidecar naming, so it lands here
+                // instead of pass 1's transcript-saved gate. Never sweep a
+                // file a meeting note claims as its recording.
+                const file = this.app.vault.getAbstractFileByPath(info.path);
+                if (
+                    file instanceof TFile &&
+                    findMeetingNoteForAudio(this.app, file)
+                ) {
+                    continue;
+                }
                 if (await trash(info.path)) removed++;
             }
 
@@ -2389,8 +2410,10 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /**
-     * Returns a vault-relative recording path in the configured format,
-     * appending -2, -3… if the name is taken. The stem must be free across
+     * Returns a vault-relative recording path in the given format, appending
+     * -2, -3… if the name is taken. The format is passed in (sampled once per
+     * start) so the path extension can't diverge from the helper's --format
+     * if the settings toggle flips mid-start. The stem must be free across
      * every recording format, not just the configured one: `foo.wav` and
      * `foo.m4a` would share the extension-less `foo.speech.json` sidecar, so
      * a new m4a next to a pre-toggle wav would overwrite the wav's speech
@@ -2399,9 +2422,9 @@ export default class SystemRecordingPlugin extends Plugin {
     private async uniqueRecordingPath(
         adapter: import("obsidian").DataAdapter,
         folder: string,
-        basename: string
+        basename: string,
+        ext: RecordingFormat
     ): Promise<string> {
-        const ext = this.recordingFormat();
         // normalizePath drops the leading slash when folder is "" (vault root).
         const stemTaken = async (stem: string): Promise<boolean> => {
             for (const fmt of RECORDING_FORMATS) {
