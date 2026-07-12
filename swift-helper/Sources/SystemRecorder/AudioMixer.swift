@@ -401,21 +401,34 @@ final class AudioMixer: @unchecked Sendable {
     /// file and discards the converter. Requires `stream.lock` to be held.
     private func drainConverterLocked(_ stream: Stream) {
         defer { stream.converter = nil }
-        guard let converter = stream.converter, let file = stream.file,
-              let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: AudioMixer.chunkFrames) else {
+        guard let converter = stream.converter, let file = stream.file else {
             return
         }
-        var convError: NSError?
-        let status = converter.convert(to: out, error: &convError) { _, outStatus in
-            outStatus.pointee = .endOfStream
-            return nil
-        }
-        if status != .error && out.frameLength > 0 {
-            do {
-                try file.write(from: out)
-                stream.framesWritten += AVAudioFramePosition(out.frameLength)
-            } catch {
-                latchCaptureError(error, on: stream)
+        // The tail can span more than one output buffer, so keep pulling until
+        // the converter reports it has no more frames (.haveData means the
+        // buffer filled and more remains); otherwise the final frames are lost.
+        while true {
+            guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: AudioMixer.chunkFrames) else {
+                return
+            }
+            var convError: NSError?
+            let status = converter.convert(to: out, error: &convError) { _, outStatus in
+                outStatus.pointee = .endOfStream
+                return nil
+            }
+            if out.frameLength > 0 {
+                do {
+                    try file.write(from: out)
+                    stream.framesWritten += AVAudioFramePosition(out.frameLength)
+                } catch {
+                    latchCaptureError(error, on: stream)
+                    return
+                }
+            }
+            // .haveData = filled this buffer with more pending; anything else
+            // (.endOfStream / .inputRanDry / .error) means we're done.
+            if status != .haveData {
+                return
             }
         }
     }
