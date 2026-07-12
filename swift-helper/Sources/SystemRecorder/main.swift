@@ -3,25 +3,53 @@ import AVFoundation
 
 // MARK: - Argument parsing
 
+let usage = "Usage: system-recorder start --output <path> --stop-file <path> [--split] [--format wav|m4a]"
+
+func fail(_ message: String) -> Never {
+    let errorJson = "{\"status\": \"error\", \"message\": \"\(message)\"}"
+    FileHandle.standardOutput.write(Data((errorJson + "\n").utf8))
+    exit(1)
+}
+
 let args = CommandLine.arguments
 guard args.count >= 6,
       args[1] == "start",
       args[2] == "--output",
       args[4] == "--stop-file" else {
-    let errorJson = "{\"status\": \"error\", \"message\": \"Usage: system-recorder start --output <path> --stop-file <path> [--split]\"}"
-    FileHandle.standardOutput.write(Data((errorJson + "\n").utf8))
-    exit(1)
+    fail(usage)
 }
 
 let finalOutputPath = args[3]
 let stopFilePath = args[5]
 
-// Optional flag after the required args. Absent = exactly today's behavior.
-let split = args.count > 6 && args[6] == "--split"
+// Optional flags after the required args. All absent = mono 24 kHz WAV, no
+// sidecars.
+var split = false
+var format = RecordingFormat.wav
+var argIndex = 6
+while argIndex < args.count {
+    switch args[argIndex] {
+    case "--split":
+        split = true
+        argIndex += 1
+    case "--format":
+        guard argIndex + 1 < args.count,
+              let parsed = RecordingFormat(rawValue: args[argIndex + 1]) else {
+            fail(usage)
+        }
+        format = parsed
+        argIndex += 2
+    default:
+        fail(usage)
+    }
+}
 
-// Record to a temp file, then move to final path when done
+// Record to a temp file, then move to final path when done. The extension
+// matters: AVAudioFile picks the container from it.
 let tempOutputURL = URL(fileURLWithPath: NSTemporaryDirectory())
-    .appendingPathComponent("system-recorder-\(ProcessInfo.processInfo.processIdentifier).wav")
+    .appendingPathComponent(
+        "system-recorder-\(ProcessInfo.processInfo.processIdentifier).\(format.fileExtension)"
+    )
 
 // MARK: - JSON output helper
 
@@ -32,6 +60,22 @@ func emitJSON(_ dict: [String: Any]) {
     }
 }
 
+/// Move that survives an existing destination and a cross-volume temp dir
+/// (falls back to copy+delete), and throws instead of silently dropping the
+/// finished recording (issue #10).
+func moveReplacing(from source: URL, to destination: URL) throws {
+    let fm = FileManager.default
+    if fm.fileExists(atPath: destination.path) {
+        try fm.removeItem(at: destination)
+    }
+    do {
+        try fm.moveItem(at: source, to: destination)
+    } catch {
+        try fm.copyItem(at: source, to: destination)
+        try? fm.removeItem(at: source)
+    }
+}
+
 // MARK: - Main recording logic
 
 if #available(macOS 13.0, *) {
@@ -39,10 +83,9 @@ if #available(macOS 13.0, *) {
     let mixer: AudioMixer
 
     do {
-        mixer = try AudioMixer(outputURL: tempOutputURL, split: split)
+        mixer = try AudioMixer(outputURL: tempOutputURL, format: format, split: split)
     } catch {
-        emitJSON(["status": "error", "message": "Failed to create audio writer: \(error.localizedDescription)"])
-        exit(1)
+        fail("Failed to create audio writer: \(error.localizedDescription)")
     }
 
     // Wire system audio → mixer
@@ -78,36 +121,39 @@ if #available(macOS 13.0, *) {
 
             Task {
                 await captureManager.stopCapture()
-                let duration = await mixer.finalize()
 
-                // Move temp file to final destination
-                let finalURL = URL(fileURLWithPath: finalOutputPath)
-                try? FileManager.default.moveItem(at: tempOutputURL, to: finalURL)
+                do {
+                    let duration = try mixer.finalize()
 
-                let stopped: [String: Any] = ["status": "stopped", "duration": Int(duration), "file": finalOutputPath]
+                    // Move temp file to final destination
+                    let finalURL = URL(fileURLWithPath: finalOutputPath)
+                    try moveReplacing(from: tempOutputURL, to: finalURL)
 
-                // When split, relocate the sidecars next to the final recording.
-                // Discovery downstream is by naming convention, so we don't
-                // report the paths back; a missing sidecar is skipped and never
-                // fails the recording.
-                if split {
-                    let finalSidecars = AudioMixer.sidecarURLs(forBase: finalURL)
-                    let moves: [(temp: URL, final: URL)] = [
-                        (mixer.meSidecarURL, finalSidecars.me),
-                        (mixer.themSidecarURL, finalSidecars.them),
-                        (mixer.speechSidecarURL, finalSidecars.speech),
-                    ]
-                    for move in moves {
-                        guard FileManager.default.fileExists(atPath: move.temp.path) else { continue }
-                        if FileManager.default.fileExists(atPath: move.final.path) {
-                            try? FileManager.default.removeItem(at: move.final)
+                    let stopped: [String: Any] = ["status": "stopped", "duration": Int(duration), "file": finalOutputPath]
+
+                    // When split, relocate the sidecars next to the final
+                    // recording. Discovery downstream is by naming convention,
+                    // so we don't report the paths back; a missing sidecar is
+                    // skipped and never fails the recording.
+                    if split {
+                        let finalSidecars = AudioMixer.sidecarURLs(forBase: finalURL)
+                        let moves: [(temp: URL, final: URL)] = [
+                            (mixer.meSidecarURL, finalSidecars.me),
+                            (mixer.themSidecarURL, finalSidecars.them),
+                            (mixer.speechSidecarURL, finalSidecars.speech),
+                        ]
+                        for move in moves {
+                            guard FileManager.default.fileExists(atPath: move.temp.path) else { continue }
+                            try? moveReplacing(from: move.temp, to: move.final)
                         }
-                        try? FileManager.default.moveItem(at: move.temp, to: move.final)
                     }
-                }
 
-                emitJSON(stopped)
-                exit(0)
+                    emitJSON(stopped)
+                    exit(0)
+                } catch {
+                    emitJSON(["status": "error", "message": "Failed to finalize recording: \(error.localizedDescription)"])
+                    exit(1)
+                }
             }
             return
         }

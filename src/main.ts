@@ -8,7 +8,7 @@ import {
     SystemRecordingSettings,
     SystemRecordingSettingTab,
 } from "./settings";
-import { Recorder, RecorderStatus } from "./recorder";
+import { Recorder, RecorderStatus, RecordingFormat } from "./recorder";
 import { BinaryProvisioner } from "./binary";
 import { nodeDeps, resolveBinaryPath } from "./binary-runtime";
 import * as path from "path";
@@ -63,7 +63,7 @@ import {
 import { canSeparateSpeakers } from "./transcribe/sttModel";
 import { probeKey } from "./transcribe/probe";
 import {
-    baseRecordingPathOf,
+    baseRecordingCandidatesOf,
     isSidecarPath,
     parseSpeechWindows,
     sidecarPathsFor,
@@ -626,7 +626,7 @@ export default class SystemRecordingPlugin extends Plugin {
                 ) {
                     await adapter.mkdir(recFolder);
                 }
-                relativePath = await this.uniqueWavPath(
+                relativePath = await this.uniqueRecordingPath(
                     adapter,
                     recFolder,
                     meeting.basename
@@ -640,7 +640,7 @@ export default class SystemRecordingPlugin extends Plugin {
                     await adapter.mkdir(folder);
                 }
                 const fileName = this.formatFileName(this.settings.fileNameTemplate);
-                relativePath = await this.uniqueWavPath(adapter, folder, fileName);
+                relativePath = await this.uniqueRecordingPath(adapter, folder, fileName);
                 this.currentMeetingNotePath = null;
                 this.currentMeetingNote = null;
                 this.currentRecordingEventId = null;
@@ -660,6 +660,7 @@ export default class SystemRecordingPlugin extends Plugin {
             this.screenSettingsOpened = false;
             this.recorder.start(binaryPath, absolutePath, {
                 split: this.shouldSeparateSpeakers(),
+                format: this.recordingFormat(),
             });
             this.recordingStartTime = Date.now();
             this.startDurationTimer();
@@ -2188,10 +2189,14 @@ export default class SystemRecordingPlugin extends Plugin {
             // but left the sidecars). Sidecars still sitting next to a live
             // primary are left alone; pass 1 owns those.
             for (const info of expired) {
-                const base = baseRecordingPathOf(info.path);
-                if (!base) continue;
-                if (this.app.vault.getAbstractFileByPath(base) instanceof TFile)
-                    continue;
+                const candidates = baseRecordingCandidatesOf(info.path);
+                if (candidates.length === 0) continue;
+                const primaryAlive = candidates.some(
+                    (base) =>
+                        this.app.vault.getAbstractFileByPath(base) instanceof
+                        TFile
+                );
+                if (primaryAlive) continue;
                 if (await trash(info.path)) removed++;
             }
 
@@ -2309,15 +2314,23 @@ export default class SystemRecordingPlugin extends Plugin {
                 }
                 // Close the loop: hand the fresh recording to the transcriber.
                 if (this.settings.autoTranscribe) {
-                    // The helper writes the WAV directly to disk, so Obsidian's
-                    // vault index may not have registered it as a TFile yet.
-                    // Wait for it to appear before auto-transcribing.
+                    // The helper writes the recording directly to disk, so
+                    // Obsidian's vault index may not have registered it as a
+                    // TFile yet. Wait for it to appear before auto-transcribing.
                     void this.resolveFileWithRetry(link)
                         .then((audio) => {
                             if (!audio) {
+                                // Losing the race for the whole retry window
+                                // means the watcher likely missed the file; say
+                                // so instead of silently skipping the headline
+                                // automation (issue #29).
                                 console.warn(
                                     "[Meeting Copilot] auto-transcribe: recording not found in vault",
                                     link
+                                );
+                                new Notice(
+                                    t().notices.autoTranscribeNotIndexed,
+                                    10000
                                 );
                                 return;
                             }
@@ -2369,17 +2382,23 @@ export default class SystemRecordingPlugin extends Plugin {
         return normalizePath(noteFolder ? `${noteFolder}/${sub}` : sub);
     }
 
-    /** Returns a vault-relative `.wav` path, appending -2, -3… if the name is taken. */
-    private async uniqueWavPath(
+    /** The recording container for new recordings, from the compression toggle. */
+    private recordingFormat(): RecordingFormat {
+        return this.settings.compressedRecordings ? "m4a" : "wav";
+    }
+
+    /** Returns a vault-relative recording path in the configured format, appending -2, -3… if the name is taken. */
+    private async uniqueRecordingPath(
         adapter: import("obsidian").DataAdapter,
         folder: string,
         basename: string
     ): Promise<string> {
+        const ext = this.recordingFormat();
         // normalizePath drops the leading slash when folder is "" (vault root).
-        let candidate = normalizePath(`${folder}/${basename}.wav`);
+        let candidate = normalizePath(`${folder}/${basename}.${ext}`);
         let n = 2;
         while (await adapter.exists(candidate)) {
-            candidate = normalizePath(`${folder}/${basename}-${n}.wav`);
+            candidate = normalizePath(`${folder}/${basename}-${n}.${ext}`);
             n++;
         }
         return candidate;

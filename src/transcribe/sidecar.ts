@@ -1,12 +1,19 @@
 /**
  * Pure helpers for the split-recording sidecars. With --split the recorder
- * writes three files next to `<base>.wav`: `<base>.me.wav` (mic), `<base>.them.wav`
- * (system audio), and `<base>.speech.json` (per-stream speech windows). We locate
- * them by naming convention rather than carrying recorder state, so separation
- * works both for the auto-transcribe right after stop and for a manual re-run on
- * an old recording. No Obsidian imports, so it stays unit-testable.
+ * writes three files next to `<base>.<ext>`: `<base>.me.<ext>` (mic),
+ * `<base>.them.<ext>` (system audio), and `<base>.speech.json` (per-stream
+ * speech windows), where `<ext>` is the recording's own extension (wav or
+ * m4a, per the compressed-recordings setting). We locate them by naming
+ * convention rather than carrying recorder state, so separation works both
+ * for the auto-transcribe right after stop and for a manual re-run on an old
+ * recording. No Obsidian imports, so it stays unit-testable.
  */
 import type { SpeechWindows } from "./diarize";
+
+/** Recording containers the helper can produce (see RecordingFormat in recorder.ts). */
+const AUDIO_EXT = /\.(wav|m4a)$/i;
+const SIDECAR_AUDIO = /\.(me|them)\.(wav|m4a)$/i;
+const SIDECAR_SPEECH = /\.speech\.json$/i;
 
 export interface SidecarPaths {
 	/** Mic-only stream, i.e. the note's author. */
@@ -17,30 +24,43 @@ export interface SidecarPaths {
 	speech: string;
 }
 
-/** Maps a `<base>.wav` recording path to its me/them/speech sidecar paths. */
+/** Maps a `<base>.<ext>` recording path to its me/them/speech sidecar paths. */
 export function sidecarPathsFor(recordingPath: string): SidecarPaths {
-	const base = recordingPath.replace(/\.wav$/i, "");
+	const match = recordingPath.match(AUDIO_EXT);
+	// The audio sidecars share the recording's extension (the helper encodes
+	// them with the same writer). Fall back to wav for un-suffixed paths.
+	const ext = match?.[1]?.toLowerCase() ?? "wav";
+	const base = recordingPath.replace(AUDIO_EXT, "");
 	return {
-		me: `${base}.me.wav`,
-		them: `${base}.them.wav`,
+		me: `${base}.me.${ext}`,
+		them: `${base}.them.${ext}`,
 		speech: `${base}.speech.json`,
 	};
 }
 
-/** True for a split sidecar (`.me.wav`, `.them.wav`, or `.speech.json`). */
+/** True for a split sidecar (`.me.<ext>`, `.them.<ext>`, or `.speech.json`). */
 export function isSidecarPath(path: string): boolean {
-	return /\.(me|them)\.wav$/i.test(path) || /\.speech\.json$/i.test(path);
+	return SIDECAR_AUDIO.test(path) || SIDECAR_SPEECH.test(path);
 }
 
 /**
- * The `<base>.wav` recording a sidecar belongs to, or null if `path` isn't a
- * sidecar. Lets retention tie a sidecar's lifetime to its parent recording.
+ * The `<base>.<ext>` recording paths a sidecar may belong to, or an empty
+ * array if `path` isn't a sidecar. Lets retention tie a sidecar's lifetime to
+ * its parent recording: the sidecar is orphaned only when *none* of the
+ * candidates exist. Audio sidecars carry the parent's extension, so they have
+ * exactly one candidate; `.speech.json` has no extension hint, so it gets one
+ * candidate per format the helper can produce.
  */
-export function baseRecordingPathOf(path: string): string | null {
-	const stripped = path
-		.replace(/\.(me|them)\.wav$/i, "")
-		.replace(/\.speech\.json$/i, "");
-	return stripped === path ? null : `${stripped}.wav`;
+export function baseRecordingCandidatesOf(path: string): string[] {
+	const ext = path.match(SIDECAR_AUDIO)?.[2]?.toLowerCase();
+	if (ext) {
+		return [`${path.replace(SIDECAR_AUDIO, "")}.${ext}`];
+	}
+	if (SIDECAR_SPEECH.test(path)) {
+		const stem = path.replace(SIDECAR_SPEECH, "");
+		return [`${stem}.wav`, `${stem}.m4a`];
+	}
+	return [];
 }
 
 function isWindowList(v: unknown): v is Array<[number, number]> {

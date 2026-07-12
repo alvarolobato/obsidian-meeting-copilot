@@ -26,6 +26,9 @@ re-synced, **except** the small, clearly marked patches below. Grep for
 | `infrastructure/api/dictionary/GPTDictionaryCorrectionService.ts` | base URL + optional chat model id from `endpointConfig` | GPT-assisted dictionary correction on a renaming gateway (default `gpt-4o-mini` won't exist there) |
 | `infrastructure/storage/SecurityUtils.ts` | `validateOpenAIAPIKey` accepts any non-empty key | non-`sk-` gateway keys |
 | `application/TranscriptionController.ts` | `transcribe()` also returns `segments` on its object form when the model produced timestamps (was dropped) | me-vs-them speaker separation merges two mono streams on a shared timeline and needs per-segment times (issue #32) |
+| `core/audio/AudioTypes.ts` | `ProcessedAudio.source` made optional | never read; pinning the decoded AudioBuffer OOMs long meetings (issue #26) |
+| `infrastructure/audio/WebAudioEngine.ts` | stop populating `ProcessedAudio.source` | drops a decoded-AudioBuffer pin worth ~460 MB on a 2h meeting (issue #26) |
+| `infrastructure/audio/FallbackEngine.ts` | stop populating `ProcessedAudio.source` | same pin as WebAudioEngine (issue #26) |
 
 Two files are **added** (not from upstream):
 
@@ -47,5 +50,5 @@ Two files are **added** (not from upstream):
 ## Re-syncing from upstream
 
 1. Copy upstream's closure files over this tree (keep the file list stable).
-2. Re-apply the 4 `MEETING-COPILOT PATCH` diffs above (they are tiny).
+2. Re-apply the `MEETING-COPILOT PATCH` diffs above (they are tiny).
 3. `npm run build && npm test`.

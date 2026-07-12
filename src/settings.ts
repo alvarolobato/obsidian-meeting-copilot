@@ -47,6 +47,12 @@ export interface SystemRecordingSettings {
 	 * audio beside the note (the pre-0.2 behavior).
 	 */
 	recordingSubfolder: string;
+	/**
+	 * Save recordings (and their split sidecars) as AAC `.m4a` instead of WAV.
+	 * Same mono 24 kHz audio either way; this only picks the container/codec
+	 * the helper encodes at stop.
+	 */
+	compressedRecordings: boolean;
 	noteTitlePattern: string;
 	noteTemplate: string;
 	retentionDays: number;
@@ -109,6 +115,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	oneOnOneFolder: "Meetings/1-1s",
 	adhocFolder: "Meetings/Ad-hoc",
 	recordingSubfolder: "Recordings",
+	compressedRecordings: true,
 	noteTitlePattern: DEFAULT_TITLE_PATTERN,
 	noteTemplate: DEFAULT_NOTE_TEMPLATE,
 	retentionDays: 90,
@@ -838,6 +845,18 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.fileNameTemplate)
 					.onChange(async (value) => {
 						this.plugin.settings.fileNameTemplate = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName(s.settings.compressedRecordings.name)
+			.setDesc(s.settings.compressedRecordings.desc)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.compressedRecordings)
+					.onChange(async (value) => {
+						this.plugin.settings.compressedRecordings = value;
 						await this.plugin.saveSettings();
 					})
 			);

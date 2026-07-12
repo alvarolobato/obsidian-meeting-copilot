@@ -10,8 +10,12 @@ export interface RecorderStatus {
     message?: string;
 }
 
+export type RecordingFormat = "wav" | "m4a";
+
 export interface RecorderStartOptions {
     split?: boolean;
+    /** Output container/codec; the helper defaults to "wav" when omitted. */
+    format?: RecordingFormat;
 }
 
 export class Recorder {
@@ -39,7 +43,10 @@ export class Recorder {
             "start", "--output", outputPath,
             "--stop-file", stopFile,
         ];
+        // Keep --split first: an older helper only understands the positional
+        // --split at args[6] and ignores the rest.
         if (opts?.split) spawnArgs.push("--split");
+        if (opts?.format) spawnArgs.push("--format", opts.format);
 
         const proc = spawn(binaryPath, spawnArgs, {
             stdio: ["ignore", "pipe", "pipe"],

@@ -32,8 +32,12 @@ export interface ProcessedAudio {
 	duration: number;
 	/** Number of channels (should be 1 for mono) */
 	channels: number;
+	// MEETING-COPILOT PATCH: optional (and no longer populated by the
+	// engines). Upstream stored the decoded AudioBuffer here "for reference",
+	// which pinned hundreds of MB for a multi-hour meeting through the whole
+	// chunk-processing phase; nothing ever read it. See VENDOR.md / issue #26.
 	/** Original file info */
-	source: AudioInput;
+	source?: AudioInput;
 }
 
 /**
