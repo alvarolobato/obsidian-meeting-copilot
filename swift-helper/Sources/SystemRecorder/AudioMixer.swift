@@ -274,9 +274,15 @@ final class AudioMixer: @unchecked Sendable {
         var ablSize: Int = 0
         CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sampleBuffer, bufferListSizeNeededOut: &ablSize, bufferListOut: nil, bufferListSize: 0, blockBufferAllocator: nil, blockBufferMemoryAllocator: nil, flags: 0, blockBufferOut: nil)
 
-        let ablMemory = UnsafeMutablePointer<UInt8>.allocate(capacity: ablSize)
-        defer { ablMemory.deallocate() }
-        let ablPointer = ablMemory.withMemoryRebound(to: AudioBufferList.self, capacity: 1) { $0 }
+        // Raw allocation with explicit alignment, bound once: rebinding a
+        // UInt8-typed buffer and letting the pointer escape the closure is
+        // undefined behavior that only works by allocator accident.
+        let ablRaw = UnsafeMutableRawPointer.allocate(
+            byteCount: ablSize,
+            alignment: MemoryLayout<AudioBufferList>.alignment
+        )
+        defer { ablRaw.deallocate() }
+        let ablPointer = ablRaw.bindMemory(to: AudioBufferList.self, capacity: 1)
 
         var blockBuffer: CMBlockBuffer?
         let err = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sampleBuffer, bufferListSizeNeededOut: nil, bufferListOut: ablPointer, bufferListSize: ablSize, blockBufferAllocator: nil, blockBufferMemoryAllocator: nil, flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, blockBufferOut: &blockBuffer)

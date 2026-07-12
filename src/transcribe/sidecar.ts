@@ -62,18 +62,30 @@ export function isSidecarPath(path: string): boolean {
  * candidate per format the helper can produce.
  */
 export function baseRecordingCandidatesOf(path: string): string[] {
-	// Keep the matched extension's own case: vault lookups are case-sensitive,
-	// so a lowercased candidate would miss a manually renamed `foo.WAV` and
-	// the orphan sweep would trash its live sidecar. (The helper itself always
-	// writes lowercase; speech.json candidates below stay lowercase because
-	// they carry no case hint of their own.)
-	const ext = path.match(SIDECAR_AUDIO)?.[2];
-	if (ext) {
-		return [`${path.replace(SIDECAR_AUDIO, "")}.${ext}`];
+	// Vault lookups are case-sensitive and a user can rename either file of a
+	// pair, so offer the sidecar's own extension case plus both canonical
+	// cases. The sweep in main.ts trashes a sidecar only when NO candidate
+	// exists, so extra variants only make it more conservative — a missed
+	// exotic mixed-case rename errs toward keeping the file. The helper
+	// itself always writes lowercase.
+	const audio = path.match(SIDECAR_AUDIO);
+	if (audio?.[2]) {
+		const stem = path.replace(SIDECAR_AUDIO, "");
+		const ext = audio[2];
+		return [
+			...new Set([
+				`${stem}.${ext}`,
+				`${stem}.${ext.toLowerCase()}`,
+				`${stem}.${ext.toUpperCase()}`,
+			]),
+		];
 	}
 	if (SIDECAR_SPEECH.test(path)) {
 		const stem = path.replace(SIDECAR_SPEECH, "");
-		return RECORDING_FORMATS.map((fmt) => `${stem}.${fmt}`);
+		return RECORDING_FORMATS.flatMap((fmt) => [
+			`${stem}.${fmt}`,
+			`${stem}.${fmt.toUpperCase()}`,
+		]);
 	}
 	return [];
 }

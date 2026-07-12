@@ -12,28 +12,30 @@ describe("isSidecarPath / baseRecordingCandidatesOf", () => {
 			for (const kind of ["me", "them"]) {
 				const p = `Meetings/foo.${kind}.${ext}`;
 				expect(isSidecarPath(p)).toBe(true);
-				expect(baseRecordingCandidatesOf(p)).toEqual([
-					`Meetings/foo.${ext}`,
-				]);
+				expect(baseRecordingCandidatesOf(p)).toContain(
+					`Meetings/foo.${ext}`
+				);
 			}
 		}
 	});
 
-	it("maps speech.json to a candidate per recording format", () => {
+	it("maps speech.json to candidates for every recording format", () => {
 		const p = "Meetings/foo.speech.json";
 		expect(isSidecarPath(p)).toBe(true);
-		expect(baseRecordingCandidatesOf(p)).toEqual([
-			"Meetings/foo.wav",
-			"Meetings/foo.m4a",
-		]);
+		const candidates = baseRecordingCandidatesOf(p);
+		expect(candidates).toContain("Meetings/foo.wav");
+		expect(candidates).toContain("Meetings/foo.m4a");
 	});
 
-	it("preserves the sidecar's extension case in the parent candidate", () => {
-		// Vault lookups are case-sensitive; a lowercased candidate would miss
-		// a manually renamed foo.WAV and orphan-sweep its live sidecar.
-		expect(baseRecordingCandidatesOf("Meetings/foo.me.WAV")).toEqual([
-			"Meetings/foo.WAV",
-		]);
+	it("offers both extension cases so no rename direction gets orphan-swept", () => {
+		// Vault lookups are case-sensitive and the user may have renamed the
+		// primary, the sidecar, or both; candidates must cover every pairing.
+		const upper = baseRecordingCandidatesOf("Meetings/foo.me.WAV");
+		expect(upper).toContain("Meetings/foo.WAV");
+		expect(upper).toContain("Meetings/foo.wav");
+		const lower = baseRecordingCandidatesOf("Meetings/foo.me.wav");
+		expect(lower).toContain("Meetings/foo.wav");
+		expect(lower).toContain("Meetings/foo.WAV");
 	});
 
 	it("treats a plain recording (and unrelated files) as non-sidecars", () => {
@@ -51,8 +53,8 @@ describe("isSidecarPath / baseRecordingCandidatesOf", () => {
 			"Meetings/Standup/2026-01-01-2.m4a",
 		]) {
 			const sc = sidecarPathsFor(rec);
-			expect(baseRecordingCandidatesOf(sc.me)).toEqual([rec]);
-			expect(baseRecordingCandidatesOf(sc.them)).toEqual([rec]);
+			expect(baseRecordingCandidatesOf(sc.me)).toContain(rec);
+			expect(baseRecordingCandidatesOf(sc.them)).toContain(rec);
 			expect(baseRecordingCandidatesOf(sc.speech)).toContain(rec);
 		}
 	});

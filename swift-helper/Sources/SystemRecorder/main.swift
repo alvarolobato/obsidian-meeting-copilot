@@ -62,9 +62,12 @@ let tempOutputURL = URL(fileURLWithPath: NSTemporaryDirectory())
         "system-recorder-\(ProcessInfo.processInfo.processIdentifier).\(format.fileExtension)"
     )
 
-/// Move that survives an existing destination and a cross-volume temp dir
-/// (falls back to copy+delete), and throws instead of silently dropping the
-/// finished recording (issue #10).
+/// Move that survives an existing destination and a cross-volume temp dir,
+/// and throws instead of silently dropping the finished recording (issue
+/// #10). The cross-volume fallback stages the copy next to the destination
+/// and renames it into place, so a copy that dies mid-write (disk full)
+/// never leaves a partial file at the final path for naming-convention
+/// discovery to pick up as a recording.
 func moveReplacing(from source: URL, to destination: URL) throws {
     let fm = FileManager.default
     if fm.fileExists(atPath: destination.path) {
@@ -73,7 +76,10 @@ func moveReplacing(from source: URL, to destination: URL) throws {
     do {
         try fm.moveItem(at: source, to: destination)
     } catch {
-        try fm.copyItem(at: source, to: destination)
+        let staging = destination.appendingPathExtension("partial")
+        try? fm.removeItem(at: staging)
+        try fm.copyItem(at: source, to: staging)
+        try fm.moveItem(at: staging, to: destination)
         try? fm.removeItem(at: source)
     }
 }
