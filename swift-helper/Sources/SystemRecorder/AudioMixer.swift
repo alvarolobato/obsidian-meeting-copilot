@@ -394,8 +394,12 @@ final class AudioMixer: @unchecked Sendable {
             return nil
         }
         if status != .error && out.frameLength > 0 {
-            try? file.write(from: out)
-            stream.framesWritten += AVAudioFramePosition(out.frameLength)
+            do {
+                try file.write(from: out)
+                stream.framesWritten += AVAudioFramePosition(out.frameLength)
+            } catch {
+                latchCaptureError(error, on: stream)
+            }
         }
     }
 
