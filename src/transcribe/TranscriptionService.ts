@@ -115,7 +115,7 @@ async function runController(
  * Rescale that onto a full 0–100 bar so a single pass fills it end to end and
  * the diarized halves line up on 0–50 / 50–100.
  */
-function normalizeEngineProgress(percent: number): number {
+export function normalizeEngineProgress(percent: number): number {
 	const scaled = ((percent - 10) / 80) * 100;
 	return Math.max(0, Math.min(100, scaled));
 }
