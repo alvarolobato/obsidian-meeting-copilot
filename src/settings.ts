@@ -136,7 +136,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	postProcessingEnabled: false,
 	dictionaryCorrectionEnabled: false,
 	dictionary: "",
-	diarizationEnabled: false,
+	diarizationEnabled: true,
 	sttTranscriptionSupported: null,
 	sttTimestampsSupported: null,
 	sttTimestampsProbeKey: "",
