@@ -233,6 +233,12 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         const { containerEl } = this;
         const s = t();
         containerEl.empty();
+        // Opening (or re-rendering) the tab is a fresh chance to auto-probe:
+        // clear the per-session "already probed" guard so a verdict invalidated
+        // at runtime (e.g. diarization found no timestamps) is re-checked here
+        // instead of being stuck at "not checked yet" until a manual Recheck.
+        // The guard still prevents repeated probes from rapid in-tab edits.
+        this.probedKeys.clear();
 
 		new Setting(containerEl).setName(s.settings.calendarHeading).setHeading();
 
@@ -449,6 +455,11 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.apiBaseUrl = value.trim();
 						await this.plugin.saveSettings();
+						// The stored verdict is keyed on the old base URL, so the
+						// badges now read "not checked yet"; repaint them and let
+						// a re-probe run on the next model change / tab reopen.
+						this.probedKeys.clear();
+						this.refreshSttBadges();
 					})
 			);
 
@@ -461,7 +472,14 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.apiKey)
 					.onChange(async (value) => {
 						this.plugin.settings.apiKey = value.trim();
+						// probeKey ignores the key, so a stored verdict would
+						// otherwise stay falsely "fresh" after a key change.
+						// Reset it so transcription/timestamp support is
+						// re-probed against the new credential.
+						this.plugin.settings.sttTimestampsProbeKey = "";
 						await this.plugin.saveSettings();
+						this.probedKeys.clear();
+						this.refreshSttBadges();
 					});
 			})
 			.addButton((button) =>
@@ -1072,13 +1090,18 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     detail = support.detail;
                     let transcriptionVerdict = support.transcription;
                     let timestampVerdict = support.timestamps;
-                    // A verbose_json request that didn't cleanly succeed is
-                    // ambiguous: the model may transcribe fine but reject the
-                    // timestamp params (some gateways answer 400 or even 500).
-                    // Re-probe with plain json so we don't mislabel a good
-                    // Whisper model as "can't transcribe" — or leave it stuck at
-                    // "not checked yet" — just because it won't emit segments.
-                    if (wantsTimestamps && transcriptionVerdict !== "supported") {
+                    // A verbose_json request that was *definitively rejected*
+                    // (a 4xx model-rejected status) is ambiguous: the model may
+                    // transcribe fine but reject the timestamp params. Re-probe
+                    // with plain json so we don't mislabel a good Whisper model
+                    // as "can't transcribe" just because it won't emit segments.
+                    // Only on a hard `unsupported` — an `unknown` verbose result
+                    // (5xx/429/network) is transient, and reprobing then would
+                    // wrongly persist "timestamps unsupported" off a flaky call.
+                    if (
+                        wantsTimestamps &&
+                        transcriptionVerdict === "unsupported"
+                    ) {
                         const plain = await probeSttSupport({
                             baseUrl: apiBaseUrl,
                             apiKey,

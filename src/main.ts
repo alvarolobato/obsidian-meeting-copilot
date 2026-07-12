@@ -62,7 +62,12 @@ import {
 } from "./transcribe/TranscriptionService";
 import { canSeparateSpeakers } from "./transcribe/sttModel";
 import { probeKey } from "./transcribe/probe";
-import { parseSpeechWindows, sidecarPathsFor } from "./transcribe/sidecar";
+import {
+    baseRecordingPathOf,
+    isSidecarPath,
+    parseSpeechWindows,
+    sidecarPathsFor,
+} from "./transcribe/sidecar";
 import type { SpeechWindows } from "./transcribe/diarize";
 import { parseDictionary } from "./transcribe/dictionary";
 import type { TranscriptionModel } from "./transcribe/vendor/ApiSettings";
@@ -648,6 +653,11 @@ export default class SystemRecordingPlugin extends Plugin {
 
             // Start recording. --split writes the per-speaker sidecars only when
             // separation is actually usable, so we don't pay for them otherwise.
+            // Re-arm the screen-recording-settings opener for this attempt: a
+            // permission failure surfaces asynchronously via onError, and each
+            // new recording attempt is a deliberate user action that should get
+            // one fresh chance to deep-link to System Settings.
+            this.screenSettingsOpened = false;
             this.recorder.start(binaryPath, absolutePath, {
                 split: this.shouldSeparateSpeakers(),
             });
@@ -927,6 +937,9 @@ export default class SystemRecordingPlugin extends Plugin {
 				basename: ref.basename,
 				notePath: ref.notePath,
 				eventId: info.id,
+				// Track the live TFile so a rename mid-recording still links the
+				// WAV correctly (matches the ad-hoc path).
+				note: ref.file,
 			});
 		} catch (e) {
 			new Notice(t().notices.recordingError(e instanceof Error ? e.message : String(e)));
@@ -2124,7 +2137,24 @@ export default class SystemRecordingPlugin extends Plugin {
             });
 
             let removed = 0;
+            const trash = async (p: string): Promise<boolean> => {
+                const f = this.app.vault.getAbstractFileByPath(p);
+                if (!(f instanceof TFile)) return false;
+                try {
+                    await this.app.fileManager.trashFile(f);
+                    return true;
+                } catch (e) {
+                    console.warn(`[Meeting Copilot] failed to trash ${p}`, e);
+                    return false;
+                }
+            };
+            // Pass 1: primary recordings. The split sidecars (`.me`/`.them`/
+            // `.speech.json`) have no owning note of their own, so they never
+            // pass the note gate on their own — prune them together with the
+            // primary recording they belong to instead (otherwise they'd leak
+            // forever once the primary is gone).
             for (const info of expired) {
+                if (isSidecarPath(info.path)) continue;
                 const file = this.app.vault.getAbstractFileByPath(info.path);
                 if (!(file instanceof TFile)) continue;
                 // Resolve the meeting note that owns THIS audio — colocated
@@ -2136,9 +2166,13 @@ export default class SystemRecordingPlugin extends Plugin {
                 // audio) or the transcript was never captured — deleting those
                 // would destroy the only copy.
                 if (!note || !this.noteHasSavedTranscript(note)) continue;
-                try {
-                    await this.app.fileManager.trashFile(file);
+                if (await trash(info.path)) {
                     removed++;
+                    // Trash the split sidecars alongside the primary recording.
+                    const sc = sidecarPathsFor(info.path);
+                    await trash(sc.me);
+                    await trash(sc.them);
+                    await trash(sc.speech);
                     // Drop the note's now-dangling link (transcript stays in the note).
                     await this.app.fileManager.processFrontMatter(note, (fm) => {
                         const f = fm as Record<string, unknown>;
@@ -2147,12 +2181,18 @@ export default class SystemRecordingPlugin extends Plugin {
                             .toISOString()
                             .slice(0, 10);
                     });
-                } catch (e) {
-                    console.warn(
-                        `[Meeting Copilot] failed to trash ${info.path}`,
-                        e
-                    );
                 }
+            }
+            // Pass 2: sweep expired sidecars whose primary recording is already
+            // gone (orphans — e.g. from an older build that pruned the primary
+            // but left the sidecars). Sidecars still sitting next to a live
+            // primary are left alone; pass 1 owns those.
+            for (const info of expired) {
+                const base = baseRecordingPathOf(info.path);
+                if (!base) continue;
+                if (this.app.vault.getAbstractFileByPath(base) instanceof TFile)
+                    continue;
+                if (await trash(info.path)) removed++;
             }
 
             if (removed > 0) {

@@ -27,6 +27,22 @@ export function sidecarPathsFor(recordingPath: string): SidecarPaths {
 	};
 }
 
+/** True for a split sidecar (`.me.wav`, `.them.wav`, or `.speech.json`). */
+export function isSidecarPath(path: string): boolean {
+	return /\.(me|them)\.wav$/i.test(path) || /\.speech\.json$/i.test(path);
+}
+
+/**
+ * The `<base>.wav` recording a sidecar belongs to, or null if `path` isn't a
+ * sidecar. Lets retention tie a sidecar's lifetime to its parent recording.
+ */
+export function baseRecordingPathOf(path: string): string | null {
+	const stripped = path
+		.replace(/\.(me|them)\.wav$/i, "")
+		.replace(/\.speech\.json$/i, "");
+	return stripped === path ? null : `${stripped}.wav`;
+}
+
 function isWindowList(v: unknown): v is Array<[number, number]> {
 	return (
 		Array.isArray(v) &&

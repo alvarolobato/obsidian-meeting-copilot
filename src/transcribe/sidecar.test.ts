@@ -1,5 +1,38 @@
 import { describe, expect, it } from "vitest";
-import { parseSpeechWindows, sidecarPathsFor } from "./sidecar";
+import {
+	baseRecordingPathOf,
+	isSidecarPath,
+	parseSpeechWindows,
+	sidecarPathsFor,
+} from "./sidecar";
+
+describe("isSidecarPath / baseRecordingPathOf", () => {
+	it("recognizes the three sidecar kinds and maps them back to the recording", () => {
+		for (const p of [
+			"Meetings/foo.me.wav",
+			"Meetings/foo.them.wav",
+			"Meetings/foo.speech.json",
+		]) {
+			expect(isSidecarPath(p)).toBe(true);
+			expect(baseRecordingPathOf(p)).toBe("Meetings/foo.wav");
+		}
+	});
+
+	it("treats a plain recording (and unrelated files) as non-sidecars", () => {
+		expect(isSidecarPath("Meetings/foo.wav")).toBe(false);
+		expect(baseRecordingPathOf("Meetings/foo.wav")).toBeNull();
+		expect(isSidecarPath("Meetings/foo.md")).toBe(false);
+		expect(baseRecordingPathOf("notes/x.json")).toBeNull();
+	});
+
+	it("round-trips with sidecarPathsFor", () => {
+		const rec = "Meetings/Standup/2026-01-01-2.wav";
+		const sc = sidecarPathsFor(rec);
+		expect(baseRecordingPathOf(sc.me)).toBe(rec);
+		expect(baseRecordingPathOf(sc.them)).toBe(rec);
+		expect(baseRecordingPathOf(sc.speech)).toBe(rec);
+	});
+});
 
 describe("sidecarPathsFor", () => {
 	it("derives the me/them/speech paths from a recording path", () => {
