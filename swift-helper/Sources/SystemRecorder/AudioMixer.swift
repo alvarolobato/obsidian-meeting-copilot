@@ -252,17 +252,28 @@ final class AudioMixer: @unchecked Sendable {
         }
         if stream.converter == nil {
             // Lazily created — the source format is only known now.
-            let converter = AVAudioConverter(from: buffer.format, to: targetFormat)
+            guard let converter = AVAudioConverter(from: buffer.format, to: targetFormat) else {
+                // Without a converter this whole stream is lost; latch and stop
+                // so finalize() reports it rather than silently recording nothing.
+                latchCaptureError(.writeFailed("could not create an audio converter for the capture stream"), on: stream)
+                stream.closed = true
+                return
+            }
             // Mix multichannel sources down instead of the default channel
             // remap, which keeps only channel 0 — that would silence a mic
             // wired to input 2 of a multi-input interface, or drop hard-panned
             // system audio if the OS ignores the mono capture request.
-            converter?.downmix = true
+            converter.downmix = true
             stream.converter = converter
         }
-        guard let converter = stream.converter,
-              let converted = convertToTarget(buffer, using: converter),
-              converted.frameLength > 0 else { return }
+        guard let converter = stream.converter else { return }
+        guard let converted = convertToTarget(buffer, using: converter) else {
+            // A hard converter error (status .error / allocation failure) — don't
+            // swallow it silently; surface it from finalize().
+            latchCaptureError(.writeFailed("audio conversion failed"), on: stream)
+            return
+        }
+        guard converted.frameLength > 0 else { return }
 
         do {
             try stream.file?.write(from: converted)
@@ -275,8 +286,14 @@ final class AudioMixer: @unchecked Sendable {
     /// Records the first temp-file write failure on a stream so finalize() can
     /// surface it. Callers already hold `stream.lock`.
     private func latchCaptureError(_ error: Error, on stream: Stream) {
+        latchCaptureError(MixerError.writeFailed(error.localizedDescription), on: stream)
+    }
+
+    /// Records the first capture failure (writer/converter) on a stream so
+    /// finalize() can surface it. Callers already hold `stream.lock`.
+    private func latchCaptureError(_ error: MixerError, on stream: Stream) {
         if stream.captureError == nil {
-            stream.captureError = MixerError.writeFailed(error.localizedDescription)
+            stream.captureError = error
         }
     }
 

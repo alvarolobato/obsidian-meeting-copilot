@@ -110,10 +110,13 @@ async function runController(
 }
 
 /**
- * The vendored engine's unified percentage runs ~10% (preparation) → 70/90%
- * (transcription), never 100 (it stops before the caller-owned insert step).
- * Rescale that onto a full 0–100 bar so a single pass fills it end to end and
- * the diarized halves line up on 0–50 / 50–100.
+ * The vendored engine's unified percentage runs ~10% (preparation) → 90%
+ * (transcription), never 100 (it stops before the caller-owned insert step),
+ * so rescale that 10→90 band onto a full 0–100 bar — a single pass fills it
+ * end to end and the diarized halves line up on 0–50 / 50–100. When the
+ * optional post-processing step is enabled the engine caps transcription at
+ * ~70% and doesn't report the post-processing phase, so the bar tops out near
+ * ~75% until the pass returns; that mode is off by default.
  */
 export function normalizeEngineProgress(percent: number): number {
 	const scaled = ((percent - 10) / 80) * 100;
