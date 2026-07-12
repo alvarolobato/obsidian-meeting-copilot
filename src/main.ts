@@ -38,7 +38,6 @@ import {
 import {
     extractSection,
     extractTranscript,
-    hasTranscript,
     HIDE_AI_CLASS,
     withEnrichedBlock,
 } from "./notes/enrichedBlock";
@@ -1965,11 +1964,12 @@ export default class SystemRecordingPlugin extends Plugin {
                 // Resolve the meeting note that owns THIS audio — colocated
                 // (same folder + basename) or linked via `recording` frontmatter.
                 const note = findMeetingNoteForAudio(this.app, file);
-                // Only prune when a transcript actually exists in the owning note.
-                // Skip when there's no owning note (orphan/inline-embedded ad-hoc
-                // recordings, or unrelated user audio) or the note has captured no
-                // transcript yet — deleting those would destroy the only copy.
-                if (!note || !(await this.noteHasTranscript(note))) continue;
+                // Only prune when the plugin has durably saved the transcript
+                // into the owning note. Skip when there's no owning note
+                // (orphan/inline-embedded ad-hoc recordings, or unrelated user
+                // audio) or the transcript was never captured — deleting those
+                // would destroy the only copy.
+                if (!note || !this.noteHasSavedTranscript(note)) continue;
                 try {
                     await this.app.fileManager.trashFile(file);
                     removed++;
@@ -2002,18 +2002,20 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /**
-     * True when the meeting note actually contains transcript text. Reading the
-     * body (rather than trusting a `status` flag) closes a data-loss gap: with
-     * "Insert transcript" off, an enriched note carries only the AI summary, so
-     * its audio is the sole copy of the raw content and must not be pruned.
+     * True only when this plugin has durably written the transcript into the
+     * note — the `transcript_saved` flag stamped by `insertTranscript`.
+     * Retention keys on this managed flag rather than sniffing the body: a
+     * customized note template can carry a `## Transcript`/callout placeholder
+     * that looks like a real transcript, and trusting that would trash the only
+     * copy of the audio (issue #46). With "Insert transcript" off the flag is
+     * never set, so that note's audio is kept. Legacy notes transcribed before
+     * this flag existed also lack it, so their audio is kept (safe) rather than
+     * pruned. Reads frontmatter from the metadata cache; if it's unavailable we
+     * treat the transcript as unsaved and keep the audio.
      */
-    private async noteHasTranscript(note: TFile): Promise<boolean> {
-        try {
-            return hasTranscript(await this.app.vault.cachedRead(note));
-        } catch {
-            // If we can't read it, err on the side of keeping the audio.
-            return false;
-        }
+    private noteHasSavedTranscript(note: TFile): boolean {
+        const fm = this.app.metadataCache.getFileCache(note)?.frontmatter;
+        return fm?.transcript_saved === true;
     }
 
     /**

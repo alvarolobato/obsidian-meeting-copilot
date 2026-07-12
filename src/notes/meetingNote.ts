@@ -735,5 +735,11 @@ export async function insertTranscript(
 	await app.fileManager.processFrontMatter(file, (fm) => {
 		const f = fm as Record<string, unknown>;
 		f.status = "transcribed";
+		// Authoritative signal that the transcript text is durably captured in
+		// the note. Set only here (the sole writer of the transcript body), so
+		// retention can trust it instead of sniffing the body — a template
+		// placeholder can't forge it, and it survives the later "enriched"
+		// status transition.
+		f.transcript_saved = true;
 	});
 }
