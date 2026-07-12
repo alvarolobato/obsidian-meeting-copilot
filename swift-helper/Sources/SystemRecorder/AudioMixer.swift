@@ -73,6 +73,10 @@ final class AudioMixer: @unchecked Sendable {
         var framesWritten: AVAudioFramePosition = 0
         var closed = false
         let tempURL: URL
+        /// First temp-writer open/write failure seen on the capture callbacks.
+        /// A realtime callback can't throw, so we latch it here and surface it
+        /// from finalize() instead of silently dropping audio.
+        var captureError: Error?
 
         init(tempURL: URL) {
             self.tempURL = tempURL
@@ -215,6 +219,12 @@ final class AudioMixer: @unchecked Sendable {
             do {
                 stream.file = try makeTempWriter(stream.tempURL)
             } catch {
+                // Whole stream is lost — latch it and stop trying so finalize()
+                // can report the failure instead of silently recording nothing.
+                if stream.captureError == nil {
+                    stream.captureError = MixerError.writeFailed(error.localizedDescription)
+                }
+                stream.closed = true
                 return
             }
         }
@@ -229,7 +239,9 @@ final class AudioMixer: @unchecked Sendable {
             do {
                 try stream.file?.write(from: buffer)
                 stream.framesWritten += AVAudioFramePosition(buffer.frameLength)
-            } catch {}
+            } catch {
+                latchCaptureError(error, on: stream)
+            }
             return
         }
 
@@ -255,7 +267,17 @@ final class AudioMixer: @unchecked Sendable {
         do {
             try stream.file?.write(from: converted)
             stream.framesWritten += AVAudioFramePosition(converted.frameLength)
-        } catch {}
+        } catch {
+            latchCaptureError(error, on: stream)
+        }
+    }
+
+    /// Records the first temp-file write failure on a stream so finalize() can
+    /// surface it. Callers already hold `stream.lock`.
+    private func latchCaptureError(_ error: Error, on stream: Stream) {
+        if stream.captureError == nil {
+            stream.captureError = MixerError.writeFailed(error.localizedDescription)
+        }
     }
 
     // MARK: - System audio (from ScreenCaptureKit)
@@ -330,6 +352,14 @@ final class AudioMixer: @unchecked Sendable {
     func finalize() throws -> Double {
         closeStream(systemStream)
         closeStream(micStream)
+
+        // A temp-writer open/write failure during capture is latched per stream
+        // (a realtime callback can't throw). Surface it now so the stop path
+        // reports an error and salvages the temp PCM, instead of quietly
+        // producing a truncated or one-sided mix that looks like success.
+        if let captureError = micStream.captureError ?? systemStream.captureError {
+            throw captureError
+        }
 
         let systemFrames = systemStream.framesWritten
         let micFrames = micStream.framesWritten
