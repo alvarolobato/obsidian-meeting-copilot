@@ -156,12 +156,13 @@ export class FallbackEngine extends AudioProcessor {
 			});
 		}
 
+		// MEETING-COPILOT PATCH: `source: audioBuffer` dropped (same pin as in
+		// WebAudioEngine — nothing reads it). See VENDOR.md / issue #26.
 		return Promise.resolve({
 			pcmData: new Float32Array(pcmData), // Make a copy
 			sampleRate: audioBuffer.sampleRate, // Keep original sample rate
 			duration: audioBuffer.duration,
-			channels: 1,
-			source: audioBuffer as unknown as AudioInput
+			channels: 1
 		});
 	}
 

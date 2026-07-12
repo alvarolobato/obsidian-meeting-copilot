@@ -3,25 +3,7 @@ import AVFoundation
 
 // MARK: - Argument parsing
 
-let args = CommandLine.arguments
-guard args.count >= 6,
-      args[1] == "start",
-      args[2] == "--output",
-      args[4] == "--stop-file" else {
-    let errorJson = "{\"status\": \"error\", \"message\": \"Usage: system-recorder start --output <path> --stop-file <path> [--split]\"}"
-    FileHandle.standardOutput.write(Data((errorJson + "\n").utf8))
-    exit(1)
-}
-
-let finalOutputPath = args[3]
-let stopFilePath = args[5]
-
-// Optional flag after the required args. Absent = exactly today's behavior.
-let split = args.count > 6 && args[6] == "--split"
-
-// Record to a temp file, then move to final path when done
-let tempOutputURL = URL(fileURLWithPath: NSTemporaryDirectory())
-    .appendingPathComponent("system-recorder-\(ProcessInfo.processInfo.processIdentifier).wav")
+let usage = "Usage: system-recorder start --output <path> --stop-file <path> [--split] [--format \(RecordingFormat.usageList)]"
 
 // MARK: - JSON output helper
 
@@ -32,6 +14,86 @@ func emitJSON(_ dict: [String: Any]) {
     }
 }
 
+// Emit through JSONSerialization, not string interpolation: messages carry
+// localizedDescriptions, and a stray quote must not produce invalid JSON for
+// the plugin's line parser.
+func fail(_ message: String) -> Never {
+    emitJSON(["status": "error", "message": message])
+    exit(1)
+}
+
+let args = CommandLine.arguments
+guard args.count >= 6,
+      args[1] == "start",
+      args[2] == "--output",
+      args[4] == "--stop-file" else {
+    fail(usage)
+}
+
+let finalOutputPath = args[3]
+let stopFilePath = args[5]
+
+// Optional flags after the required args. All absent = mono 24 kHz WAV, no
+// sidecars.
+var split = false
+var format = RecordingFormat.wav
+var argIndex = 6
+while argIndex < args.count {
+    switch args[argIndex] {
+    case "--split":
+        split = true
+        argIndex += 1
+    case "--format":
+        guard argIndex + 1 < args.count,
+              let parsed = RecordingFormat(rawValue: args[argIndex + 1]) else {
+            fail(usage)
+        }
+        format = parsed
+        argIndex += 2
+    default:
+        fail(usage)
+    }
+}
+
+// Record to a temp file, then move to final path when done. The extension
+// matters: AVAudioFile picks the container from it.
+let tempOutputURL = URL(fileURLWithPath: NSTemporaryDirectory())
+    .appendingPathComponent(
+        "system-recorder-\(ProcessInfo.processInfo.processIdentifier).\(format.fileExtension)"
+    )
+
+/// Move that survives an existing destination and a cross-volume temp dir,
+/// and throws instead of silently dropping the finished recording (issue
+/// #10). An existing destination is only removed once its replacement is
+/// fully staged next to it, and `source` is kept until the very end, so a
+/// failure at any step leaves the recording recoverable (in `source` and/or
+/// the `.partial` staging file) rather than deleting the only copy. The
+/// staged copy also means a write that dies mid-flight (disk full) never
+/// leaves a partial file at the final path for naming-convention discovery
+/// to pick up as a recording.
+func moveReplacing(from source: URL, to destination: URL) throws {
+    let fm = FileManager.default
+    // Fast path: nothing to replace, so a plain rename is safe and atomic.
+    if !fm.fileExists(atPath: destination.path) {
+        do {
+            try fm.moveItem(at: source, to: destination)
+            return
+        } catch {
+            // Cross-volume rename isn't allowed; fall through to staged copy.
+        }
+    }
+    // Stage the new content beside the destination before touching the
+    // existing file, so a failed copy can't leave the destination missing.
+    let staging = destination.appendingPathExtension("partial")
+    try? fm.removeItem(at: staging)
+    try fm.copyItem(at: source, to: staging)
+    if fm.fileExists(atPath: destination.path) {
+        try fm.removeItem(at: destination)
+    }
+    try fm.moveItem(at: staging, to: destination)
+    try? fm.removeItem(at: source)
+}
+
 // MARK: - Main recording logic
 
 if #available(macOS 13.0, *) {
@@ -39,10 +101,9 @@ if #available(macOS 13.0, *) {
     let mixer: AudioMixer
 
     do {
-        mixer = try AudioMixer(outputURL: tempOutputURL, split: split)
+        mixer = try AudioMixer(outputURL: tempOutputURL, format: format, split: split)
     } catch {
-        emitJSON(["status": "error", "message": "Failed to create audio writer: \(error.localizedDescription)"])
-        exit(1)
+        fail("Failed to create audio writer: \(error.localizedDescription)")
     }
 
     // Wire system audio → mixer
@@ -78,36 +139,52 @@ if #available(macOS 13.0, *) {
 
             Task {
                 await captureManager.stopCapture()
-                let duration = await mixer.finalize()
 
-                // Move temp file to final destination
-                let finalURL = URL(fileURLWithPath: finalOutputPath)
-                try? FileManager.default.moveItem(at: tempOutputURL, to: finalURL)
+                do {
+                    let duration = try mixer.finalize()
 
-                let stopped: [String: Any] = ["status": "stopped", "duration": Int(duration), "file": finalOutputPath]
+                    // Move temp file to final destination
+                    let finalURL = URL(fileURLWithPath: finalOutputPath)
+                    try moveReplacing(from: tempOutputURL, to: finalURL)
 
-                // When split, relocate the sidecars next to the final recording.
-                // Discovery downstream is by naming convention, so we don't
-                // report the paths back; a missing sidecar is skipped and never
-                // fails the recording.
-                if split {
-                    let finalSidecars = AudioMixer.sidecarURLs(forBase: finalURL)
-                    let moves: [(temp: URL, final: URL)] = [
-                        (mixer.meSidecarURL, finalSidecars.me),
-                        (mixer.themSidecarURL, finalSidecars.them),
-                        (mixer.speechSidecarURL, finalSidecars.speech),
-                    ]
-                    for move in moves {
-                        guard FileManager.default.fileExists(atPath: move.temp.path) else { continue }
-                        if FileManager.default.fileExists(atPath: move.final.path) {
-                            try? FileManager.default.removeItem(at: move.final)
+                    let stopped: [String: Any] = ["status": "stopped", "duration": Int(duration), "file": finalOutputPath]
+
+                    // When split, relocate the sidecars next to the final
+                    // recording. Discovery downstream is by naming convention,
+                    // so we don't report the paths back; a missing sidecar is
+                    // skipped and never fails the recording.
+                    if split {
+                        let finalSidecars = AudioMixer.sidecarURLs(forBase: finalURL)
+                        let moves: [(temp: URL, final: URL)] = [
+                            (mixer.meSidecarURL, finalSidecars.me),
+                            (mixer.themSidecarURL, finalSidecars.them),
+                            (mixer.speechSidecarURL, finalSidecars.speech),
+                        ]
+                        for move in moves {
+                            guard FileManager.default.fileExists(atPath: move.temp.path) else { continue }
+                            try? moveReplacing(from: move.temp, to: move.final)
                         }
-                        try? FileManager.default.moveItem(at: move.temp, to: move.final)
                     }
-                }
 
-                emitJSON(stopped)
-                exit(0)
+                    emitJSON(stopped)
+                    exit(0)
+                } catch {
+                    // Name every surviving copy of the audio: the finished mix
+                    // (present when only the move into the vault failed, since
+                    // finalize deletes the stream temps on its success path)
+                    // and the per-stream PCM temps. A failed stop must not
+                    // leave the only copy of the meeting unfindable.
+                    var salvage = mixer.salvageablePaths
+                    if FileManager.default.fileExists(atPath: tempOutputURL.path) {
+                        salvage.insert(tempOutputURL.path, at: 0)
+                    }
+                    var message = "Failed to finalize recording: \(error.localizedDescription)"
+                    if !salvage.isEmpty {
+                        message += " — captured audio preserved at: \(salvage.joined(separator: ", "))"
+                    }
+                    emitJSON(["status": "error", "message": message])
+                    exit(1)
+                }
             }
             return
         }

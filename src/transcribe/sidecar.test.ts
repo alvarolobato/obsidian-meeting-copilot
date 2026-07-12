@@ -1,36 +1,62 @@
 import { describe, expect, it } from "vitest";
 import {
-	baseRecordingPathOf,
+	baseRecordingCandidatesOf,
 	isSidecarPath,
 	parseSpeechWindows,
 	sidecarPathsFor,
 } from "./sidecar";
 
-describe("isSidecarPath / baseRecordingPathOf", () => {
-	it("recognizes the three sidecar kinds and maps them back to the recording", () => {
-		for (const p of [
-			"Meetings/foo.me.wav",
-			"Meetings/foo.them.wav",
-			"Meetings/foo.speech.json",
-		]) {
-			expect(isSidecarPath(p)).toBe(true);
-			expect(baseRecordingPathOf(p)).toBe("Meetings/foo.wav");
+describe("isSidecarPath / baseRecordingCandidatesOf", () => {
+	it("recognizes the audio sidecars and maps them back to the recording", () => {
+		for (const ext of ["wav", "m4a"]) {
+			for (const kind of ["me", "them"]) {
+				const p = `Meetings/foo.${kind}.${ext}`;
+				expect(isSidecarPath(p)).toBe(true);
+				expect(baseRecordingCandidatesOf(p)).toContain(
+					`Meetings/foo.${ext}`
+				);
+			}
 		}
+	});
+
+	it("maps speech.json to candidates for every recording format", () => {
+		const p = "Meetings/foo.speech.json";
+		expect(isSidecarPath(p)).toBe(true);
+		const candidates = baseRecordingCandidatesOf(p);
+		expect(candidates).toContain("Meetings/foo.wav");
+		expect(candidates).toContain("Meetings/foo.m4a");
+	});
+
+	it("offers both extension cases so no rename direction gets orphan-swept", () => {
+		// Vault lookups are case-sensitive and the user may have renamed the
+		// primary, the sidecar, or both; candidates must cover every pairing.
+		const upper = baseRecordingCandidatesOf("Meetings/foo.me.WAV");
+		expect(upper).toContain("Meetings/foo.WAV");
+		expect(upper).toContain("Meetings/foo.wav");
+		const lower = baseRecordingCandidatesOf("Meetings/foo.me.wav");
+		expect(lower).toContain("Meetings/foo.wav");
+		expect(lower).toContain("Meetings/foo.WAV");
 	});
 
 	it("treats a plain recording (and unrelated files) as non-sidecars", () => {
 		expect(isSidecarPath("Meetings/foo.wav")).toBe(false);
-		expect(baseRecordingPathOf("Meetings/foo.wav")).toBeNull();
+		expect(baseRecordingCandidatesOf("Meetings/foo.wav")).toEqual([]);
+		expect(isSidecarPath("Meetings/foo.m4a")).toBe(false);
+		expect(baseRecordingCandidatesOf("Meetings/foo.m4a")).toEqual([]);
 		expect(isSidecarPath("Meetings/foo.md")).toBe(false);
-		expect(baseRecordingPathOf("notes/x.json")).toBeNull();
+		expect(baseRecordingCandidatesOf("notes/x.json")).toEqual([]);
 	});
 
 	it("round-trips with sidecarPathsFor", () => {
-		const rec = "Meetings/Standup/2026-01-01-2.wav";
-		const sc = sidecarPathsFor(rec);
-		expect(baseRecordingPathOf(sc.me)).toBe(rec);
-		expect(baseRecordingPathOf(sc.them)).toBe(rec);
-		expect(baseRecordingPathOf(sc.speech)).toBe(rec);
+		for (const rec of [
+			"Meetings/Standup/2026-01-01-2.wav",
+			"Meetings/Standup/2026-01-01-2.m4a",
+		]) {
+			const sc = sidecarPathsFor(rec);
+			expect(baseRecordingCandidatesOf(sc.me)).toContain(rec);
+			expect(baseRecordingCandidatesOf(sc.them)).toContain(rec);
+			expect(baseRecordingCandidatesOf(sc.speech)).toContain(rec);
+		}
 	});
 });
 
@@ -43,14 +69,23 @@ describe("sidecarPathsFor", () => {
 		});
 	});
 
+	it("sidecars share the recording's extension", () => {
+		expect(sidecarPathsFor("Meetings/Standup/foo.m4a")).toEqual({
+			me: "Meetings/Standup/foo.me.m4a",
+			them: "Meetings/Standup/foo.them.m4a",
+			speech: "Meetings/Standup/foo.speech.json",
+		});
+	});
+
 	it("keeps disambiguation suffixes in the base name", () => {
 		expect(sidecarPathsFor("recordings/2026-01-01-2.wav").me).toBe(
 			"recordings/2026-01-01-2.me.wav"
 		);
 	});
 
-	it("only strips a trailing .wav (case-insensitive)", () => {
+	it("only strips a trailing audio extension (case-insensitive)", () => {
 		expect(sidecarPathsFor("a/b.WAV").them).toBe("a/b.them.wav");
+		expect(sidecarPathsFor("a/b.M4A").them).toBe("a/b.them.m4a");
 		// A leading path segment that happens to contain "wav" is left alone.
 		expect(sidecarPathsFor("wav/clip.wav").speech).toBe(
 			"wav/clip.speech.json"

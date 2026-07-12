@@ -8,7 +8,7 @@ import {
     SystemRecordingSettings,
     SystemRecordingSettingTab,
 } from "./settings";
-import { Recorder, RecorderStatus } from "./recorder";
+import { Recorder, RecorderStatus, RecordingFormat } from "./recorder";
 import { BinaryProvisioner } from "./binary";
 import { nodeDeps, resolveBinaryPath } from "./binary-runtime";
 import * as path from "path";
@@ -63,7 +63,8 @@ import {
 import { canSeparateSpeakers } from "./transcribe/sttModel";
 import { probeKey } from "./transcribe/probe";
 import {
-    baseRecordingPathOf,
+    RECORDING_FORMATS,
+    baseRecordingCandidatesOf,
     isSidecarPath,
     parseSpeechWindows,
     sidecarPathsFor,
@@ -568,7 +569,7 @@ export default class SystemRecordingPlugin extends Plugin {
         }
     }
 
-    private async startRecording(meeting?: {
+    private async startRecording(meeting: {
         folder: string;
         basename: string;
         notePath: string;
@@ -606,45 +607,36 @@ export default class SystemRecordingPlugin extends Plugin {
             }
 
             const adapter = this.app.vault.adapter;
+            // Sampled once so the path extension and the helper's --format
+            // can't diverge if the settings toggle flips during the awaits
+            // below.
+            const format = this.recordingFormat();
 
             // Meeting recordings go under a "Recordings" subfolder of the note's
-            // own folder (configurable; empty = colocate beside the note). Ad-hoc
-            // recordings with no note fall back to the flat recordings folder.
-            let relativePath: string;
-            if (meeting) {
-                // A note at the vault root has folder "" (nothing to create).
-                // Ensure the note's folder before its (nested) Recordings child,
-                // so the subfolder mkdir can't fail on a missing parent.
-                if (meeting.folder && !(await adapter.exists(meeting.folder))) {
-                    await adapter.mkdir(meeting.folder);
-                }
-                const recFolder = this.recordingFolderFor(meeting.folder);
-                if (
-                    recFolder &&
-                    recFolder !== meeting.folder &&
-                    !(await adapter.exists(recFolder))
-                ) {
-                    await adapter.mkdir(recFolder);
-                }
-                relativePath = await this.uniqueWavPath(
-                    adapter,
-                    recFolder,
-                    meeting.basename
-                );
-                this.currentMeetingNotePath = meeting.notePath;
-                this.currentMeetingNote = meeting.note ?? null;
-                this.currentRecordingEventId = meeting.eventId ?? null;
-            } else {
-                const folder = this.settings.recordingFolder;
-                if (!(await adapter.exists(folder))) {
-                    await adapter.mkdir(folder);
-                }
-                const fileName = this.formatFileName(this.settings.fileNameTemplate);
-                relativePath = await this.uniqueWavPath(adapter, folder, fileName);
-                this.currentMeetingNotePath = null;
-                this.currentMeetingNote = null;
-                this.currentRecordingEventId = null;
+            // own folder (configurable; empty = colocate beside the note).
+            // A note at the vault root has folder "" (nothing to create).
+            // Ensure the note's folder before its (nested) Recordings child,
+            // so the subfolder mkdir can't fail on a missing parent.
+            if (meeting.folder && !(await adapter.exists(meeting.folder))) {
+                await adapter.mkdir(meeting.folder);
             }
+            const recFolder = this.recordingFolderFor(meeting.folder);
+            if (
+                recFolder &&
+                recFolder !== meeting.folder &&
+                !(await adapter.exists(recFolder))
+            ) {
+                await adapter.mkdir(recFolder);
+            }
+            const relativePath = await this.uniqueRecordingPath(
+                adapter,
+                recFolder,
+                meeting.basename,
+                format
+            );
+            this.currentMeetingNotePath = meeting.notePath;
+            this.currentMeetingNote = meeting.note ?? null;
+            this.currentRecordingEventId = meeting.eventId ?? null;
 
             this.currentRecordingPath = relativePath;
             const vaultBasePath =
@@ -660,6 +652,7 @@ export default class SystemRecordingPlugin extends Plugin {
             this.screenSettingsOpened = false;
             this.recorder.start(binaryPath, absolutePath, {
                 split: this.shouldSeparateSpeakers(),
+                format,
             });
             this.recordingStartTime = Date.now();
             this.startDurationTimer();
@@ -1408,7 +1401,8 @@ export default class SystemRecordingPlugin extends Plugin {
      * future meetings don't keep paying for the extra passes.
      */
     private async tryDiarizedTranscribe(
-        recording: TFile
+        recording: TFile,
+        onProgress?: (percent: number) => void
     ): Promise<string | null> {
         if (!this.shouldSeparateSpeakers()) return null;
         // Discover the split sidecars by naming convention so separation works
@@ -1433,7 +1427,9 @@ export default class SystemRecordingPlugin extends Plugin {
             meFile,
             themFile,
             this.buildTranscribeConfig(),
-            windows
+            windows,
+            undefined,
+            onProgress
         );
         if (result.diarized) return result.text;
 
@@ -1481,18 +1477,33 @@ export default class SystemRecordingPlugin extends Plugin {
         }
         this.transcribingPaths.add(recording.path);
         this.setActionStatus(t().statusBar.transcribing, "busy");
+        // Surface the engine's chunk-based percentage in the status bar. Guarded
+        // so a stray late callback can't overwrite the terminal status once the
+        // run has left the transcribing state.
+        const onProgress = (pct: number): void => {
+            if (!this.transcribingPaths.has(recording.path)) return;
+            this.setActionStatus(
+                t().statusBar.transcribingProgress(Math.round(pct)),
+                "busy"
+            );
+        };
         try {
             // Try the speaker-separated pass; a null means it didn't apply or
             // fell back, in which case we transcribe the mixed wav (which always
             // exists) with a single call.
-            const diarizedText = await this.tryDiarizedTranscribe(recording);
+            const diarizedText = await this.tryDiarizedTranscribe(
+                recording,
+                onProgress
+            );
             const diarized = diarizedText !== null;
             const text =
                 diarizedText ??
                 (await transcribeAudio(
                     this.app,
                     recording,
-                    this.buildTranscribeConfig()
+                    this.buildTranscribeConfig(),
+                    undefined,
+                    onProgress
                 ));
 
             const trimmed = text.trim();
@@ -2120,12 +2131,9 @@ export default class SystemRecordingPlugin extends Plugin {
                 );
                 if (dest instanceof TFile) ownedRecordings.add(dest.path);
             }
-            const folders = [
-                ...new Set([
-                    ...this.configuredMeetingRoots(),
-                    this.settings.recordingFolder.trim() || "Recordings",
-                ]),
-            ].filter((f) => f.length > 0);
+            const folders = [...new Set(this.configuredMeetingRoots())].filter(
+                (f) => f.length > 0
+            );
             const expired = findExpiredRecordings(files, {
                 folders,
                 extraPaths: ownedRecordings,
@@ -2188,10 +2196,25 @@ export default class SystemRecordingPlugin extends Plugin {
             // but left the sidecars). Sidecars still sitting next to a live
             // primary are left alone; pass 1 owns those.
             for (const info of expired) {
-                const base = baseRecordingPathOf(info.path);
-                if (!base) continue;
-                if (this.app.vault.getAbstractFileByPath(base) instanceof TFile)
+                const candidates = baseRecordingCandidatesOf(info.path);
+                if (candidates.length === 0) continue;
+                const primaryAlive = candidates.some(
+                    (base) =>
+                        this.app.vault.getAbstractFileByPath(base) instanceof
+                        TFile
+                );
+                if (primaryAlive) continue;
+                // A primary recording whose own basename happens to end in
+                // `.me`/`.them` matches the sidecar naming, so it lands here
+                // instead of pass 1's transcript-saved gate. Never sweep a
+                // file a meeting note claims as its recording.
+                const file = this.app.vault.getAbstractFileByPath(info.path);
+                if (
+                    file instanceof TFile &&
+                    findMeetingNoteForAudio(this.app, file)
+                ) {
                     continue;
+                }
                 if (await trash(info.path)) removed++;
             }
 
@@ -2309,15 +2332,23 @@ export default class SystemRecordingPlugin extends Plugin {
                 }
                 // Close the loop: hand the fresh recording to the transcriber.
                 if (this.settings.autoTranscribe) {
-                    // The helper writes the WAV directly to disk, so Obsidian's
-                    // vault index may not have registered it as a TFile yet.
-                    // Wait for it to appear before auto-transcribing.
+                    // The helper writes the recording directly to disk, so
+                    // Obsidian's vault index may not have registered it as a
+                    // TFile yet. Wait for it to appear before auto-transcribing.
                     void this.resolveFileWithRetry(link)
                         .then((audio) => {
                             if (!audio) {
+                                // Losing the race for the whole retry window
+                                // means the watcher likely missed the file; say
+                                // so instead of silently skipping the headline
+                                // automation (issue #29).
                                 console.warn(
                                     "[Meeting Copilot] auto-transcribe: recording not found in vault",
                                     link
+                                );
+                                new Notice(
+                                    t().notices.autoTranscribeNotIndexed,
+                                    10000
                                 );
                                 return;
                             }
@@ -2369,20 +2400,52 @@ export default class SystemRecordingPlugin extends Plugin {
         return normalizePath(noteFolder ? `${noteFolder}/${sub}` : sub);
     }
 
-    /** Returns a vault-relative `.wav` path, appending -2, -3… if the name is taken. */
-    private async uniqueWavPath(
+    /** The recording container for new recordings, from the compression toggle. */
+    private recordingFormat(): RecordingFormat {
+        return this.settings.compressedRecordings ? "m4a" : "wav";
+    }
+
+    /**
+     * Returns a vault-relative recording path in the given format, appending
+     * -2, -3… if the name is taken. The format is passed in (sampled once per
+     * start) so the path extension can't diverge from the helper's --format
+     * if the settings toggle flips mid-start. The stem must be free across
+     * every recording format, not just the configured one: `foo.wav` and
+     * `foo.m4a` would share the extension-less `foo.speech.json` sidecar, so
+     * a new m4a next to a pre-toggle wav would overwrite the wav's speech
+     * windows and retention of one would trash the other's sidecar.
+     */
+    private async uniqueRecordingPath(
         adapter: import("obsidian").DataAdapter,
         folder: string,
-        basename: string
+        basename: string,
+        ext: RecordingFormat
     ): Promise<string> {
         // normalizePath drops the leading slash when folder is "" (vault root).
-        let candidate = normalizePath(`${folder}/${basename}.wav`);
+        // A stem is taken if its primary file OR any of its convention-based
+        // sidecars already exist, in either format: on stop the split sidecars
+        // are moved to `<stem>.me/.them.<fmt>` / `<stem>.speech.json` by naming
+        // convention, so a pre-existing file at one of those paths (e.g. an
+        // orphaned sidecar) would otherwise be silently overwritten.
+        const stemTaken = async (stem: string): Promise<boolean> => {
+            for (const fmt of RECORDING_FORMATS) {
+                if (await adapter.exists(normalizePath(`${stem}.${fmt}`))) {
+                    return true;
+                }
+                const sc = sidecarPathsFor(`${stem}.${fmt}`);
+                for (const p of [sc.me, sc.them, sc.speech]) {
+                    if (await adapter.exists(normalizePath(p))) return true;
+                }
+            }
+            return false;
+        };
+        let stem = `${folder}/${basename}`;
         let n = 2;
-        while (await adapter.exists(candidate)) {
-            candidate = normalizePath(`${folder}/${basename}-${n}.wav`);
+        while (await stemTaken(stem)) {
+            stem = `${folder}/${basename}-${n}`;
             n++;
         }
-        return candidate;
+        return normalizePath(`${stem}.${ext}`);
     }
 
     private insertRecordingLink(fileName: string) {
@@ -2395,15 +2458,4 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     // MARK: - Helpers
-
-    private formatFileName(template: string): string {
-        const now = new Date();
-        return template
-            .replace("YYYY", String(now.getFullYear()))
-            .replace("MM", String(now.getMonth() + 1).padStart(2, "0"))
-            .replace("DD", String(now.getDate()).padStart(2, "0"))
-            .replace("HH", String(now.getHours()).padStart(2, "0"))
-            .replace("mm", String(now.getMinutes()).padStart(2, "0"))
-            .replace("ss", String(now.getSeconds()).padStart(2, "0"));
-    }
 }

@@ -33,8 +33,11 @@ final class AudioCaptureManager: NSObject, @unchecked Sendable {
         let config = SCStreamConfiguration()
         config.capturesAudio = true
         config.excludesCurrentProcessAudio = true
-        config.channelCount = 2
-        config.sampleRate = 44100
+        // Ask ScreenCaptureKit for the mixer's target format up front so the
+        // per-buffer conversion is usually a pass-through. The mixer converts
+        // whatever actually arrives, so an OS that ignores this still works.
+        config.channelCount = 1
+        config.sampleRate = Int(AudioMixer.targetSampleRate)
 
         // We don't need video
         config.width = 2

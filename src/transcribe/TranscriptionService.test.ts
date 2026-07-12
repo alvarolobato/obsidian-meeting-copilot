@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import {
 	isCapabilityMiss,
 	isDiarizationCancelled,
+	normalizeEngineProgress,
 } from "./TranscriptionService";
 import { initializeTranslations, t } from "./vendor/i18n/index";
 import en from "./vendor/i18n/translations/en";
@@ -58,5 +59,32 @@ describe("isDiarizationCancelled", () => {
 		const controller = new AbortController();
 		expect(isDiarizationCancelled(new Error("partial result"), controller.signal)).toBe(false);
 		expect(isDiarizationCancelled(new Error("network blip"))).toBe(false);
+	});
+});
+
+describe("normalizeEngineProgress", () => {
+	it("maps the engine's 10%→90% band onto a full 0→100 bar", () => {
+		// The vendored engine starts at ~10% (preparation) and tops out at 90%
+		// (it never emits the caller-owned 100).
+		expect(normalizeEngineProgress(10)).toBe(0);
+		expect(normalizeEngineProgress(50)).toBe(50);
+		expect(normalizeEngineProgress(90)).toBe(100);
+	});
+
+	it("clamps values outside the band", () => {
+		expect(normalizeEngineProgress(0)).toBe(0);
+		expect(normalizeEngineProgress(-20)).toBe(0);
+		expect(normalizeEngineProgress(120)).toBe(100);
+	});
+
+	it("keeps the diarized halves within their 0–50 / 50–100 lanes", () => {
+		// main.ts scales "me" by 0.5 and offsets "them" by 50; a full engine
+		// pass must never cross the midpoint or exceed 100.
+		const me = (p: number) => normalizeEngineProgress(p) * 0.5;
+		const them = (p: number) => 50 + normalizeEngineProgress(p) * 0.5;
+		expect(me(10)).toBe(0);
+		expect(me(90)).toBe(50);
+		expect(them(10)).toBe(50);
+		expect(them(90)).toBe(100);
 	});
 });

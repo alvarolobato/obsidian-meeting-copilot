@@ -17,6 +17,7 @@ import {
 	t,
 } from "./vendor/i18n/index";
 import { PathUtils } from "./vendor/utils/PathUtils";
+import { ProgressTracker } from "./vendor/ui/ProgressTracker";
 import { createSerialQueue } from "../util/serialize";
 import { mergeDiarized, type DiarSegment, type SpeechWindows } from "./diarize";
 import en from "./vendor/i18n/translations/en";
@@ -83,7 +84,8 @@ async function runController(
 	file: TFile,
 	cfg: TranscribeConfig,
 	signal?: AbortSignal,
-	vadMode: APITranscriptionSettings["vadMode"] = "server"
+	vadMode: APITranscriptionSettings["vadMode"] = "server",
+	onProgress?: (percent: number) => void
 ): Promise<ControllerResult> {
 	setTranscribeBaseUrl(cfg.baseUrl);
 	setTranscribeModelOverride(cfg.modelOverride);
@@ -99,17 +101,39 @@ async function runController(
 		userDictionaries: cfg.userDictionaries,
 		debugMode: cfg.debugMode,
 	};
-	const controller = new TranscriptionController(app, settings);
+	// The vendored engine only emits progress when a tracker is supplied and its
+	// getCurrentTask() is non-null; our headless tracker keeps a live task and
+	// forwards the engine's unified percentage to the caller.
+	const tracker = onProgress ? new ProgressTracker(onProgress) : undefined;
+	const controller = new TranscriptionController(app, settings, tracker);
 	return controller.transcribe(file, undefined, undefined, signal);
+}
+
+/**
+ * The vendored engine's unified percentage runs ~10% (preparation) → 90%
+ * (transcription), never 100 (it stops before the caller-owned insert step),
+ * so rescale that 10→90 band onto a full 0–100 bar — a single pass fills it
+ * end to end and the diarized halves line up on 0–50 / 50–100. When the
+ * optional post-processing step is enabled the engine caps transcription at
+ * ~70% and doesn't report the post-processing phase, so the bar tops out near
+ * ~75% until the pass returns; that mode is off by default.
+ */
+export function normalizeEngineProgress(percent: number): number {
+	const scaled = ((percent - 10) / 80) * 100;
+	return Math.max(0, Math.min(100, scaled));
 }
 
 async function runTranscription(
 	app: App,
 	file: TFile,
 	cfg: TranscribeConfig,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	onProgress?: (percent: number) => void
 ): Promise<string> {
-	const result = await runController(app, file, cfg, signal);
+	const scaled = onProgress
+		? (p: number) => onProgress(normalizeEngineProgress(p))
+		: undefined;
+	const result = await runController(app, file, cfg, signal, "server", scaled);
 	return typeof result === "string" ? result : result.text;
 }
 
@@ -158,9 +182,10 @@ export function transcribeAudio(
 	app: App,
 	file: TFile,
 	cfg: TranscribeConfig,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	onProgress?: (percent: number) => void
 ): Promise<string> {
-	return serial(() => runTranscription(app, file, cfg, signal));
+	return serial(() => runTranscription(app, file, cfg, signal, onProgress));
 }
 
 export interface DiarizedResult {
@@ -193,8 +218,17 @@ export function transcribeDiarized(
 	themFile: TFile,
 	cfg: TranscribeConfig,
 	windows?: SpeechWindows,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	onProgress?: (percent: number) => void
 ): Promise<DiarizedResult> {
+	// The two passes run back-to-back, so map each onto half of the overall bar:
+	// "me" fills 0–50%, "them" 50–100% (each pass rescaled to a full 0–100 first).
+	const meProgress = onProgress
+		? (p: number) => onProgress(normalizeEngineProgress(p) * 0.5)
+		: undefined;
+	const themProgress = onProgress
+		? (p: number) => onProgress(50 + normalizeEngineProgress(p) * 0.5)
+		: undefined;
 	return serial(async () => {
 		// Force VAD off for both passes. Server- or local-side VAD trims silence,
 		// and it would trim each stream by a different amount (the mic is mostly
@@ -202,7 +236,7 @@ export function transcribeDiarized(
 		// and shearing the shared timeline the merge relies on. We want the raw,
 		// aligned clocks.
 		try {
-			const meResult = await runController(app, meFile, cfg, signal, "disabled");
+			const meResult = await runController(app, meFile, cfg, signal, "disabled", meProgress);
 			if (signal?.aborted) {
 				throw new DOMException("Transcription aborted", "AbortError");
 			}
@@ -216,7 +250,7 @@ export function transcribeDiarized(
 				return { text: "", diarized: false };
 			}
 
-			const themResult = await runController(app, themFile, cfg, signal, "disabled");
+			const themResult = await runController(app, themFile, cfg, signal, "disabled", themProgress);
 			const themSegments = extractSegments(themResult);
 			if (isCapabilityMiss(themSegments, resultText(themResult))) {
 				return { text: "", diarized: false };

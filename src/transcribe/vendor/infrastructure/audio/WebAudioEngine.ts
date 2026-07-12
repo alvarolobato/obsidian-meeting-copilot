@@ -157,12 +157,16 @@ export class WebAudioEngine extends AudioProcessor {
 			processedData = new Float32Array(monoData);
 		}
 
+		// MEETING-COPILOT PATCH: upstream also set `source: audioBuffer`,
+		// pinning the full decoded AudioBuffer (float32 at context rate, ~460 MB
+		// for a 2h meeting) for the lifetime of the ProcessedAudio even though
+		// nothing reads it. Dropped so the decode result can be GC'd as soon as
+		// this conversion returns. See VENDOR.md / issue #26.
 		return Promise.resolve({
 			pcmData: processedData,
 			sampleRate: targetSampleRate,
 			duration: processedData.length / targetSampleRate,
-			channels: 1,
-			source: audioBuffer as unknown as AudioInput // Store original for reference
+			channels: 1
 		});
 	}
 

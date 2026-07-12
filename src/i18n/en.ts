@@ -50,6 +50,8 @@ export const en = {
 		calendarReconnect: "Google Calendar disconnected — reconnect",
 		calendarReconnectAction: "Reconnect",
 		recordingSaved: "Recording saved",
+		autoTranscribeNotIndexed:
+			"Recording saved, but auto-transcription could not start (the file never appeared in the vault index). Transcribe it from the agenda.",
 		unknownError: "Unknown error",
 		transcriptAdded: (note: string) => `Transcript added to ${note}`,
 		enriching: "Enriching meeting note…",
@@ -94,6 +96,7 @@ export const en = {
 		enriched: "Notes enriched",
 		enrichFailed: "Enrichment failed",
 		transcribing: "Transcribing…",
+		transcribingProgress: (pct: number) => `Transcribing… ${pct}%`,
 		transcriptAdded: "Transcript added",
 		transcribeFailed: "Transcription failed",
 		creatingNote: "Creating note…",
@@ -171,14 +174,9 @@ export const en = {
 		},
 	},
 	settings: {
-		recordingFolder: {
-			name: "Recording folder",
-			desc: "Folder in your vault to save recordings.",
-			placeholder: "Recordings",
-		},
-		fileNameTemplate: {
-			name: "File name template",
-			desc: "File name format. Tokens `YYYY MM DD HH mm ss` are replaced with the date and time.",
+		compressedRecordings: {
+			name: "Compressed recordings (m4a)",
+			desc: "Save recordings as AAC .m4a (~28 MB/hour) instead of WAV (~173 MB/hour). Same mono 24 kHz audio either way; transcription handles both. Only affects new recordings.",
 		},
 		oneOffFolderTemplate: {
 			name: "One-off meetings folder",

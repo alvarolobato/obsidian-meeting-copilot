@@ -2,6 +2,9 @@ import { ChildProcess, spawn } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
+import type { RecordingFormat } from "./transcribe/sidecar";
+
+export type { RecordingFormat };
 
 export interface RecorderStatus {
     status: "recording" | "stopped" | "error";
@@ -12,6 +15,8 @@ export interface RecorderStatus {
 
 export interface RecorderStartOptions {
     split?: boolean;
+    /** Output container/codec; the helper defaults to "wav" when omitted. */
+    format?: RecordingFormat;
 }
 
 export class Recorder {
@@ -39,7 +44,10 @@ export class Recorder {
             "start", "--output", outputPath,
             "--stop-file", stopFile,
         ];
+        // Keep --split first: an older helper only understands the positional
+        // --split at args[6] and ignores the rest.
         if (opts?.split) spawnArgs.push("--split");
+        if (opts?.format) spawnArgs.push("--format", opts.format);
 
         const proc = spawn(binaryPath, spawnArgs, {
             stdio: ["ignore", "pipe", "pipe"],
