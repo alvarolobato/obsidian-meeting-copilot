@@ -2422,10 +2422,19 @@ export default class SystemRecordingPlugin extends Plugin {
         ext: RecordingFormat
     ): Promise<string> {
         // normalizePath drops the leading slash when folder is "" (vault root).
+        // A stem is taken if its primary file OR any of its convention-based
+        // sidecars already exist, in either format: on stop the split sidecars
+        // are moved to `<stem>.me/.them.<fmt>` / `<stem>.speech.json` by naming
+        // convention, so a pre-existing file at one of those paths (e.g. an
+        // orphaned sidecar) would otherwise be silently overwritten.
         const stemTaken = async (stem: string): Promise<boolean> => {
             for (const fmt of RECORDING_FORMATS) {
                 if (await adapter.exists(normalizePath(`${stem}.${fmt}`))) {
                     return true;
+                }
+                const sc = sidecarPathsFor(`${stem}.${fmt}`);
+                for (const p of [sc.me, sc.them, sc.speech]) {
+                    if (await adapter.exists(normalizePath(p))) return true;
                 }
             }
             return false;
