@@ -284,7 +284,7 @@ final class AudioMixer: @unchecked Sendable {
         let duration = try mixStreams()
 
         if split {
-            try writeSplitSidecars()
+            writeSplitSidecars()
         }
 
         // Cleanup temp files
@@ -420,20 +420,33 @@ final class AudioMixer: @unchecked Sendable {
     // Downstream transcription runs with VAD off, and Whisper invents text on
     // long silence. The mic stream is mostly silence, so the plugin drops
     // transcript segments that fall outside these speech windows.
-    private func writeSplitSidecars() throws {
+    private func writeSplitSidecars() {
         // them + windows from the system stream; me + windows from the mic
         // stream when present. One chunked pass over each temp file both
         // re-encodes it into the output format and derives the speech windows.
         let themIntervals = systemStream.framesWritten > 0
-            ? try writeSidecarWithSpeech(from: systemStream.tempURL, to: themSidecarURL)
+            ? writeSidecarBestEffort(from: systemStream.tempURL, to: themSidecarURL)
             : []
         let meIntervals = micStream.framesWritten > 0
-            ? try writeSidecarWithSpeech(from: micStream.tempURL, to: meSidecarURL)
+            ? writeSidecarBestEffort(from: micStream.tempURL, to: meSidecarURL)
             : []
 
         let speech: [String: Any] = ["me": meIntervals, "them": themIntervals]
         if let data = try? JSONSerialization.data(withJSONObject: speech) {
             try? data.write(to: speechSidecarURL)
+        }
+    }
+
+    // Sidecars are an analysis-side extra: a failure here must never abort the
+    // finished primary recording (the plugin skips missing sidecars and falls
+    // back to transcribing the mixed file). On failure the partial sidecar is
+    // removed so discovery-by-naming can't pick up a corrupt stream.
+    private func writeSidecarBestEffort(from tempURL: URL, to url: URL) -> [[Double]] {
+        do {
+            return try writeSidecarWithSpeech(from: tempURL, to: url)
+        } catch {
+            try? FileManager.default.removeItem(at: url)
+            return []
         }
     }
 
