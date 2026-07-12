@@ -228,7 +228,12 @@ export async function probeSttSupport(
 			url: `${opts.baseUrl.replace(/\/+$/, "")}/audio/transcriptions`,
 			method: "POST",
 			headers: {
-				Authorization: `Bearer ${opts.apiKey}`,
+				// Omit the Authorization header entirely when no key is set —
+				// a blank `Bearer ` can make otherwise-open endpoints reject the
+				// probe and be misread as "transcription unsupported".
+				...(opts.apiKey
+					? { Authorization: `Bearer ${opts.apiKey}` }
+					: {}),
 				"Content-Type": contentType,
 			},
 			body,

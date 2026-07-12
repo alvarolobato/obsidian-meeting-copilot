@@ -8,7 +8,7 @@ guard args.count >= 6,
       args[1] == "start",
       args[2] == "--output",
       args[4] == "--stop-file" else {
-    let errorJson = "{\"status\": \"error\", \"message\": \"Usage: system-recorder start --output <path> --stop-file <path>\"}"
+    let errorJson = "{\"status\": \"error\", \"message\": \"Usage: system-recorder start --output <path> --stop-file <path> [--split]\"}"
     FileHandle.standardOutput.write(Data((errorJson + "\n").utf8))
     exit(1)
 }
