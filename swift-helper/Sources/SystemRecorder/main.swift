@@ -64,24 +64,34 @@ let tempOutputURL = URL(fileURLWithPath: NSTemporaryDirectory())
 
 /// Move that survives an existing destination and a cross-volume temp dir,
 /// and throws instead of silently dropping the finished recording (issue
-/// #10). The cross-volume fallback stages the copy next to the destination
-/// and renames it into place, so a copy that dies mid-write (disk full)
-/// never leaves a partial file at the final path for naming-convention
-/// discovery to pick up as a recording.
+/// #10). An existing destination is only removed once its replacement is
+/// fully staged next to it, and `source` is kept until the very end, so a
+/// failure at any step leaves the recording recoverable (in `source` and/or
+/// the `.partial` staging file) rather than deleting the only copy. The
+/// staged copy also means a write that dies mid-flight (disk full) never
+/// leaves a partial file at the final path for naming-convention discovery
+/// to pick up as a recording.
 func moveReplacing(from source: URL, to destination: URL) throws {
     let fm = FileManager.default
+    // Fast path: nothing to replace, so a plain rename is safe and atomic.
+    if !fm.fileExists(atPath: destination.path) {
+        do {
+            try fm.moveItem(at: source, to: destination)
+            return
+        } catch {
+            // Cross-volume rename isn't allowed; fall through to staged copy.
+        }
+    }
+    // Stage the new content beside the destination before touching the
+    // existing file, so a failed copy can't leave the destination missing.
+    let staging = destination.appendingPathExtension("partial")
+    try? fm.removeItem(at: staging)
+    try fm.copyItem(at: source, to: staging)
     if fm.fileExists(atPath: destination.path) {
         try fm.removeItem(at: destination)
     }
-    do {
-        try fm.moveItem(at: source, to: destination)
-    } catch {
-        let staging = destination.appendingPathExtension("partial")
-        try? fm.removeItem(at: staging)
-        try fm.copyItem(at: source, to: staging)
-        try fm.moveItem(at: staging, to: destination)
-        try? fm.removeItem(at: source)
-    }
+    try fm.moveItem(at: staging, to: destination)
+    try? fm.removeItem(at: source)
 }
 
 // MARK: - Main recording logic
