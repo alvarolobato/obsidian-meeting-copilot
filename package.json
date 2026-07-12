@@ -9,6 +9,7 @@
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
 		"build:swift": "cd swift-helper && swift build -c release",
 		"build:all": "npm run build:swift && npm run build",
+		"deploy:local": "node deploy-local.mjs",
 		"version": "node version-bump.mjs && git add manifest.json versions.json",
 		"lint": "eslint .",
 		"test": "vitest run"
