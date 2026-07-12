@@ -109,6 +109,17 @@ async function runController(
 	return controller.transcribe(file, undefined, undefined, signal);
 }
 
+/**
+ * The vendored engine's unified percentage runs ~10% (preparation) → 70/90%
+ * (transcription), never 100 (it stops before the caller-owned insert step).
+ * Rescale that onto a full 0–100 bar so a single pass fills it end to end and
+ * the diarized halves line up on 0–50 / 50–100.
+ */
+function normalizeEngineProgress(percent: number): number {
+	const scaled = ((percent - 10) / 80) * 100;
+	return Math.max(0, Math.min(100, scaled));
+}
+
 async function runTranscription(
 	app: App,
 	file: TFile,
@@ -116,7 +127,10 @@ async function runTranscription(
 	signal?: AbortSignal,
 	onProgress?: (percent: number) => void
 ): Promise<string> {
-	const result = await runController(app, file, cfg, signal, "server", onProgress);
+	const scaled = onProgress
+		? (p: number) => onProgress(normalizeEngineProgress(p))
+		: undefined;
+	const result = await runController(app, file, cfg, signal, "server", scaled);
 	return typeof result === "string" ? result : result.text;
 }
 
@@ -205,12 +219,12 @@ export function transcribeDiarized(
 	onProgress?: (percent: number) => void
 ): Promise<DiarizedResult> {
 	// The two passes run back-to-back, so map each onto half of the overall bar:
-	// "me" fills 0–50%, "them" 50–100%.
+	// "me" fills 0–50%, "them" 50–100% (each pass rescaled to a full 0–100 first).
 	const meProgress = onProgress
-		? (p: number) => onProgress(p * 0.5)
+		? (p: number) => onProgress(normalizeEngineProgress(p) * 0.5)
 		: undefined;
 	const themProgress = onProgress
-		? (p: number) => onProgress(50 + p * 0.5)
+		? (p: number) => onProgress(50 + normalizeEngineProgress(p) * 0.5)
 		: undefined;
 	return serial(async () => {
 		// Force VAD off for both passes. Server- or local-side VAD trims silence,
