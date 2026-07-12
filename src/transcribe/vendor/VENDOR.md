@@ -32,8 +32,10 @@ re-synced, **except** the small, clearly marked patches below. Grep for
 
 Two files are **added** (not from upstream):
 
-- `ui/ProgressTracker.ts` — type-only stub for the controller's optional,
-  never-supplied `progressTracker` dependency.
+- `ui/ProgressTracker.ts` — a small headless implementation of the controller's
+  optional `progressTracker` dependency (upstream drove it from a modal UI).
+  Keeps one always-live task so the controller's progress adapter fires, and
+  forwards the engine's unified percentage to a callback (the status bar).
 - (outside this dir) `../endpointConfig.ts` — the base-URL seam the patches read.
 
 ## Runtime notes

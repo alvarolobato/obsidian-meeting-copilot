@@ -28,8 +28,6 @@ import {
 import { t, type Messages } from "./i18n";
 
 export interface SystemRecordingSettings {
-	recordingFolder: string;
-	fileNameTemplate: string;
 	/** `{{placeholder}}` folder template for one-off meetings, e.g. "Meetings/{{year}}". */
 	oneOffFolderTemplate: string;
 	/** `{{placeholder}}` folder template for a new recurring series, e.g. "Meetings/{{series}}". */
@@ -107,8 +105,6 @@ export interface SystemRecordingSettings {
 export { STT_MODELS, inferSttApiType, type SttApiType };
 
 export const DEFAULT_SETTINGS: SystemRecordingSettings = {
-	recordingFolder: "Recordings",
-	fileNameTemplate: "recording-YYYY-MM-DD-HHmmss",
 	oneOffFolderTemplate: "Meetings/{{year}}",
 	seriesFolderTemplate: "Meetings/{{series}}",
 	oneOnOneSeparately: true,
@@ -823,31 +819,6 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName(s.settings.recordingHeading)
 			.setHeading();
-
-		new Setting(containerEl)
-			.setName(s.settings.recordingFolder.name)
-			.setDesc(s.settings.recordingFolder.desc)
-			.addText((text) =>
-				text
-					.setPlaceholder(s.settings.recordingFolder.placeholder)
-					.setValue(this.plugin.settings.recordingFolder)
-					.onChange(async (value) => {
-						this.plugin.settings.recordingFolder = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName(s.settings.fileNameTemplate.name)
-			.setDesc(s.settings.fileNameTemplate.desc)
-			.addText((text) =>
-				text
-					.setValue(this.plugin.settings.fileNameTemplate)
-					.onChange(async (value) => {
-						this.plugin.settings.fileNameTemplate = value;
-						await this.plugin.saveSettings();
-					})
-			);
 
 		new Setting(containerEl)
 			.setName(s.settings.compressedRecordings.name)

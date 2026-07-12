@@ -569,7 +569,7 @@ export default class SystemRecordingPlugin extends Plugin {
         }
     }
 
-    private async startRecording(meeting?: {
+    private async startRecording(meeting: {
         folder: string;
         basename: string;
         notePath: string;
@@ -613,49 +613,30 @@ export default class SystemRecordingPlugin extends Plugin {
             const format = this.recordingFormat();
 
             // Meeting recordings go under a "Recordings" subfolder of the note's
-            // own folder (configurable; empty = colocate beside the note). Ad-hoc
-            // recordings with no note fall back to the flat recordings folder.
-            let relativePath: string;
-            if (meeting) {
-                // A note at the vault root has folder "" (nothing to create).
-                // Ensure the note's folder before its (nested) Recordings child,
-                // so the subfolder mkdir can't fail on a missing parent.
-                if (meeting.folder && !(await adapter.exists(meeting.folder))) {
-                    await adapter.mkdir(meeting.folder);
-                }
-                const recFolder = this.recordingFolderFor(meeting.folder);
-                if (
-                    recFolder &&
-                    recFolder !== meeting.folder &&
-                    !(await adapter.exists(recFolder))
-                ) {
-                    await adapter.mkdir(recFolder);
-                }
-                relativePath = await this.uniqueRecordingPath(
-                    adapter,
-                    recFolder,
-                    meeting.basename,
-                    format
-                );
-                this.currentMeetingNotePath = meeting.notePath;
-                this.currentMeetingNote = meeting.note ?? null;
-                this.currentRecordingEventId = meeting.eventId ?? null;
-            } else {
-                const folder = this.settings.recordingFolder;
-                if (!(await adapter.exists(folder))) {
-                    await adapter.mkdir(folder);
-                }
-                const fileName = this.formatFileName(this.settings.fileNameTemplate);
-                relativePath = await this.uniqueRecordingPath(
-                    adapter,
-                    folder,
-                    fileName,
-                    format
-                );
-                this.currentMeetingNotePath = null;
-                this.currentMeetingNote = null;
-                this.currentRecordingEventId = null;
+            // own folder (configurable; empty = colocate beside the note).
+            // A note at the vault root has folder "" (nothing to create).
+            // Ensure the note's folder before its (nested) Recordings child,
+            // so the subfolder mkdir can't fail on a missing parent.
+            if (meeting.folder && !(await adapter.exists(meeting.folder))) {
+                await adapter.mkdir(meeting.folder);
             }
+            const recFolder = this.recordingFolderFor(meeting.folder);
+            if (
+                recFolder &&
+                recFolder !== meeting.folder &&
+                !(await adapter.exists(recFolder))
+            ) {
+                await adapter.mkdir(recFolder);
+            }
+            const relativePath = await this.uniqueRecordingPath(
+                adapter,
+                recFolder,
+                meeting.basename,
+                format
+            );
+            this.currentMeetingNotePath = meeting.notePath;
+            this.currentMeetingNote = meeting.note ?? null;
+            this.currentRecordingEventId = meeting.eventId ?? null;
 
             this.currentRecordingPath = relativePath;
             const vaultBasePath =
@@ -1420,7 +1401,8 @@ export default class SystemRecordingPlugin extends Plugin {
      * future meetings don't keep paying for the extra passes.
      */
     private async tryDiarizedTranscribe(
-        recording: TFile
+        recording: TFile,
+        onProgress?: (percent: number) => void
     ): Promise<string | null> {
         if (!this.shouldSeparateSpeakers()) return null;
         // Discover the split sidecars by naming convention so separation works
@@ -1445,7 +1427,9 @@ export default class SystemRecordingPlugin extends Plugin {
             meFile,
             themFile,
             this.buildTranscribeConfig(),
-            windows
+            windows,
+            undefined,
+            onProgress
         );
         if (result.diarized) return result.text;
 
@@ -1493,18 +1477,33 @@ export default class SystemRecordingPlugin extends Plugin {
         }
         this.transcribingPaths.add(recording.path);
         this.setActionStatus(t().statusBar.transcribing, "busy");
+        // Surface the engine's chunk-based percentage in the status bar. Guarded
+        // so a stray late callback can't overwrite the terminal status once the
+        // run has left the transcribing state.
+        const onProgress = (pct: number): void => {
+            if (!this.transcribingPaths.has(recording.path)) return;
+            this.setActionStatus(
+                t().statusBar.transcribingProgress(Math.round(pct)),
+                "busy"
+            );
+        };
         try {
             // Try the speaker-separated pass; a null means it didn't apply or
             // fell back, in which case we transcribe the mixed wav (which always
             // exists) with a single call.
-            const diarizedText = await this.tryDiarizedTranscribe(recording);
+            const diarizedText = await this.tryDiarizedTranscribe(
+                recording,
+                onProgress
+            );
             const diarized = diarizedText !== null;
             const text =
                 diarizedText ??
                 (await transcribeAudio(
                     this.app,
                     recording,
-                    this.buildTranscribeConfig()
+                    this.buildTranscribeConfig(),
+                    undefined,
+                    onProgress
                 ));
 
             const trimmed = text.trim();
@@ -2132,12 +2131,9 @@ export default class SystemRecordingPlugin extends Plugin {
                 );
                 if (dest instanceof TFile) ownedRecordings.add(dest.path);
             }
-            const folders = [
-                ...new Set([
-                    ...this.configuredMeetingRoots(),
-                    this.settings.recordingFolder.trim() || "Recordings",
-                ]),
-            ].filter((f) => f.length > 0);
+            const folders = [...new Set(this.configuredMeetingRoots())].filter(
+                (f) => f.length > 0
+            );
             const expired = findExpiredRecordings(files, {
                 folders,
                 extraPaths: ownedRecordings,
@@ -2453,15 +2449,4 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     // MARK: - Helpers
-
-    private formatFileName(template: string): string {
-        const now = new Date();
-        return template
-            .replace("YYYY", String(now.getFullYear()))
-            .replace("MM", String(now.getMonth() + 1).padStart(2, "0"))
-            .replace("DD", String(now.getDate()).padStart(2, "0"))
-            .replace("HH", String(now.getHours()).padStart(2, "0"))
-            .replace("mm", String(now.getMinutes()).padStart(2, "0"))
-            .replace("ss", String(now.getSeconds()).padStart(2, "0"));
-    }
 }
