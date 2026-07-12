@@ -262,8 +262,8 @@ export const en = {
 			desc: "Events whose title contains any of these words are excluded from the calendar entirely — not shown in the agenda and not recorded (separate by newline or comma; case-insensitive).",
 		},
 		openMeet: {
-			name: "Open Meet automatically",
-			desc: "If the event has a meeting link, open it in the browser at the start time.",
+			name: "Open meeting link automatically",
+			desc: "If the event has a meeting link (Google Meet, Zoom, Teams, or Webex), open it in the browser at the start time.",
 		},
 		agendaLookAhead: {
 			name: "Agenda look-ahead (days)",
@@ -299,10 +299,14 @@ export const en = {
 			name: "API key",
 			desc: "Sent as a Bearer token for transcription and enrichment. Stored in this vault's plugin data. Use 'Test connection' to verify it and load the available models.",
 		},
+		endpointActions: {
+			name: "Connection",
+			desc: "Verify the endpoint and load the models available for transcription and enrichment in one step.",
+		},
 		transcriptionHeading: "Transcription",
 		sttModel: {
 			name: "Transcription model",
-			desc: "Model sent to the endpoint. Run 'Test connection' above (or 'Load models') to list the models your endpoint exposes — when it reports capabilities, the list is narrowed to speech-to-text models. Chat models like gpt-4o can't transcribe; use gpt-4o-transcribe or whisper. You can also type a gateway deployment name such as llm-gateway/whisper.",
+			desc: "Model sent to the endpoint. Run 'Test connection' above to list the models your endpoint exposes — when it reports capabilities, the list is narrowed to speech-to-text models. Chat models like gpt-4o can't transcribe; use gpt-4o-transcribe or whisper. You can also type a gateway deployment name such as llm-gateway/whisper.",
 		},
 		sttApiType: {
 			name: "Engine (advanced)",
@@ -346,11 +350,6 @@ export const en = {
 			unknown: "Timestamps: not checked yet",
 			notApplicable:
 				"Timestamps: not applicable — use a Whisper model for speaker separation",
-		},
-		loadModels: {
-			button: "Load models",
-			success: (n: number) =>
-				`Loaded ${n} model${n === 1 ? "" : "s"}.`,
 		},
 		sttLanguage: {
 			name: "Language",

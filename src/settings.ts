@@ -20,7 +20,6 @@ import {
 	type SttApiType,
 } from "./transcribe/sttModel";
 import { probeKey, probeSttSupport } from "./transcribe/probe";
-import { listModels as listSttModels } from "./transcribe/models";
 import {
 	fetchModelCapabilities,
 	type ModelCapability,
@@ -99,6 +98,9 @@ export interface SystemRecordingSettings {
 }
 
 export { STT_MODELS, inferSttApiType, type SttApiType };
+
+/** Shared row count so every settings text area is the same (comfortable) height. */
+const TEXTAREA_ROWS = 18;
 
 export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	recordingFolder: "Recordings",
@@ -233,6 +235,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         const { containerEl } = this;
         const s = t();
         containerEl.empty();
+        containerEl.addClass("meeting-copilot-settings");
         // Opening (or re-rendering) the tab is a fresh chance to auto-probe:
         // clear the per-session "already probed" guard so a verdict invalidated
         // at runtime (e.g. diarization found no timestamps) is re-checked here
@@ -327,6 +330,8 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 						this.plugin.settings.exclusionKeywords = value;
 						await this.plugin.saveSettings();
 					});
+				ta.inputEl.rows = TEXTAREA_ROWS;
+				ta.inputEl.addClass("meeting-copilot-template-input");
 				// Re-poll and refresh the agenda once editing ends so newly
 				// excluded events drop out without waiting for the next poll.
 				this.plugin.registerDomEvent(ta.inputEl, "blur", () => {
@@ -334,18 +339,6 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					this.plugin.refreshAgenda();
 				});
 			});
-
-		new Setting(containerEl)
-			.setName(s.settings.openMeet.name)
-			.setDesc(s.settings.openMeet.desc)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.openMeetAutomatically)
-					.onChange(async (value) => {
-						this.plugin.settings.openMeetAutomatically = value;
-						await this.plugin.saveSettings();
-					})
-			);
 
 		new Setting(containerEl)
 			.setName(s.settings.agendaLookAhead.name)
@@ -378,6 +371,18 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 						this.plugin.refreshAgenda();
 					});
 			});
+
+		new Setting(containerEl)
+			.setName(s.settings.openMeet.name)
+			.setDesc(s.settings.openMeet.desc)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.openMeetAutomatically)
+					.onChange(async (value) => {
+						this.plugin.settings.openMeetAutomatically = value;
+						await this.plugin.saveSettings();
+					})
+			);
 
 		// ---- Meeting detection (macOS) ----
 		new Setting(containerEl)
@@ -481,10 +486,19 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 						this.probedKeys.clear();
 						this.refreshSttBadges();
 					});
-			})
+			});
+
+		// Endpoint actions: one button that verifies the endpoint and loads the
+		// shared model list + capabilities used by both the transcription and
+		// enrichment pickers. Kept as the last row of the endpoint section so
+		// the credentials sit above it.
+		new Setting(containerEl)
+			.setName(s.settings.endpointActions.name)
+			.setDesc(s.settings.endpointActions.desc)
 			.addButton((button) =>
 				button
 					.setButtonText(s.settings.testConnection.button)
+					.setCta()
 					.onClick(async () => {
 						const { apiBaseUrl, apiKey } = this.plugin.settings;
 						if (!apiBaseUrl) {
@@ -494,11 +508,11 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 						button.setButtonText(s.settings.testConnection.testing);
 						button.setDisabled(true);
 						try {
+							// One round-trip: fetch the model list and, when the
+							// endpoint exposes them (LiteLLM), per-model
+							// capabilities so the STT picker can filter to real
+							// transcription models.
 							this.models = await listModels(apiBaseUrl, apiKey);
-							// Endpoints that expose per-model capabilities
-							// (LiteLLM) let us filter the STT picker to real
-							// transcription models; null just means we fall back
-							// to probing whatever model is picked.
 							this.capabilities = await fetchModelCapabilities(
 								apiBaseUrl,
 								apiKey
@@ -535,39 +549,11 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 			.setHeading();
 
 		// Model id sent on the wire (dropdown once models are loaded, else free
-		// text). "Load models" fetches just the transcription endpoint's list,
-		// independent of the shared "Test connection" above.
+		// text). Use "Load models" / "Test connection" in the AI endpoint
+		// section above to populate the list.
 		const sttModelSetting = new Setting(containerEl)
 			.setName(s.settings.sttModel.name)
-			.setDesc(s.settings.sttModel.desc)
-			.addButton((button) =>
-				button
-					.setButtonText(s.settings.loadModels.button)
-					.onClick(async () => {
-						const { apiBaseUrl, apiKey } = this.plugin.settings;
-						button.setDisabled(true);
-						const found = await listSttModels({
-							baseUrl: apiBaseUrl,
-							apiKey,
-						});
-						// Refresh capabilities too so the picker can filter to
-						// real transcription models when the endpoint knows.
-						this.capabilities = await fetchModelCapabilities(
-							apiBaseUrl,
-							apiKey
-						);
-						button.setDisabled(false);
-						// A null or empty result just means the lookup didn't
-						// pan out — keep the free-text field, no error noise.
-						if (found && found.length > 0) {
-							this.models = found;
-							new Notice(
-								s.settings.loadModels.success(found.length)
-							);
-						}
-						this.display();
-					})
-			);
+			.setDesc(s.settings.sttModel.desc);
 		this.addModelPicker(
 			sttModelSetting,
 			this.plugin.settings.sttModel,
@@ -592,20 +578,25 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 				: undefined
 		);
 
-		const transcriptionBadge = new Setting(containerEl)
+		// Transcription support, with timestamp support shown as a sub-detail
+		// beneath it (it only matters for speaker separation). Both lines live
+		// in this one setting's description and are refreshed in place.
+		const supportSetting = new Setting(containerEl)
 			.setName(s.settings.transcriptionBadge.name)
-			.setDesc(this.transcriptionBadgeText(s))
 			.addButton((button) =>
 				button
 					.setButtonText(s.settings.recheckSupport.button)
 					.setTooltip(s.settings.recheckSupport.tooltip)
 					.onClick(() => this.recheckSttSupport())
 			);
-		this.sttTranscriptionBadgeEl = transcriptionBadge.descEl;
-		const timestampBadge = new Setting(containerEl)
-			.setName(s.settings.timestampBadge.name)
-			.setDesc(this.timestampBadgeText(s));
-		this.sttTimestampBadgeEl = timestampBadge.descEl;
+		supportSetting.descEl.empty();
+		this.sttTranscriptionBadgeEl = supportSetting.descEl.createDiv({
+			text: this.transcriptionBadgeText(s),
+		});
+		this.sttTimestampBadgeEl = supportSetting.descEl.createDiv({
+			text: this.timestampBadgeText(s),
+			cls: "mc-support-detail",
+		});
 		// Assess transcription + timestamp support for the current model (fires
 		// once per endpoint+model per session; no-op when the endpoint isn't
 		// set or a fresh verdict is already stored). The "Recheck" button above
@@ -695,7 +686,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 						this.plugin.settings.dictionary = value;
 						await this.plugin.saveSettings();
 					});
-				ta.inputEl.rows = 8;
+				ta.inputEl.rows = TEXTAREA_ROWS;
 				ta.inputEl.addClass("meeting-copilot-template-input");
 			});
 
@@ -784,7 +775,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}
 				);
-				ta.inputEl.rows = 18;
+				ta.inputEl.rows = TEXTAREA_ROWS;
 				ta.inputEl.addClass("meeting-copilot-template-input");
 			});
 
@@ -940,7 +931,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}
 				);
-				ta.inputEl.rows = 18;
+				ta.inputEl.rows = TEXTAREA_ROWS;
 				ta.inputEl.addClass("meeting-copilot-template-input");
 			});
 
@@ -1225,14 +1216,15 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
             const options: Record<string, string> = {};
             for (const m of offered) options[m] = m;
             if (current && !options[current]) options[current] = current;
-            setting.addDropdown((dd) =>
+            setting.addDropdown((dd) => {
+                dd.selectEl.addClass("meeting-copilot-model-dropdown");
                 dd
                     .addOptions(options)
                     .setValue(current)
                     .onChange(async (value) => {
                         await onChange(value);
-                    })
-            );
+                    });
+            });
         } else {
             setting.addText((text) =>
                 text.setValue(current).onChange(async (value) => {

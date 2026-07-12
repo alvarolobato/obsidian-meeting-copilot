@@ -62,6 +62,41 @@
 }
 
 /* =========================================================================
+ * Plugin settings tab: widen the text fields.
+ * Scoped to this plugin's tab so it can't affect other settings panes.
+ * ====================================================================== */
+
+/* Text inputs and text areas get at least half the row (number inputs are
+ * left alone — they only match input[type="text"]/[type="password"]). */
+.meeting-copilot-settings .setting-item-control:has(> input[type="text"]),
+.meeting-copilot-settings .setting-item-control:has(> input[type="password"]),
+.meeting-copilot-settings .setting-item-control:has(> textarea) {
+    flex: 1 0 50%;
+}
+
+.meeting-copilot-settings .setting-item-control > input[type="text"],
+.meeting-copilot-settings .setting-item-control > input[type="password"],
+.meeting-copilot-settings .setting-item-control > textarea {
+    width: 100%;
+}
+
+/* Timestamp support shown as a lighter sub-detail under transcription support. */
+.meeting-copilot-settings .mc-support-detail {
+    color: var(--text-muted);
+    font-size: var(--font-ui-smaller);
+    margin-top: 2px;
+}
+
+/* Model pickers render as a dropdown that should take ~40% of the row. */
+.meeting-copilot-settings .setting-item-control:has(> .meeting-copilot-model-dropdown) {
+    flex: 0 0 40%;
+}
+
+.meeting-copilot-settings .meeting-copilot-model-dropdown {
+    width: 100%;
+}
+
+/* =========================================================================
  * "Needs attention" dashboard section (rendered by the plugin).
  * ====================================================================== */
 .mc-attention-header {
