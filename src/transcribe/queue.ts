@@ -51,6 +51,8 @@ interface Entry {
 	label: string;
 	run: (signal: AbortSignal) => Promise<void>;
 	controller: AbortController;
+	/** The caller-facing promise for this job, reused when a duplicate is enqueued. */
+	promise: Promise<void>;
 	resolve: () => void;
 	reject: (error: unknown) => void;
 }
@@ -83,15 +85,16 @@ export class TranscriptionQueue {
 
 	/**
 	 * Enqueues a job and resolves when it finishes (or rejects if it fails or is
-	 * cancelled). A job whose id is already queued/running is a no-op that
-	 * resolves with the existing run, so a double-trigger doesn't run twice.
+	 * cancelled). A job whose id is already queued/running is deduped: its
+	 * existing run's promise is returned, so a double-trigger runs once but every
+	 * caller still settles with that run's real outcome.
 	 */
 	enqueue(job: TranscriptionJob): Promise<void> {
 		const existing =
 			this.running?.id === job.id
 				? this.running
 				: this.waiting.find((e) => e.id === job.id);
-		if (existing) return Promise.resolve();
+		if (existing) return existing.promise;
 
 		let resolve!: () => void;
 		let reject!: (error: unknown) => void;
@@ -104,6 +107,7 @@ export class TranscriptionQueue {
 			label: job.label,
 			run: job.run,
 			controller: new AbortController(),
+			promise,
 			resolve,
 			reject,
 		});

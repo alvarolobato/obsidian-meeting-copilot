@@ -280,7 +280,7 @@ export const en = {
 		},
 		notifyBeforeStart: {
 			name: "Notify before start (minutes)",
-			desc: "How many minutes before a meeting starts to show the notification. 0 notifies exactly at the start time (0–60).",
+			desc: "How many minutes before a meeting starts to show the heads-up notification. 0 turns off the pre-start heads-up — you're still prompted at the start time (0–60).",
 		},
 		calendarAutoStart: {
 			name: "Auto-start recording",

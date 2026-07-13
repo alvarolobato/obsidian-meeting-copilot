@@ -161,12 +161,14 @@ export default class SystemRecordingPlugin extends Plugin {
 	private transcriptionQueue = new TranscriptionQueue((s) =>
 		this.renderQueueStatus(s)
 	);
-	/** Calendar event ids already prompted (upcoming/start), so we don't double-prompt. */
-	private calendarPrompted = new Set<string>();
 	/** Calendar event ids whose meeting link was already auto-opened, so it opens once. */
 	private openedLinkEventIds = new Set<string>();
+	/** The in-app meeting prompt currently on screen, superseded when a newer one fires. */
+	private lastMeetingNotice: Notice | null = null;
 	/** Resolvers waiting for the current recording to fully stop (back-to-back chaining). */
 	private stopWaiters: Array<() => void> = [];
+	/** True while a stopped recording is still being linked/handled in attachRecording. */
+	private attaching = false;
 	/** Wall-clock of the previous duration tick, for sleep detection while recording. */
 	private lastDurationTickAt: number | null = null;
 	/** Note paths currently being offered an AI title, to prevent duplicate modals. */
@@ -727,10 +729,16 @@ export default class SystemRecordingPlugin extends Plugin {
      * when nothing is recording.
      */
     private stopAndWait(): Promise<void> {
-        if (!this.recorder.isRecording) return Promise.resolve();
+        // "Fully wound down" means both the recorder has terminated *and* the
+        // just-stopped file has finished linking/handling — not merely
+        // `isRecording === false` — so a chained start begins against clean
+        // shared state. Wait when either is still true.
+        if (!this.recorder.isRecording && !this.attaching) {
+            return Promise.resolve();
+        }
         return new Promise<void>((resolve) => {
             this.stopWaiters.push(resolve);
-            this.recorder.stop();
+            if (this.recorder.isRecording) this.recorder.stop();
         });
     }
 
@@ -973,7 +981,14 @@ export default class SystemRecordingPlugin extends Plugin {
 			onClick: opts.onRecord,
 			cta: !onJoinAndRecord,
 		});
-		multiActionNotice(`${opts.title} — ${opts.subtitle}`, actions);
+		// Supersede an earlier prompt for the same meeting (e.g. the lead-time
+		// notice when the start boundary now fires) rather than stacking a
+		// second persistent notice.
+		this.lastMeetingNotice?.hide();
+		this.lastMeetingNotice = multiActionNotice(
+			`${opts.title} — ${opts.subtitle}`,
+			actions
+		);
 
 		// Native OS notification (visible while minimized / on another Space);
 		// clicking it focuses Obsidian and opens the rich prompt modal.
@@ -1050,9 +1065,10 @@ export default class SystemRecordingPlugin extends Plugin {
 			return;
 		}
 
-		// Otherwise prompt — but not if the lead-time prompt already covered this
-		// event (its persistent notice is still on screen).
-		if (this.calendarPrompted.has(event.id)) return;
+		// Otherwise prompt — unless the user already started recording this event
+		// from the lead-time prompt (its Record button), in which case there's
+		// nothing to ask.
+		if (this.currentRecordingEventId === event.id) return;
 		const lateMs = Date.now() - event.start;
 		const subtitle =
 			lateMs > GRACE_MS
@@ -1076,9 +1092,8 @@ export default class SystemRecordingPlugin extends Plugin {
 		window.open(event.meetLink, "_blank");
 	}
 
-	/** Shared calendar meeting prompt (upcoming + start), deduped per event. */
+	/** Shared calendar meeting prompt (upcoming + start). */
 	private promptCalendarMeeting(event: ScheduledEvent, subtitle: string): void {
-		this.calendarPrompted.add(event.id);
 		this.promptMeeting({
 			title: event.summary,
 			subtitle,
@@ -1173,9 +1188,8 @@ export default class SystemRecordingPlugin extends Plugin {
 	}
 
 	private handleEventEnd(event: ScheduledEvent): void {
-		// The meeting is over: forget its prompt/link state so a later recurrence
-		// (same id, re-added by a poll) can prompt afresh.
-		this.calendarPrompted.delete(event.id);
+		// The meeting is over: forget its auto-open state so a later recurrence
+		// (same id, re-added by a poll) can open its link afresh.
 		this.openedLinkEventIds.delete(event.id);
 
 		// Only act when *this* meeting's recording is the active one, so
@@ -1860,14 +1874,14 @@ export default class SystemRecordingPlugin extends Plugin {
         );
     }
 
-    /** Cancels the transcription currently running (command-palette action). */
+    /** Cancels the running transcription and drops any queued behind it (command-palette action). */
     private cancelActiveTranscription(): void {
-        const running = this.transcriptionQueue.snapshot().running;
-        if (!running) {
+        const snapshot = this.transcriptionQueue.snapshot();
+        if (!snapshot.running && snapshot.waiting.length === 0) {
             new Notice(t().notices.nothingTranscribing);
             return;
         }
-        this.transcriptionQueue.cancel(running.id);
+        this.transcriptionQueue.cancelAll();
     }
 
     /**
@@ -2084,6 +2098,25 @@ export default class SystemRecordingPlugin extends Plugin {
         }
     }
 
+    /** True while a transcription is actively running (it owns the status bar). */
+    private get transcriptionRunning(): boolean {
+        return this.transcriptionQueue.snapshot().running !== null;
+    }
+
+    /**
+     * Enrichment/title status writes yield the status bar to an active
+     * transcription (which now runs concurrently, since enrichment happens after
+     * the queue slot is released). Keeps the bar single-owner: transcription
+     * progress wins; enrichment shows its state only when the queue is idle.
+     */
+    private setEnrichStatus(
+        text: string,
+        state: "busy" | "success" | "error"
+    ): void {
+        if (this.transcriptionRunning) return;
+        this.setActionStatus(text, state);
+    }
+
     /**
      * Shows a transient action state (enriching, transcribing, …) in the status
      * bar. `state` "busy" shows a spinner; "success"/"error" auto-clear after a
@@ -2252,7 +2285,7 @@ export default class SystemRecordingPlugin extends Plugin {
             };
 
             new Notice(t().notices.enriching);
-            this.setActionStatus(t().statusBar.enriching, "busy");
+            this.setEnrichStatus(t().statusBar.enriching, "busy");
             const output = await chatComplete({
                 baseUrl: apiBaseUrl,
                 apiKey: apiKey,
@@ -2281,14 +2314,14 @@ export default class SystemRecordingPlugin extends Plugin {
                 (f as Record<string, unknown>).status = "enriched";
             });
             new Notice(t().notices.enrichDone(file.basename));
-            this.setActionStatus(t().statusBar.enriched, "success");
+            this.setEnrichStatus(t().statusBar.enriched, "success");
             this.agendaEvents.emit("changed", undefined);
             enrichedOk = true;
         } catch (e) {
             new Notice(
                 t().notices.enrichError(e instanceof Error ? e.message : String(e))
             );
-            this.setActionStatus(t().statusBar.enrichFailed, "error");
+            this.setEnrichStatus(t().statusBar.enrichFailed, "error");
         } finally {
             this.enrichingPaths.delete(file.path);
         }
@@ -2344,7 +2377,7 @@ export default class SystemRecordingPlugin extends Plugin {
                     : extractTranscript(content);
             if (!notes && !transcript) return;
 
-            this.setActionStatus(t().adhoc.suggestingTitle, "busy");
+            this.setEnrichStatus(t().adhoc.suggestingTitle, "busy");
             const raw = await chatComplete({
                 baseUrl: apiBaseUrl,
                 apiKey,
@@ -2352,7 +2385,9 @@ export default class SystemRecordingPlugin extends Plugin {
                 system: TITLE_SYSTEM_PROMPT,
                 user: buildTitlePrompt(notes, transcript),
             });
-            this.clearActionStatus();
+            // Don't wipe a concurrent transcription's status; we only set ours
+            // when the queue was idle.
+            if (!this.transcriptionRunning) this.clearActionStatus();
             const title = this.cleanSuggestedTitle(raw);
             if (!title) return;
 
@@ -2375,7 +2410,7 @@ export default class SystemRecordingPlugin extends Plugin {
             }).open();
         } catch (e) {
             console.warn("[Meeting Copilot] title suggestion failed", e);
-            this.clearActionStatus();
+            if (!this.transcriptionRunning) this.clearActionStatus();
         } finally {
             this.titleSuggestingPaths.delete(file.path);
         }
@@ -2657,6 +2692,7 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     private async attachRecording(fileName: string) {
+        this.attaching = true;
         // Prefer the live TFile (survives a rename during recording); fall back
         // to the path captured at start.
         const noteRef = this.currentMeetingNote;
@@ -2737,6 +2773,7 @@ export default class SystemRecordingPlugin extends Plugin {
         } finally {
             // Release any back-to-back waiter now that the prior recording has
             // been fully linked/handled and shared state is clean.
+            this.attaching = false;
             this.resolveStopWaiters();
         }
     }

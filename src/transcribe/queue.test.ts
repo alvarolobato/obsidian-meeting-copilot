@@ -59,17 +59,26 @@ describe("TranscriptionQueue", () => {
 		expect(order).toEqual(["a-start", "a-end", "b-start", "b-end"]);
 	});
 
-	it("dedupes an id that is already queued or running", async () => {
+	it("dedupes an id that is already queued or running, settling both callers", async () => {
 		const q = new TranscriptionQueue();
 		const a = deferred();
 		const run = vi.fn(() => a.promise);
-		void q.enqueue({ id: "a", label: "A", run });
-		void q.enqueue({ id: "a", label: "A again", run });
+		const p1 = q.enqueue({ id: "a", label: "A", run });
+		const p2 = q.enqueue({ id: "a", label: "A again", run });
 		await Promise.resolve();
 		expect(run).toHaveBeenCalledTimes(1);
 		expect(q.has("a")).toBe(true);
 		expect(q.waitingCount).toBe(0);
+
+		// The deduped caller must settle with the real run's outcome, not early.
+		let p2Settled = false;
+		void p2.then(() => (p2Settled = true));
+		await Promise.resolve();
+		expect(p2Settled).toBe(false);
+
 		a.resolve();
+		await Promise.all([p1, p2]);
+		expect(p2Settled).toBe(true);
 	});
 
 	it("isolates a failing job from the rest of the queue", async () => {

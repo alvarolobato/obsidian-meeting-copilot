@@ -38,7 +38,13 @@ export interface SchedulerDeps {
 	registerInterval?: (id: number) => void;
 }
 
-/** The end boundary fires only if the clock is at/after it but within this window on a *live* tick. */
+/**
+ * Grace window used to tell a "live" boundary crossing (fired within this of the
+ * boundary) from a stale one recovered after a gap. The plugin uses it to decide
+ * whether a just-fired end means "offer to stop" vs "force stop" (a recording
+ * that outlived its meeting). The end boundary itself has no upper bound so a
+ * crossing missed while asleep still fires on wake.
+ */
 export const GRACE_MS = 2 * 60 * 1000;
 /** How far ahead each poll fetches events. */
 export const POLL_WINDOW_MS = 24 * 60 * 60 * 1000;

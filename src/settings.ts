@@ -69,7 +69,8 @@ export interface SystemRecordingSettings {
 	calendarAutoStop: boolean;
 	/**
 	 * How many minutes before an event's start to fire the "meeting is about to
-	 * start" notification. 0 fires it at the start time.
+	 * start" notification. 0 disables the pre-start notification (you're still
+	 * prompted at the start itself).
 	 */
 	notifyBeforeStartMinutes: number;
 	calendarId: string;
