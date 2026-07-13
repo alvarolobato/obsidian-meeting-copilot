@@ -127,6 +127,29 @@ if #available(macOS 13.0, *) {
         }
     }
 
+    // Set once the stop file is seen, so the no-audio watchdog doesn't race the
+    // finalize/exit path (frames are legitimately read after stop).
+    var stopRequested = false
+
+    // Fail fast on a dead capture. macOS delivers ZERO frames — silently, with
+    // no thrown error — when the helper binary's Screen Recording / Microphone
+    // TCC grant was invalidated (its code hash changed on an update). Without
+    // this, the user records an entire meeting into the void and only finds out
+    // at stop ("No audio was captured"). Both sources feed the mixer within a
+    // second or two even in silence, so nothing after this window means the
+    // capture is broken — report an actionable permission error while it still
+    // matters.
+    let watchdogSeconds = 8.0
+    DispatchQueue.global().asyncAfter(deadline: .now() + watchdogSeconds) {
+        guard !stopRequested else { return }
+        let frames = mixer.capturedFrames
+        if frames.system == 0 && frames.mic == 0 {
+            fail(
+                "No audio captured after \(Int(watchdogSeconds))s. Grant Obsidian BOTH Screen Recording and Microphone access in System Settings → Privacy & Security, then restart Obsidian and record again."
+            )
+        }
+    }
+
     // Duration ticker + stop file check every 0.5 seconds
     let startDate = Date()
     let ticker = DispatchSource.makeTimerSource(queue: .global())
@@ -135,6 +158,7 @@ if #available(macOS 13.0, *) {
         // Check if stop file exists
         if FileManager.default.fileExists(atPath: stopFilePath) {
             ticker.cancel()
+            stopRequested = true
             try? FileManager.default.removeItem(atPath: stopFilePath)
 
             Task {

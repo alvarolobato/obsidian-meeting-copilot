@@ -365,6 +365,10 @@ export const en = {
 			name: "GPT-assisted dictionary correction",
 			desc: "Use the model (instead of plain find-and-replace) to apply the dictionary more intelligently. Requires 'Custom dictionary correction' above.",
 		},
+		debugLogging: {
+			name: "Debug logging",
+			desc: "Log detailed transcription timing (per-chunk duration, rate-limit waits, retries) to the developer console (⌘⌥I). Verbose — leave off unless you're diagnosing slow or failing transcriptions.",
+		},
 		dictionary: {
 			name: "Dictionary",
 			desc: "One rule per line: misheard => correct. Example: elastic search => Elasticsearch. The top 50 rules by priority are applied — rules beyond that are silently ignored.",

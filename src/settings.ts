@@ -89,6 +89,8 @@ export interface SystemRecordingSettings {
 	sttTranscriptionSupported: boolean | null;
 	/** Whether the configured endpoint actually returns segment timestamps. null = never probed, or invalidated by a later config change. */
 	sttTimestampsSupported: boolean | null;
+	/** Verbose transcription logging (per-chunk timing, rate-limit waits, retries) to the developer console. Off by default. */
+	debugLogging: boolean;
 	/** The `${apiBaseUrl}::${sttModel}` the two flags above were determined against; a mismatch means they're stale. */
 	sttTimestampsProbeKey: string;
 	// Enrichment.
@@ -149,6 +151,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	sttTranscriptionSupported: null,
 	sttTimestampsSupported: null,
 	sttTimestampsProbeKey: "",
+	debugLogging: false,
 	enableEnrichment: true,
 	enrichModel: "gpt-4o",
 	enrichPrompt: DEFAULT_ENRICH_PROMPT,
@@ -729,6 +732,18 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.insertTranscript)
 					.onChange(async (value) => {
 						this.plugin.settings.insertTranscript = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName(s.settings.debugLogging.name)
+			.setDesc(s.settings.debugLogging.desc)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.debugLogging)
+					.onChange(async (value) => {
+						this.plugin.settings.debugLogging = value;
 						await this.plugin.saveSettings();
 					})
 			);

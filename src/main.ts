@@ -1423,7 +1423,7 @@ export default class SystemRecordingPlugin extends Plugin {
             postProcessingEnabled: s.postProcessingEnabled,
             dictionaryCorrectionEnabled: s.dictionaryCorrectionEnabled,
             userDictionaries: parseDictionary(s.dictionary),
-            debugMode: false,
+            debugMode: s.debugLogging,
         };
     }
 
