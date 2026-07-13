@@ -45,6 +45,15 @@ export function renderCurrentMeeting(opts: CurrentMeetingOptions): void {
 	const actions = card.createDiv({ cls: "meeting-copilot-current-actions" });
 
 	if (opts.recordingThis) {
+		// While recording, still let the user jump to the note (it exists once
+		// the recording started) — not just stop.
+		if (meeting.note) {
+			const openNote = actions.createEl("button", {
+				cls: "meeting-copilot-current-cta",
+				text: a.actions.openNote,
+			});
+			openNote.addEventListener("click", () => opts.onPrimary(meeting));
+		}
 		const stop = actions.createEl("button", {
 			cls: "meeting-copilot-current-cta meeting-copilot-current-cta-danger",
 			text: a.actions.stop,
