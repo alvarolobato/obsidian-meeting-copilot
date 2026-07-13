@@ -41,19 +41,32 @@ describe("isHallucinationPhrase", () => {
 		expect(isHallucinationPhrase("Transcription by CastingWords")).toBe(true);
 	});
 
-	it("flags a lone 'you' and repeated thank-yous", () => {
-		expect(isHallucinationPhrase("you")).toBe(true);
+	it("flags repeated thank-yous but not a bare 'you'", () => {
 		expect(isHallucinationPhrase("Thank you. Thank you. Thank you.")).toBe(true);
+		// A bare "you" is too plausible as real speech; left to confidence signals.
+		expect(isHallucinationPhrase("you")).toBe(false);
 	});
 
 	it("does NOT flag real sentences that merely contain a stock phrase", () => {
 		expect(
 			isHallucinationPhrase("Thank you for the update on the roadmap.")
 		).toBe(false);
+		expect(isHallucinationPhrase("Let me share my screen")).toBe(false);
+	});
+
+	it("does NOT flag real 'subscribe'/'like' meeting speech (tight CTA patterns)", () => {
 		expect(
 			isHallucinationPhrase("Can you subscribe me to the incident channel?")
 		).toBe(false);
-		expect(isHallucinationPhrase("Let me share my screen")).toBe(false);
+		expect(
+			isHallucinationPhrase("Please subscribe me to the incident channel")
+		).toBe(false);
+		expect(
+			isHallucinationPhrase("I'd like to subscribe to the premium tier")
+		).toBe(false);
+		expect(
+			isHallucinationPhrase("We should enable notifications for that alert rule")
+		).toBe(false);
 	});
 
 	it("does NOT flag short genuine utterances", () => {

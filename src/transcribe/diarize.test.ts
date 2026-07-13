@@ -166,12 +166,32 @@ describe("mergeDiarized", () => {
 			expect(mergeDiarized(me, [])).toBe("Me: quick point here");
 		});
 
-		it("drops a segment with a runaway compression ratio (looping gibberish)", () => {
+		it("drops looping gibberish (high compression ratio AND low logprob)", () => {
 			const me: DiarSegment[] = [
-				{ text: "la la la la la la", start: 0, end: 3, compressionRatio: 3.1 },
+				{ text: "la la la la la la", start: 0, end: 3, compressionRatio: 3.1, avgLogprob: -1.4 },
 				{ text: "actual content", start: 5, end: 7 },
 			];
 			expect(mergeDiarized(me, [])).toBe("Me: actual content");
+		});
+
+		it("keeps genuine repetition with a healthy logprob despite high compression", () => {
+			// "yes yes yes yes" compresses well too, but the model is confident.
+			const me: DiarSegment[] = [
+				{ text: "yes yes yes yes", start: 0, end: 2, compressionRatio: 3.0, avgLogprob: -0.2 },
+			];
+			expect(mergeDiarized(me, [])).toBe("Me: yes yes yes yes");
+		});
+
+		it("drops a stock phrase Whisper split across adjacent segments", () => {
+			// Neither half is a stock phrase alone, but folding the same-speaker
+			// segments reconstitutes "Thanks for watching" — the silent-stream case.
+			const me = [seg("Thanks", 30, 31), seg("for watching", 31, 32)];
+			expect(mergeDiarized(me, [])).toBe("");
+		});
+
+		it("keeps real speech that surrounds a split boundary", () => {
+			const them = [seg("Let me", 0, 1), seg("share my screen", 1, 2)];
+			expect(mergeDiarized([], them)).toBe("Them: Let me share my screen");
 		});
 	});
 

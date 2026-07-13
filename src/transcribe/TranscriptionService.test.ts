@@ -36,6 +36,13 @@ describe("isCapabilityMiss", () => {
 		expect(isCapabilityMiss([], "   ")).toBe(false);
 	});
 
+	it("is false when the no-segment text is nothing but a hallucination (issue #61)", () => {
+		// A proxy that drops the segments array on silence must not be read as
+		// timestamp-incapable — that would disable speaker separation forever.
+		expect(isCapabilityMiss([], "Thanks for watching!")).toBe(false);
+		expect(isCapabilityMiss([], "Please Like Subscribe and Enable Notifications")).toBe(false);
+	});
+
 	it("is false once the pass produced any segment", () => {
 		expect(isCapabilityMiss([{ text: "hi", start: 0, end: 1 }], "hi")).toBe(false);
 	});

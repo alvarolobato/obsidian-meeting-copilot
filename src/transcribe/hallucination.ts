@@ -11,9 +11,13 @@
  * transcript as a fake "Me:" line. Dropping these segments up front keeps the
  * merge clean.
  *
- * The match is deliberately WHOLE-segment: we only discard a segment whose
- * ENTIRE text (after light normalization) is a known artifact, never a real
- * sentence that merely contains one of these phrases. This keeps false
+ * The match is WHOLE-segment for the exact-phrase set and every anchored
+ * pattern: we discard a segment only when its ENTIRE text (after light
+ * normalization) is a known artifact, never a real sentence that merely
+ * contains one of these phrases. The one deliberate exception is a pair of CTA
+ * *adjacency* substrings ("like [and] subscribe", "subscribe … bell") that
+ * never occur in natural work-meeting speech; they're substring matches so they
+ * survive the surrounding filler Whisper pads the outro with. This keeps false
  * positives near zero — a real "thank you" inside a longer sentence survives,
  * and confidence-based filtering (see diarize) catches the rest.
  *
@@ -43,20 +47,20 @@ const PHRASE_PATTERNS: RegExp[] = [
 	/^thank(?:s| you)(?: (?:so |very )?much)? for watching$/,
 	/^thanks for watching$/,
 	/^thank you all for watching$/,
-	// Subscribe / like / notification-bell CTA family. These never occur as a
-	// standalone line in a real meeting, so a whole line built from them is a
-	// YouTube-outro hallucination.
+	// Subscribe / like / notification-bell CTA family. Kept tight so real
+	// meeting speech ("please subscribe me to the incident channel", "I'd like
+	// to subscribe to the premium tier") is NOT matched: whole-line outros, the
+	// "like[,] [and] subscribe" adjacency (never said naturally), or subscribe
+	// paired with a notification bell.
 	/^(?:please )?(?:like(?:,? and| and)? )?subscribe(?: to (?:my|the) channel)?$/,
 	/^(?:please )?(?:don'?t forget to )?(?:like and )?subscribe$/,
 	/^(?:hit the )?like (?:button )?and subscribe$/,
-	/^please\b.*\bsubscribe\b/,
-	/\bsubscribe\b.*\b(?:notifications?|the bell|bell icon)\b/,
-	/\b(?:like|comment)s?\b.*\bsubscribe\b/,
-	/\benable notifications?\b/,
+	/\blike,?\s+(?:and\s+)?subscribe\b/,
+	/\bsubscribe\b.*\b(?:the bell|bell icon|notification bell)\b/,
 	// Sign-off outros.
 	/^see you (?:next time|in the next (?:one|video))$/,
-	// Subtitle / caption credits.
-	/amara\.org/,
+	// Subtitle / caption credits (the classic "Subtitles by the Amara.org
+	// community" is caught by the "subtitles by …" / "…community" patterns).
 	/^subtitles? (?:by|provided by|created by|are provided by)\b.*/,
 	/^(?:transcription|transcribed|captions?) (?:by|provided by)\b.*/,
 	/^(?:english )?(?:sub)?titles?\s+.*community$/,
@@ -66,12 +70,13 @@ const PHRASE_PATTERNS: RegExp[] = [
  * Exact stock phrases (normalized) that are the entire segment. A lone
  * "thank you" over silence is a classic Whisper artifact; a real "thank you"
  * that's part of a sentence normalizes to a longer string and won't match.
+ * A bare "you" is intentionally NOT here — it's too plausible as real speech;
+ * the confidence signals catch it when it's a genuine silence ghost.
  */
 const EXACT_PHRASES = new Set<string>([
 	"thank you",
 	"thank you very much",
 	"thank you so much",
-	"you",
 ]);
 
 /**
@@ -91,9 +96,9 @@ function normalize(text: string): string {
 }
 
 /**
- * True when the segment's ENTIRE text is a known silence hallucination and
- * should be dropped before merging. Case-, punctuation-, and
- * whitespace-insensitive.
+ * True when the segment is a known silence hallucination and should be dropped
+ * before merging. Case-, punctuation-, and whitespace-insensitive. Matches the
+ * whole segment except for the two CTA-adjacency substrings noted above.
  */
 export function isHallucinationPhrase(text: string): boolean {
 	const raw = text.trim();

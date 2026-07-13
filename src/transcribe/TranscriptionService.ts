@@ -20,6 +20,7 @@ import { PathUtils } from "./vendor/utils/PathUtils";
 import { ProgressTracker } from "./vendor/ui/ProgressTracker";
 import { createSerialQueue } from "../util/serialize";
 import { mergeDiarized, type DiarSegment, type SpeechWindows } from "./diarize";
+import { stripHallucinatedLines } from "./hallucination";
 import en from "./vendor/i18n/translations/en";
 import ja from "./vendor/i18n/translations/ja";
 import ko from "./vendor/i18n/translations/ko";
@@ -149,14 +150,21 @@ function resultText(result: ControllerResult): string {
 }
 
 /**
- * A pass that produced no segments but non-blank text is a capability miss: the
- * endpoint transcribed the audio yet ignored the timestamp request, so we have
- * nothing to place on the shared clock and can't diarize. Distinguished from a
- * legitimately silent stream (no segments AND no text), which is fine, the
- * merge labels every line from the other stream and two silent streams give "".
+ * A pass that produced no segments but real (non-hallucination) text is a
+ * capability miss: the endpoint transcribed the audio yet ignored the timestamp
+ * request, so we have nothing to place on the shared clock and can't diarize.
+ *
+ * Distinguished from:
+ *   - a legitimately silent stream (no segments AND no text), and
+ *   - a SILENT stream whose text is nothing but a Whisper hallucination
+ *     ("Thanks for watching."): an endpoint that drops the segments array on
+ *     silence (some proxies do) must NOT be read as timestamp-incapable, or a
+ *     silent meeting would null the probe and disable speaker separation for
+ *     every future meeting (the #61 failure mode). Strip stock phrases first;
+ *     if nothing real remains, it's silence, not a miss.
  */
 export function isCapabilityMiss(segments: DiarSegment[], text: string): boolean {
-	return segments.length === 0 && text.trim().length > 0;
+	return segments.length === 0 && stripHallucinatedLines(text).length > 0;
 }
 
 /**

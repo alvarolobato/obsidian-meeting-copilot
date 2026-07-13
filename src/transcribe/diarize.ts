@@ -65,7 +65,16 @@ function isLowConfidenceHallucination(seg: DiarSegment): boolean {
 	) {
 		return true;
 	}
-	if (seg.compressionRatio !== undefined && seg.compressionRatio > COMPRESSION_RATIO_MAX) {
+	// A runaway compression ratio only counts as a hallucination when the text
+	// is ALSO low-probability. Genuine repetition ("yes yes yes", counting) has
+	// a high compression ratio too but a healthy avg_logprob, so requiring both
+	// avoids erasing real repetitive speech.
+	if (
+		seg.compressionRatio !== undefined &&
+		seg.compressionRatio > COMPRESSION_RATIO_MAX &&
+		seg.avgLogprob !== undefined &&
+		seg.avgLogprob < AVG_LOGPROB_MIN
+	) {
 		return true;
 	}
 	return false;
@@ -173,5 +182,12 @@ export function mergeDiarized(me: DiarSegment[], them: DiarSegment[], windows?: 
 		}
 	}
 
-	return lines.map((line) => `${SPEAKERS[line.speaker].label}: ${line.text}`).join("\n");
+	// Catch a hallucination Whisper split across adjacent segments ("Thanks" +
+	// "for watching") that each slipped the per-segment filter but reconstitute
+	// into a stock phrase once folded onto one speaker line. A fully-silent
+	// stream is the common case here (its whole line is the split phrase).
+	return lines
+		.filter((line) => !isHallucinationPhrase(line.text))
+		.map((line) => `${SPEAKERS[line.speaker].label}: ${line.text}`)
+		.join("\n");
 }
