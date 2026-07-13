@@ -155,6 +155,12 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
         }
         try stream.addStreamOutput(output, type: .audio, sampleHandlerQueue: .global())
         try await stream.startCapture()
+        // On a restart the previous stream already stopped (that's what fired
+        // didStopWithError), but stop + clear it defensively so we never leave a
+        // stale SCStream/output referenced after swapping in the new one.
+        if let old = self.stream {
+            try? await old.stopCapture()
+        }
         self.stream = stream
         self.streamOutput = output
     }

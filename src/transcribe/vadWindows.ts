@@ -126,12 +126,15 @@ export async function computeSpeechWindows(
 		// and they share the single vendored fvad module state.
 		const me = await windowsForFile(app, meFile);
 		const them = await windowsForFile(app, themFile);
-		console.warn(
+		// debug, not warn: this runs on every diarized pass and the fallback
+		// below is an expected, benign path (e.g. missing WASM on a BRAT
+		// install), so it shouldn't look like a problem in the console.
+		console.debug(
 			`[Meeting Copilot][vad] local VAD windows: me=${me.length}, them=${them.length}`
 		);
 		return { me, them };
 	} catch (error) {
-		console.warn(
+		console.debug(
 			"[Meeting Copilot][vad] local VAD unavailable; falling back to recorder RMS windows",
 			error
 		);
