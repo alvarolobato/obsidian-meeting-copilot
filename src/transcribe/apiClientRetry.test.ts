@@ -98,12 +98,12 @@ describe("ApiClient network-error retry", () => {
 		expect(calls).toHaveBeenCalledTimes(1);
 	});
 
-	it("does not retry after the signal aborts during backoff", async () => {
+	it("aborts immediately when the signal is already aborted at the catch", async () => {
 		const calls = vi.fn();
 		const controller = new AbortController();
 		__setRequestUrl(() => {
 			calls();
-			// Abort as soon as the first attempt fails, before the backoff elapses.
+			// Abort synchronously with the failure: the catch's first guard fires.
 			controller.abort();
 			throw new Error("net::ERR_NETWORK_IO_SUSPENDED");
 		});
@@ -112,6 +112,29 @@ describe("ApiClient network-error retry", () => {
 			/cancelled by user/
 		);
 		expect(calls).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not fire another request when aborted DURING the backoff", async () => {
+		// First attempt fails with a real network error and does NOT abort, so the
+		// retry branch is entered and awaits the backoff. The signal then aborts
+		// mid-delay, exercising the post-delay cancellation check specifically.
+		const calls = vi.fn();
+		const controller = new AbortController();
+		// Backoff long enough to abort within it.
+		const c = new TestClient({
+			baseUrl: "https://example.test",
+			apiKey: "k",
+			retryDelay: 50,
+			maxRetries: 3,
+		});
+		__setRequestUrl(() => {
+			calls();
+			throw new Error("net::ERR_NETWORK_IO_SUSPENDED");
+		});
+		setTimeout(() => controller.abort(), 5);
+
+		await expect(c.run(controller.signal)).rejects.toThrow(/cancelled by user/);
+		expect(calls).toHaveBeenCalledTimes(1); // no second request after abort
 	});
 
 	it("still retries HTTP 5xx (unchanged behavior)", async () => {
