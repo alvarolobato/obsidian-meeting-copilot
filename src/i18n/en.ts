@@ -87,6 +87,8 @@ export const en = {
 			"Set the AI endpoint (base URL + API key) in settings before transcribing.",
 		diarizationNoTimestamps:
 			"Speaker separation was skipped: the endpoint returned no timestamps this time. Run 'Load models' to re-check.",
+		diarizationNoTracks:
+			"No separate speaker tracks were recorded for this meeting — transcribing the single joint track instead.",
 	},
 	transcript: {
 		// Prepended to a speaker-separated transcript. Tells the enrichment model
@@ -172,6 +174,8 @@ export const en = {
 			copyLink: "Copy meeting link",
 			openRecording: "Open recording",
 			transcribe: "Transcribe recording",
+			transcribeDiarized: "Transcribe with speaker separation",
+			transcribeMixed: "Transcribe without speaker separation",
 			enrich: "Enrich with AI",
 			skipToday: "Hide for today",
 		},
@@ -399,6 +403,10 @@ export const en = {
 		postProcessing: {
 			name: "GPT-assisted dictionary correction",
 			desc: "Use the model (instead of plain find-and-replace) to apply the dictionary more intelligently. Requires 'Custom dictionary correction' above.",
+		},
+		debugLogging: {
+			name: "Debug logging",
+			desc: "Log detailed transcription timing (per-chunk duration, rate-limit waits, retries) to the developer console (⌘⌥I). Verbose — leave off unless you're diagnosing slow or failing transcriptions.",
 		},
 		dictionary: {
 			name: "Dictionary",
