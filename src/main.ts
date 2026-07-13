@@ -325,7 +325,11 @@ export default class SystemRecordingPlugin extends Plugin {
             // Fatal failures (spawn error / non-zero exit) flip isRecording off
             // before invoking onError; a stderr line while still recording is
             // non-fatal, so only reset the UI when recording has truly stopped.
-            if (!this.recorder.isRecording) this.resetRecordingUi();
+            // Skip while attachRecording is in flight — a late stderr/exit line
+            // must not tear down state (or early-release a back-to-back waiter)
+            // mid-attach; attachRecording's finally owns that teardown.
+            if (!this.recorder.isRecording && !this.attaching)
+                this.resetRecordingUi();
         };
 
 		this.updateScheduler();
@@ -1008,6 +1012,17 @@ export default class SystemRecordingPlugin extends Plugin {
 		});
 	}
 
+	/**
+	 * Dismisses the current persistent meeting prompt (if any). Used once a
+	 * decision has been made for the meeting (auto-start fired, we're already
+	 * recording it, or it just ended) so a now-stale prompt doesn't linger or
+	 * stack under a new one.
+	 */
+	private dismissMeetingNotice(): void {
+		this.lastMeetingNotice?.hide();
+		this.lastMeetingNotice = null;
+	}
+
 	private async fetchCalendarEvents(
 		minMs: number,
 		maxMs: number
@@ -1058,6 +1073,9 @@ export default class SystemRecordingPlugin extends Plugin {
 		// any prior recording first). Skip if we're already recording this event
 		// (e.g. the user hit Record on the lead-time prompt).
 		if (this.settings.calendarAutoStart) {
+			// The lead-time heads-up is now moot — recording is (or is about to
+			// be) underway — so clear it rather than leaving it on screen.
+			this.dismissMeetingNotice();
 			if (this.currentRecordingEventId !== event.id) {
 				new Notice(t().event.autoStarted(event.summary));
 				void this.startMeetingRecording(this.toMeetingInfo(event), event.end);
@@ -1068,7 +1086,10 @@ export default class SystemRecordingPlugin extends Plugin {
 		// Otherwise prompt — unless the user already started recording this event
 		// from the lead-time prompt (its Record button), in which case there's
 		// nothing to ask.
-		if (this.currentRecordingEventId === event.id) return;
+		if (this.currentRecordingEventId === event.id) {
+			this.dismissMeetingNotice();
+			return;
+		}
 		const lateMs = Date.now() - event.start;
 		const subtitle =
 			lateMs > GRACE_MS
@@ -1208,11 +1229,15 @@ export default class SystemRecordingPlugin extends Plugin {
 		// not keep running, so stop it regardless of the setting.
 		const lateMs = Date.now() - event.end;
 		if (this.settings.calendarAutoStop || lateMs > GRACE_MS) {
+			this.dismissMeetingNotice();
 			new Notice(t().event.autoStopped(event.summary));
 			this.stopRecording();
 			return;
 		}
 
+		// Drop any lingering start/upcoming prompt for this meeting so the "ended"
+		// prompt replaces it rather than stacking beneath it.
+		this.dismissMeetingNotice();
 		actionNotice(
 			t().event.ended(event.summary),
 			t().event.stopRecordingAction,
