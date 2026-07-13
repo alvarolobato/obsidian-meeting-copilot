@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isHallucinationPhrase, stripHallucinatedLines } from "./hallucination";
+import {
+	collapseRepetitions,
+	isHallucinationPhrase,
+	stripHallucinatedLines,
+} from "./hallucination";
 
 describe("isHallucinationPhrase", () => {
 	it("flags an empty or whitespace-only segment", () => {
@@ -132,5 +136,59 @@ describe("stripHallucinatedLines", () => {
 	it("leaves a clean transcript untouched", () => {
 		const text = "First point.\nSecond point.";
 		expect(stripHallucinatedLines(text)).toBe(text);
+	});
+
+	it("collapses a decoder repetition loop within a line", () => {
+		expect(
+			stripHallucinatedLines(
+				"all right, all right, all right, all right, all right, all right"
+			)
+		).toBe("all right,");
+	});
+});
+
+describe("collapseRepetitions", () => {
+	it("collapses a repeated short phrase to a single occurrence", () => {
+		expect(
+			collapseRepetitions(
+				"all right, all right, all right, all right, all right, all right, all right, all right"
+			)
+		).toBe("all right,");
+	});
+
+	it("keeps two of a single word hammered many times", () => {
+		expect(collapseRepetitions("yeah, yeah, yeah, yeah, yeah, yeah")).toBe(
+			"yeah, yeah,"
+		);
+	});
+
+	it("collapses a long clause duplicated verbatim back-to-back", () => {
+		const clause = "what you're doing is massively overlapping the context engine and";
+		expect(collapseRepetitions(`${clause} ${clause}`)).toBe(clause);
+	});
+
+	it("does NOT touch a natural double", () => {
+		expect(collapseRepetitions("yeah yeah")).toBe("yeah yeah");
+		expect(collapseRepetitions("Yeah. Yeah.")).toBe("Yeah. Yeah.");
+	});
+
+	it("does NOT touch a triple of a single word (below the 4x floor)", () => {
+		expect(collapseRepetitions("no no no")).toBe("no no no");
+	});
+
+	it("does NOT collapse an ordinary sentence with a repeated common word", () => {
+		const s = "we need to solve for that and then move on to the next thing";
+		expect(collapseRepetitions(s)).toBe(s);
+	});
+
+	it("leaves short input untouched", () => {
+		expect(collapseRepetitions("hello")).toBe("hello");
+		expect(collapseRepetitions("")).toBe("");
+	});
+
+	it("collapses a repeated 2-word phrase but keeps trailing real speech", () => {
+		expect(
+			collapseRepetitions("all right, all right, all right, so what's the timeline?")
+		).toBe("all right, so what's the timeline?");
 	});
 });

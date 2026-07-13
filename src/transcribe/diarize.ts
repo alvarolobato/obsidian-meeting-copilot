@@ -6,7 +6,7 @@
  * segments back into one speaker-labelled transcript.
  */
 
-import { isHallucinationPhrase } from "./hallucination";
+import { collapseRepetitions, isHallucinationPhrase } from "./hallucination";
 
 export interface DiarSegment {
 	text: string;
@@ -186,7 +186,10 @@ function dropCrossTalk(meSegs: DiarSegment[], themSegs: DiarSegment[]): DiarSegm
  */
 function prepareStream(segments: DiarSegment[], windows?: Array<[number, number]>): DiarSegment[] {
 	const sorted = segments
-		.map((s) => ({ ...s, text: s.text.trim() }))
+		// Collapse decoder repetition loops per segment up front ("all right,
+		// all right, …", a clause duplicated verbatim) so the shared-clock merge,
+		// the overlap-dedup below, and the window filter all see cleaned text.
+		.map((s) => ({ ...s, text: collapseRepetitions(s.text.trim()) }))
 		.filter((s) => s.text.length > 0)
 		// Drop silence hallucinations before they reach the shared clock: the
 		// endpoint's own confidence signals (when present) and a whole-segment

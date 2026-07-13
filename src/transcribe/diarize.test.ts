@@ -273,21 +273,26 @@ describe("mergeDiarized", () => {
 			expect(mergeDiarized(me, [])).toBe("Me: actual content");
 		});
 
-		it("keeps genuine repetition with a healthy logprob despite high compression", () => {
-			// "yes yes yes yes" compresses well too, but the model is confident.
+		it("does not DROP a confident high-compression segment, but collapses the loop", () => {
+			// A healthy logprob keeps isLowConfidenceHallucination from dropping
+			// the segment — but the text-level collapser still trims a runaway
+			// single-word loop to two (endpoint gives no way to tell it from a
+			// decoder loop, and in practice it always is one).
 			const me: DiarSegment[] = [
 				{ text: "yes yes yes yes", start: 0, end: 2, compressionRatio: 3.0, avgLogprob: -0.2 },
 			];
-			expect(mergeDiarized(me, [])).toBe("Me: yes yes yes yes");
+			expect(mergeDiarized(me, [])).toBe("Me: yes yes");
 		});
 
-		it("keeps a high-compression segment when no avg_logprob is present", () => {
-			// Compression alone is not enough to drop; endpoints that omit
-			// avg_logprob must never lose real repetitive speech.
+		it("collapses a high-compression loop even when no avg_logprob is present", () => {
+			// Compression alone can't DROP the segment (endpoints that omit
+			// avg_logprob must not lose real speech), but the collapser trims the
+			// loop — the gateway strips confidence signals, so this is the only
+			// backstop against "no no no no no …".
 			const me: DiarSegment[] = [
 				{ text: "no no no no no", start: 0, end: 2, compressionRatio: 3.5 },
 			];
-			expect(mergeDiarized(me, [])).toBe("Me: no no no no no");
+			expect(mergeDiarized(me, [])).toBe("Me: no no");
 		});
 
 		it("drops a stock phrase Whisper split across adjacent segments", () => {

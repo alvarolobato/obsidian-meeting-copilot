@@ -145,6 +145,70 @@ export function isHallucinationPhrase(text: string): boolean {
 }
 
 /**
+ * Collapse runaway consecutive repetitions Whisper emits when its decoder
+ * "loops" on low-information or noisy audio: a word hammered over and over
+ * ("yeah, yeah, yeah, yeah, yeah"), a short phrase ("all right, all right, all
+ * right, …"), or a whole clause duplicated verbatim back-to-back.
+ *
+ * These are NOT the stock silence phrases above — they're the decoder getting
+ * stuck. Whisper's own `compression_ratio` signal flags them, but our LiteLLM
+ * gateway strips per-segment confidence signals, so `isLowConfidenceHallucination`
+ * (see diarize) is a no-op here and these loops reach the transcript untouched.
+ * We detect the repetition directly in the text instead.
+ *
+ * The collapse is length-aware to protect real speech, and only ever trims
+ * IMMEDIATELY consecutive repeats (never distant ones):
+ *  - a single word must repeat ≥4x in a row before trimming, and we keep two —
+ *    so natural "yeah, yeah" and emphatic doubles survive;
+ *  - a 2–4 word phrase must repeat ≥3x (kept once);
+ *  - a 5+ word phrase collapses at ≥2x — verbatim repetition of a long clause
+ *    is almost never real speech.
+ * The shortest repeating period wins (so "all right, all right, …" collapses on
+ * the 2-word unit, not a 4-word one).
+ */
+export function collapseRepetitions(text: string): string {
+	const words = text.split(/\s+/).filter((w) => w.length > 0);
+	if (words.length < 2) return text;
+
+	// Case-insensitive, punctuation-stripped key so "Right," == "right".
+	const key = (w: string): string => w.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+	const MAX_NGRAM = 12;
+	const minReps = (n: number): number => (n === 1 ? 4 : n <= 4 ? 3 : 2);
+	const keepCount = (n: number): number => (n === 1 ? 2 : 1);
+
+	const out: string[] = [];
+	let i = 0;
+	while (i < words.length) {
+		let collapsed = false;
+		// Shortest period first so periodic loops collapse on their true unit.
+		const maxN = Math.min(MAX_NGRAM, Math.floor((words.length - i) / 2));
+		for (let n = 1; n <= maxN; n++) {
+			const block = words.slice(i, i + n).map(key).join(" ");
+			if (block.replace(/\s/g, "").length === 0) continue; // punctuation-only
+			let reps = 1;
+			let j = i + n;
+			while (j + n <= words.length) {
+				if (words.slice(j, j + n).map(key).join(" ") !== block) break;
+				reps++;
+				j += n;
+			}
+			if (reps >= minReps(n)) {
+				const keep = Math.min(keepCount(n), reps);
+				out.push(...words.slice(i, i + keep * n));
+				i += reps * n;
+				collapsed = true;
+				break;
+			}
+		}
+		if (!collapsed) {
+			out.push(words[i] as string);
+			i++;
+		}
+	}
+	return out.join(" ");
+}
+
+/**
  * Strip whole-line hallucinations from a plain (non-diarized) transcript.
  *
  * The diarized path filters per segment before merging, but the mixed-file path
@@ -161,6 +225,9 @@ export function stripHallucinatedLines(text: string): string {
 	return text
 		.split("\n")
 		.filter((line) => line.trim().length === 0 || !isHallucinationPhrase(line))
+		// Collapse per-line repetition loops too (the mixed path has no segment
+		// seam, so a stuck "all right, all right, …" arrives as one long line).
+		.map((line) => (line.trim().length === 0 ? line : collapseRepetitions(line)))
 		.join("\n")
 		.trim();
 }
