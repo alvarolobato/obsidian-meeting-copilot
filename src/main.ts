@@ -123,6 +123,9 @@ export default class SystemRecordingPlugin extends Plugin {
     private recorder = new Recorder();
     private provisioner = new BinaryProvisioner(nodeDeps());
     private starting = false;
+    /** Dedupe identical capture warnings so a flapping device can't spam. */
+    private lastWarningMessage: string | null = null;
+    private lastWarningAt = 0;
     private statusBarEl: HTMLElement | null = null;
     private statusTimeout: number | null = null;
     private durationInterval: number | null = null;
@@ -1712,8 +1715,19 @@ export default class SystemRecordingPlugin extends Plugin {
         } else if (status.status === "warning") {
             // Non-fatal: a capture path hit trouble (usually a device-change
             // restart that didn't take). Recording continues, but tell the user
-            // so a silent stream isn't discovered only at stop.
-            if (status.message) new Notice(status.message);
+            // so a silent stream isn't discovered only at stop. Coalesce so a
+            // flapping device can't spam identical Notices.
+            const msg = status.message;
+            const now = Date.now();
+            if (
+                msg &&
+                (msg !== this.lastWarningMessage ||
+                    now - this.lastWarningAt > 30_000)
+            ) {
+                this.lastWarningMessage = msg;
+                this.lastWarningAt = now;
+                new Notice(msg);
+            }
         }
     }
 

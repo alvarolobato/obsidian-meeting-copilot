@@ -122,38 +122,40 @@ if #available(macOS 13.0, *) {
         emitJSON(["status": "warning", "message": message])
     }
 
-    // Start capture
-    _ = Task {
-        do {
-            try await captureManager.startCapture()
-            emitJSON(["status": "recording", "duration": 0])
-        } catch {
-            emitJSON(["status": "error", "message": "Failed to start capture: \(error.localizedDescription)"])
-            exit(1)
-        }
-    }
-
-    // Set once the stop file is seen, so the no-audio watchdog doesn't race the
-    // finalize/exit path (frames are legitimately read after stop).
-    var stopRequested = false
-
     // Fail fast on a dead capture. Both sources feed the mixer within a second
-    // or two even in silence, so zero frames well past that means capture never
-    // came up — most often because an audio device change (Zoom launching after
-    // we start and grabbing the input/output device) stopped both paths before
-    // the recovery could re-establish them, or because the helper's Screen
+    // or two even in silence, so zero frames well past capture start means it
+    // never came up — most often because an audio device change (Zoom launching
+    // after we start and grabbing the input/output device) stopped both paths
+    // before recovery could re-establish them, or because the helper's Screen
     // Recording / Microphone TCC grant was invalidated (its code hash changed on
-    // an update). Either way, without this the user records a whole meeting into
-    // the void and only learns at stop ("No audio was captured"). Report it
-    // while it's still actionable.
-    let watchdogSeconds = 8.0
-    DispatchQueue.global().asyncAfter(deadline: .now() + watchdogSeconds) {
-        guard !stopRequested else { return }
+    // an update). Without this the user records a whole meeting into the void and
+    // only learns at stop ("No audio was captured").
+    //
+    // Scheduled only AFTER startCapture() reports "recording" (so a slow
+    // SCShareableContent call or a first-run TCC prompt doesn't count against the
+    // window) and cancelled the moment stop is requested — a DispatchWorkItem so
+    // cancellation is thread-safe and can't race the finalize/exit path.
+    let watchdogSeconds = 15.0
+    let watchdog = DispatchWorkItem {
         let frames = mixer.capturedFrames
         if frames.system == 0 && frames.mic == 0 {
             fail(
                 "No audio captured after \(Int(watchdogSeconds))s. If a meeting app (e.g. Zoom) started after recording, stop and start recording again once it's running. Otherwise grant Obsidian both Screen Recording and Microphone access in System Settings → Privacy & Security and restart Obsidian."
             )
+        }
+    }
+
+    // Start capture
+    _ = Task {
+        do {
+            try await captureManager.startCapture()
+            emitJSON(["status": "recording", "duration": 0])
+            DispatchQueue.global().asyncAfter(
+                deadline: .now() + watchdogSeconds, execute: watchdog
+            )
+        } catch {
+            emitJSON(["status": "error", "message": "Failed to start capture: \(error.localizedDescription)"])
+            exit(1)
         }
     }
 
@@ -165,7 +167,8 @@ if #available(macOS 13.0, *) {
         // Check if stop file exists
         if FileManager.default.fileExists(atPath: stopFilePath) {
             ticker.cancel()
-            stopRequested = true
+            // Cancel the no-audio watchdog so it can't fire during finalize.
+            watchdog.cancel()
             try? FileManager.default.removeItem(atPath: stopFilePath)
 
             Task {

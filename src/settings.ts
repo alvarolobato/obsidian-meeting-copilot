@@ -143,11 +143,12 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	postProcessingEnabled: false,
 	dictionaryCorrectionEnabled: false,
 	dictionary: "",
-	// On by default: local WebRTC VAD gates each stream's silence and cross-talk
-	// bleed is de-duped, so the me/them merge is clean. The cost is two full
-	// transcription passes (~2x time vs the mixed path); turn it off per-vault
-	// if speed matters more than speaker labels.
-	diarizationEnabled: true,
+	// Off by default: diarization runs two full transcription passes (~2x the
+	// time of the mixed path) and speaker separation is still being hardened.
+	// Turn it on per-vault to get me/them labels; local WebRTC VAD then gates
+	// each stream's silence and cross-talk bleed is de-duped so the merge stays
+	// clean. Manual re-transcribe can also force it on/off per run.
+	diarizationEnabled: false,
 	sttTranscriptionSupported: null,
 	sttTimestampsSupported: null,
 	sttTimestampsProbeKey: "",

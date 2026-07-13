@@ -22,11 +22,23 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
     // default input/output device (or spins up its own aggregate device), which
     // stops the AVAudioEngine input node and can stop the SCStream. Without the
     // recovery below both go silent for the whole meeting ("No audio was
-    // captured"). All access is behind `restartLock` via the synchronous
-    // helpers below (never lock/unlock directly from an async context).
+    // captured").
+    //
+    // Correctness rules for the recovery, since restarts fire from arbitrary
+    // threads (the config-change notification, the SCStream delegate) while
+    // stopCapture() runs on the stop Task:
+    //   * `restartLock` guards the flags below (via the synchronous helpers).
+    //   * mic restarts run on `controlQueue` (serialized, and off the
+    //     notification poster's thread); stopCapture() drains it with a barrier
+    //     so no mic restart is mid-flight during teardown.
+    //   * every restart re-checks `capturing()` AFTER its (possibly async) start
+    //     and tears down anything it created if stop won the race — so a restart
+    //     can never resurrect capture after stop.
     private let restartLock = NSLock()
+    private let controlQueue = DispatchQueue(label: "com.meetingcopilot.audio-control")
     private var isCapturing = false
     private var restartingSystem = false
+    private var restartingMic = false
     private var micRestarts = 0
     private var systemRestarts = 0
     private static let maxRestarts = 30
@@ -60,28 +72,31 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
         restartingSystem = false
     }
 
-    /// Claim a mic-engine restart. Returns false if stopped or capped.
+    /// Claim a mic-engine restart. Returns false if stopped, one is already in
+    /// flight, or the cap was hit.
     private func beginMicRestart() -> Bool {
         restartLock.lock(); defer { restartLock.unlock() }
-        guard isCapturing, micRestarts < Self.maxRestarts else { return false }
+        guard isCapturing, !restartingMic, micRestarts < Self.maxRestarts else {
+            return false
+        }
+        restartingMic = true
         micRestarts += 1
         return true
+    }
+
+    private func endMicRestart() {
+        restartLock.lock(); defer { restartLock.unlock() }
+        restartingMic = false
     }
 
     // MARK: - Start capturing
 
     func startCapture() async throws {
-        try await startSystemStream()
-        try startMicEngine()
-        setCapturing(true)
-
-        // Rebuild the mic tap whenever the audio graph reconfigures (default
-        // device switch, sample-rate change, headset (un)plug). The engine stops
-        // its input node on this notification, so without a rebuild the tap never
-        // fires again. Registered once with object: nil since we recreate the
-        // engine instance on each restart. The mixer drains + recreates its
-        // converter when the source format changes, so a new device format is
-        // handled downstream.
+        // Register the config-change observer up front so a device change during
+        // start-up isn't missed once we're capturing. It's gated by isCapturing
+        // inside restartMicEngine(), so a change before we finish starting is a
+        // no-op (the initial startMicEngine() binds to the current device
+        // anyway). object: nil since we recreate the engine on each restart.
         configChangeObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
             object: nil,
@@ -89,6 +104,13 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
         ) { [weak self] _ in
             self?.restartMicEngine()
         }
+
+        try await startSystemStream()
+        try startMicEngine()
+        setCapturing(true)
+
+        // If stop somehow raced start-up, don't leave capture running.
+        if !capturing() { await stopCapture() }
     }
 
     // MARK: - System audio (ScreenCaptureKit)
@@ -148,12 +170,21 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
         }
         Task { [weak self] in
             guard let self else { return }
+            defer { self.endSystemRestart() }
+            guard self.capturing() else { return }
             do {
                 try await self.startSystemStream()
             } catch {
                 self.onWarning?("Failed to restart system-audio capture after a device change: \(error.localizedDescription)")
+                return
             }
-            self.endSystemRestart()
+            // Stop won the race while we awaited: tear down what we just started
+            // so capture isn't resurrected past stopCapture().
+            if !self.capturing(), let s = self.stream {
+                try? await s.stopCapture()
+                self.stream = nil
+                self.streamOutput = nil
+            }
         }
     }
 
@@ -172,20 +203,32 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
         self.audioEngine = engine
     }
 
-    /// Tear down and rebuild the mic engine/tap after an audio-graph
-    /// reconfiguration. Runs on the notification's thread.
+    private func teardownMicEngine() {
+        audioEngine?.inputNode.removeTap(onBus: 0)
+        audioEngine?.stop()
+        audioEngine = nil
+    }
+
+    /// Rebuild the mic engine/tap after an audio-graph reconfiguration. Claimed
+    /// via beginMicRestart() (coalesces bursts, one in flight) then run on
+    /// controlQueue so it's serialized against other restarts and stopCapture's
+    /// barrier, and off the notification poster's thread.
     private func restartMicEngine() {
         guard beginMicRestart() else { return }
+        controlQueue.async { [weak self] in
+            guard let self else { return }
+            defer { self.endMicRestart() }
+            guard self.capturing() else { return }
 
-        if let engine = audioEngine {
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
-        }
-        audioEngine = nil
-        do {
-            try startMicEngine()
-        } catch {
-            onWarning?("Failed to restart microphone capture after a device change: \(error.localizedDescription)")
+            self.teardownMicEngine()
+            do {
+                try self.startMicEngine()
+            } catch {
+                self.onWarning?("Failed to restart microphone capture after a device change: \(error.localizedDescription)")
+                return
+            }
+            // Stop raced us: don't leave a resurrected engine running.
+            if !self.capturing() { self.teardownMicEngine() }
         }
     }
 
@@ -198,13 +241,16 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
             NotificationCenter.default.removeObserver(observer)
             configChangeObserver = nil
         }
+        // Drain any in-flight mic restart: it re-checks capturing() (now false)
+        // and bails, so after this barrier no restart can touch audioEngine.
+        controlQueue.sync {}
+
         if let stream = stream {
             try? await stream.stopCapture()
             self.stream = nil
+            self.streamOutput = nil
         }
-        audioEngine?.stop()
-        audioEngine?.inputNode.removeTap(onBus: 0)
-        audioEngine = nil
+        teardownMicEngine()
     }
 }
 
