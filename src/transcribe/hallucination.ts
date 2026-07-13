@@ -56,7 +56,7 @@ const PHRASE_PATTERNS: RegExp[] = [
 	/^(?:please )?(?:don'?t forget to )?(?:like and )?subscribe$/,
 	/^(?:hit the )?like (?:button )?and subscribe$/,
 	/\blike,?\s+(?:and\s+)?subscribe\b/,
-	/\bsubscribe\b.*\b(?:the bell|bell icon|notification bell)\b/,
+	/\bsubscribe\b.*\b(?:bell icon|notification bell|(?:hit|ring) the bell|the bell button)\b/,
 	// Sign-off outros.
 	/^see you (?:next time|in the next (?:one|video))$/,
 	// Subtitle / caption credits (the classic "Subtitles by the Amara.org

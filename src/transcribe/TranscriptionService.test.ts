@@ -43,6 +43,12 @@ describe("isCapabilityMiss", () => {
 		expect(isCapabilityMiss([], "Please Like Subscribe and Enable Notifications")).toBe(false);
 	});
 
+	it("is still a miss when real text is mixed with a hallucinated line", () => {
+		// Stripping only removes the stock line; the real line proves the
+		// endpoint transcribed audio but dropped timestamps => capability miss.
+		expect(isCapabilityMiss([], "Thanks for watching!\nhello there")).toBe(true);
+	});
+
 	it("is false once the pass produced any segment", () => {
 		expect(isCapabilityMiss([{ text: "hi", start: 0, end: 1 }], "hi")).toBe(false);
 	});

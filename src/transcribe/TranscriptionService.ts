@@ -238,10 +238,11 @@ export function shouldInvalidateProbe(result: DiarizedResult): boolean {
  *   - the hallucination cleaner (postProcessMergedText / cleanText in the
  *     strategy), which likewise runs on merged text only.
  *
- * If a pass is a capability miss (no segments but non-blank text, i.e. the
- * endpoint ignored the timestamp request) this resolves with `diarized: false`
- * so the caller can fall back to transcribing the mixed-down file. A truly
- * silent stream (no segments, no text) is not a miss and we proceed.
+ * If a pass is a capability miss (no segments but real, non-hallucination
+ * text, i.e. the endpoint ignored the timestamp request) this resolves with
+ * `diarized: false` so the caller can fall back to transcribing the mixed-down
+ * file. A truly silent stream — no segments and either no text or only stock
+ * hallucination text — is not a miss and we proceed (see {@link isCapabilityMiss}).
  */
 export function transcribeDiarized(
 	app: App,

@@ -182,6 +182,15 @@ describe("mergeDiarized", () => {
 			expect(mergeDiarized(me, [])).toBe("Me: yes yes yes yes");
 		});
 
+		it("keeps a high-compression segment when no avg_logprob is present", () => {
+			// Compression alone is not enough to drop; endpoints that omit
+			// avg_logprob must never lose real repetitive speech.
+			const me: DiarSegment[] = [
+				{ text: "no no no no no", start: 0, end: 2, compressionRatio: 3.5 },
+			];
+			expect(mergeDiarized(me, [])).toBe("Me: no no no no no");
+		});
+
 		it("drops a stock phrase Whisper split across adjacent segments", () => {
 			// Neither half is a stock phrase alone, but folding the same-speaker
 			// segments reconstitutes "Thanks for watching" — the silent-stream case.
@@ -189,9 +198,27 @@ describe("mergeDiarized", () => {
 			expect(mergeDiarized(me, [])).toBe("");
 		});
 
+		it("drops another split outro family (see you / next time)", () => {
+			const them = [seg("See you", 40, 41), seg("next time", 41, 42)];
+			expect(mergeDiarized([], them)).toBe("");
+		});
+
 		it("keeps real speech that surrounds a split boundary", () => {
 			const them = [seg("Let me", 0, 1), seg("share my screen", 1, 2)];
 			expect(mergeDiarized([], them)).toBe("Them: Let me share my screen");
+		});
+
+		it("keeps a folded line where real content sits beside a split ghost tail", () => {
+			// Whole-line filter is conservative: when a ghost is split into
+			// fragments that each pass the per-segment filter and fold onto a line
+			// that also carries genuine content, the line is kept (real content
+			// present). A whole ghost segment would already be dropped upstream.
+			const me = [
+				seg("okay sounds good", 0, 2),
+				seg("thanks", 2, 3),
+				seg("for watching", 3, 4),
+			];
+			expect(mergeDiarized(me, [])).toBe("Me: okay sounds good thanks for watching");
 		});
 	});
 
