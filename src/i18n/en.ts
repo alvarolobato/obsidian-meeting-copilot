@@ -14,6 +14,7 @@ export const en = {
 		toggleAiNotes: "Toggle AI notes visibility",
 		cleanupRecordings: "Clean up old recordings",
 		createDashboard: "Create/update meetings dashboard",
+		cancelTranscription: "Cancel transcription",
 	},
 	adhoc: {
 		defaultTitle: "Meeting",
@@ -76,6 +77,11 @@ export const en = {
 		transcribePartial:
 			"Transcription only partially succeeded — not inserted. Try again.",
 		transcribeInProgress: "This recording is already being transcribed…",
+		transcribeQueued: (name: string) => `Queued "${name}" for transcription`,
+		transcribeCancelled: "Transcription cancelled",
+		nothingTranscribing: "No transcription is running.",
+		recordingsPending: (n: number) =>
+			`${n} recording${n === 1 ? "" : "s"} still need transcribing — open the meetings dashboard to finish them.`,
 		transcribeNoNote: (audio: string) =>
 			`Transcribed "${audio}" but found no meeting note to add it to.`,
 		transcribeNoEndpoint:
@@ -97,8 +103,15 @@ export const en = {
 		enrichFailed: "Enrichment failed",
 		transcribing: "Transcribing…",
 		transcribingProgress: (pct: number) => `Transcribing… ${pct}%`,
+		transcribingNamed: (name: string) => `Transcribing ${name}…`,
+		transcribingNamedProgress: (name: string, pct: number) =>
+			`Transcribing ${name}… ${pct}%`,
+		queued: (name: string) => `Queued: ${name}`,
+		queuedCount: (name: string, n: number) =>
+			`Transcribing ${name}… (+${n} queued)`,
 		transcriptAdded: "Transcript added",
 		transcribeFailed: "Transcription failed",
+		transcribeCancelled: "Transcription cancelled",
 		creatingNote: "Creating note…",
 	},
 	event: {
@@ -107,6 +120,20 @@ export const en = {
 		startRecordingAction: "Start recording",
 		createNoteAndRecord: "Create note and start recording",
 		stopRecordingAction: "Stop recording",
+		// Meeting-start prompt (native notification → in-app prompt / modal).
+		startsInMin: (min: number) =>
+			`Starts in ${min} min${min === 1 ? "" : "s"}`,
+		startingNow: "Starting now",
+		startedMinAgo: (min: number) =>
+			`Started ${min} min${min === 1 ? "" : "s"} ago`,
+		notificationHint: "click for options",
+		willAutoRecord: "Recording will start automatically",
+		join: "Join",
+		record: "Record",
+		joinAndRecord: "Join & record",
+		dismiss: "Dismiss",
+		autoStarted: (title: string) => `Recording "${title}"`,
+		autoStopped: (title: string) => `"${title}" ended — recording stopped`,
 	},
 	agenda: {
 		title: "Meetings",
@@ -248,8 +275,20 @@ export const en = {
 			buttonAuthenticate: "Authenticate",
 		},
 		calendarAutoRecord: {
-			name: "Calendar auto-recording",
-			desc: "Shows a notification to start recording at each event's start time.",
+			name: "Calendar meeting notifications",
+			desc: "Notify you around each event's start with Join / Record options. Turn on 'Auto-start recording' below for hands-free recording.",
+		},
+		notifyBeforeStart: {
+			name: "Notify before start (minutes)",
+			desc: "How many minutes before a meeting starts to show the notification. 0 notifies exactly at the start time (0–60).",
+		},
+		calendarAutoStart: {
+			name: "Auto-start recording",
+			desc: "Start recording automatically when a calendar meeting begins, instead of only prompting. Back-to-back meetings stop the previous recording first.",
+		},
+		calendarAutoStop: {
+			name: "Auto-stop recording",
+			desc: "Stop a calendar meeting's recording automatically when the event ends. A recording that outlives its meeting (e.g. after the laptop sleeps) is always stopped on the next check regardless of this setting.",
 		},
 		targetCalendarId: {
 			name: "Target calendar ID",
