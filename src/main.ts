@@ -163,8 +163,13 @@ export default class SystemRecordingPlugin extends Plugin {
 	);
 	/** Calendar event ids whose meeting link was already auto-opened, so it opens once. */
 	private openedLinkEventIds = new Set<string>();
-	/** The in-app meeting prompt currently on screen, superseded when a newer one fires. */
-	private lastMeetingNotice: Notice | null = null;
+	/**
+	 * In-app meeting prompts currently on screen, keyed by meeting (calendar
+	 * event id, or a detection key). A new prompt for the *same* key supersedes
+	 * its predecessor (upcoming → start), while distinct meetings coexist so
+	 * overlapping / post-wake catch-up prompts don't clobber each other.
+	 */
+	private meetingNotices = new Map<string, Notice>();
 	/** Resolvers waiting for the current recording to fully stop (back-to-back chaining). */
 	private stopWaiters: Array<() => void> = [];
 	/** True while a stopped recording is still being linked/handled in attachRecording. */
@@ -350,6 +355,8 @@ export default class SystemRecordingPlugin extends Plugin {
 		this.transcriptionQueue.cancelAll();
 		this.scheduler?.stop();
 		this.agendaEvents.clear();
+		for (const notice of this.meetingNotices.values()) notice.hide();
+		this.meetingNotices.clear();
     }
 
     async loadSettings() {
@@ -903,6 +910,7 @@ export default class SystemRecordingPlugin extends Plugin {
 		if (this.recorder.isRecording) return;
 		// A detected meeting has no calendar link to join, so only offer Record.
 		this.promptMeeting({
+			key: `detect:${app}`,
 			title: t().detect.detected(app),
 			subtitle: t().event.startingNow,
 			meetLink: null,
@@ -949,6 +957,8 @@ export default class SystemRecordingPlugin extends Plugin {
 	 * is the record action; a valid https `meetLink` adds the Join affordances.
 	 */
 	private promptMeeting(opts: {
+		/** Stable per-meeting key: a same-key reprompt supersedes, distinct keys coexist. */
+		key: string;
 		title: string;
 		subtitle: string;
 		meetLink: string | null;
@@ -985,13 +995,14 @@ export default class SystemRecordingPlugin extends Plugin {
 			onClick: opts.onRecord,
 			cta: !onJoinAndRecord,
 		});
-		// Supersede an earlier prompt for the same meeting (e.g. the lead-time
-		// notice when the start boundary now fires) rather than stacking a
-		// second persistent notice.
-		this.lastMeetingNotice?.hide();
-		this.lastMeetingNotice = multiActionNotice(
-			`${opts.title} — ${opts.subtitle}`,
-			actions
+		// Supersede an earlier prompt for the *same* meeting (e.g. the lead-time
+		// notice when the start boundary now fires) rather than stacking a second
+		// persistent notice — but leave other meetings' prompts alone so
+		// overlapping meetings each keep theirs.
+		this.meetingNotices.get(opts.key)?.hide();
+		this.meetingNotices.set(
+			opts.key,
+			multiActionNotice(`${opts.title} — ${opts.subtitle}`, actions)
 		);
 
 		// Native OS notification (visible while minimized / on another Space);
@@ -1018,9 +1029,9 @@ export default class SystemRecordingPlugin extends Plugin {
 	 * recording it, or it just ended) so a now-stale prompt doesn't linger or
 	 * stack under a new one.
 	 */
-	private dismissMeetingNotice(): void {
-		this.lastMeetingNotice?.hide();
-		this.lastMeetingNotice = null;
+	private dismissMeetingNotice(key: string): void {
+		this.meetingNotices.get(key)?.hide();
+		this.meetingNotices.delete(key);
 	}
 
 	private async fetchCalendarEvents(
@@ -1075,7 +1086,7 @@ export default class SystemRecordingPlugin extends Plugin {
 		if (this.settings.calendarAutoStart) {
 			// The lead-time heads-up is now moot — recording is (or is about to
 			// be) underway — so clear it rather than leaving it on screen.
-			this.dismissMeetingNotice();
+			this.dismissMeetingNotice(event.id);
 			if (this.currentRecordingEventId !== event.id) {
 				new Notice(t().event.autoStarted(event.summary));
 				void this.startMeetingRecording(this.toMeetingInfo(event), event.end);
@@ -1087,7 +1098,7 @@ export default class SystemRecordingPlugin extends Plugin {
 		// from the lead-time prompt (its Record button), in which case there's
 		// nothing to ask.
 		if (this.currentRecordingEventId === event.id) {
-			this.dismissMeetingNotice();
+			this.dismissMeetingNotice(event.id);
 			return;
 		}
 		const lateMs = Date.now() - event.start;
@@ -1116,6 +1127,7 @@ export default class SystemRecordingPlugin extends Plugin {
 	/** Shared calendar meeting prompt (upcoming + start). */
 	private promptCalendarMeeting(event: ScheduledEvent, subtitle: string): void {
 		this.promptMeeting({
+			key: event.id,
 			title: event.summary,
 			subtitle,
 			meetLink: event.meetLink,
@@ -1142,6 +1154,10 @@ export default class SystemRecordingPlugin extends Plugin {
 			new Notice(t().notices.macOnly);
 			return;
 		}
+		// Fall back to the meeting's own end so the sleep/wake auto-stop safety net
+		// covers every meeting recording (e.g. agenda "Create and record"), not
+		// just the calendar-scheduler paths that pass an explicit end.
+		const endMs = eventEndMs ?? info.end.getTime();
 		try {
 			const ref = await createMeetingNote(this.app, info, this.noteConfig());
 			await this.app.workspace.getLeaf(false).openFile(ref.file);
@@ -1151,7 +1167,7 @@ export default class SystemRecordingPlugin extends Plugin {
 					basename: ref.basename,
 					notePath: ref.notePath,
 					eventId: info.id,
-					eventEnd: eventEndMs ?? null,
+					eventEnd: Number.isFinite(endMs) ? endMs : null,
 					// Track the live TFile so a rename mid-recording still links the
 					// WAV correctly (matches the ad-hoc path).
 					note: ref.file,
@@ -1210,8 +1226,10 @@ export default class SystemRecordingPlugin extends Plugin {
 
 	private handleEventEnd(event: ScheduledEvent): void {
 		// The meeting is over: forget its auto-open state so a later recurrence
-		// (same id, re-added by a poll) can open its link afresh.
+		// (same id, re-added by a poll) can open its link afresh, and drop any
+		// lingering upcoming/start prompt for it (whether or not we recorded).
 		this.openedLinkEventIds.delete(event.id);
+		this.dismissMeetingNotice(event.id);
 
 		// Only act when *this* meeting's recording is the active one, so
 		// overlapping meetings can't stop the wrong recording (or prompt when
@@ -1229,15 +1247,11 @@ export default class SystemRecordingPlugin extends Plugin {
 		// not keep running, so stop it regardless of the setting.
 		const lateMs = Date.now() - event.end;
 		if (this.settings.calendarAutoStop || lateMs > GRACE_MS) {
-			this.dismissMeetingNotice();
 			new Notice(t().event.autoStopped(event.summary));
 			this.stopRecording();
 			return;
 		}
 
-		// Drop any lingering start/upcoming prompt for this meeting so the "ended"
-		// prompt replaces it rather than stacking beneath it.
-		this.dismissMeetingNotice();
 		actionNotice(
 			t().event.ended(event.summary),
 			t().event.stopRecordingAction,
@@ -1980,10 +1994,14 @@ export default class SystemRecordingPlugin extends Plugin {
             } else {
                 // Stopped without a reported file (e.g. a clean helper exit with
                 // no terminal payload); reset so the UI doesn't stay stuck.
-                this.resetRecordingUi();
+                // Skip while a prior attach is still in flight — its finally owns
+                // teardown and releasing back-to-back waiters (see onError).
+                if (!this.attaching) this.resetRecordingUi();
             }
         } else if (status.status === "error") {
-            this.resetRecordingUi();
+            // Don't tear down mid-attach (would early-release a back-to-back
+            // waiter and race shared state); attachRecording's finally handles it.
+            if (!this.attaching) this.resetRecordingUi();
             this.notifyRecordingError(status.message ?? t().notices.unknownError);
         }
     }
