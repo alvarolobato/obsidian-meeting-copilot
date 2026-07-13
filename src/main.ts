@@ -106,6 +106,15 @@ import { MeetingDetector } from "./detect/meetingDetector";
 import { googleMeetActive, zoomInMeeting } from "./detect/probe";
 import { execFile } from "child_process";
 
+/**
+ * How a transcribe run treats speaker separation:
+ *   - "auto":     respect the speaker-separation setting (auto-transcribe path)
+ *   - "diarized": force the separated pass (fall back to the joint track if
+ *                 no separate tracks were recorded)
+ *   - "mixed":    always transcribe the single joint track
+ */
+type TranscribeMode = "auto" | "diarized" | "mixed";
+
 export default class SystemRecordingPlugin extends Plugin {
     settings: SystemRecordingSettings;
     private recorder = new Recorder();
@@ -1043,7 +1052,7 @@ export default class SystemRecordingPlugin extends Plugin {
             onCreateNote: (m) => void this.createNoteOnly(m),
             onStop: () => this.stopRecording(),
             onOpenRecording: (m) => void this.openRecording(m),
-            onTranscribe: (m) => void this.transcribeRecording(m),
+            onTranscribe: (m, mode) => void this.transcribeRecording(m, mode),
             onEnrich: (m) => {
                 if (m.note) void this.enrichMeetingNote(m.note);
             },
@@ -1267,7 +1276,7 @@ export default class SystemRecordingPlugin extends Plugin {
             onCreateNote: (m) => void this.createNoteOnly(m),
             onStop: () => this.stopRecording(),
             onOpenRecording: (m) => void this.openRecording(m),
-            onTranscribe: (m) => void this.transcribeRecording(m),
+            onTranscribe: (m, mode) => void this.transcribeRecording(m, mode),
             onEnrich: (m) => {
                 if (m.note) void this.enrichMeetingNote(m.note);
             },
@@ -1336,13 +1345,22 @@ export default class SystemRecordingPlugin extends Plugin {
         await this.app.workspace.getLeaf(false).openFile(m.recording);
     }
 
-    /** Transcribes the meeting's recording with the built-in engine. */
-    private async transcribeRecording(m: AgendaMeeting): Promise<void> {
+    /**
+     * Transcribes the meeting's recording with the built-in engine.
+     *
+     * `mode` selects the pass: "auto" respects the speaker-separation setting
+     * (used by the auto-transcribe pipeline), while "diarized" / "mixed" let the
+     * user force separation on or off from the menus regardless of the setting.
+     */
+    private async transcribeRecording(
+        m: AgendaMeeting,
+        mode: TranscribeMode = "auto"
+    ): Promise<void> {
         if (!m.recording) {
             new Notice(t().agenda.notices.noRecording);
             return;
         }
-        await this.launchTranscriber(m.recording);
+        await this.launchTranscriber(m.recording, mode);
     }
 
     /**
@@ -1395,19 +1413,22 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /**
-     * Runs the speaker-separated pass when the split sidecars are present and
-     * the endpoint is known to emit timestamps. Returns the diarized transcript,
-     * or null when separation doesn't apply (feature off, or no sidecars on
-     * disk) or the endpoint returned no segments this pass and we fell back to
-     * the mixed file. It only invalidates the cached probe when the fallback was
-     * a genuine capability miss (no timestamps); a transient error leaves the
-     * probe intact so speaker separation isn't disabled for future meetings.
+     * Runs the speaker-separated pass. Returns the diarized transcript, or null
+     * when separation doesn't apply (no sidecars on disk) or the endpoint
+     * returned no segments this pass and we fell back to the mixed file. It only
+     * invalidates the cached probe when the fallback was a genuine capability
+     * miss (no timestamps); a transient error leaves the probe intact so speaker
+     * separation isn't disabled for future meetings.
+     *
+     * Whether to run this at all (respect the setting, or force it) is decided
+     * by the caller. When `forced` (the user explicitly asked for separation) a
+     * recording with no separate tracks surfaces a notice before falling back.
      */
     private async tryDiarizedTranscribe(
         recording: TFile,
+        forced: boolean,
         onProgress?: (percent: number) => void
     ): Promise<string | null> {
-        if (!this.shouldSeparateSpeakers()) return null;
         // Discover the split sidecars by naming convention so separation works
         // for both the auto-transcribe after stop and a manual re-run on an old
         // recording. The helper writes them straight to disk, so check the
@@ -1416,7 +1437,10 @@ export default class SystemRecordingPlugin extends Plugin {
         const sidecars = sidecarPathsFor(recording.path);
         const meFile = await this.resolveExistingFile(sidecars.me);
         const themFile = await this.resolveExistingFile(sidecars.them);
-        if (!meFile || !themFile) return null;
+        if (!meFile || !themFile) {
+            if (forced) new Notice(t().notices.diarizationNoTracks);
+            return null;
+        }
 
         // speech.json is optional: a missing or malformed sidecar yields
         // undefined windows, and the merge then keeps every segment.
@@ -1478,8 +1502,15 @@ export default class SystemRecordingPlugin extends Plugin {
      * Transcribes an audio file with the vendored engine (headless — no modal,
      * no separate transcript file). The transcript text is routed through the
      * same insert+enrich path used elsewhere.
+     *
+     * `mode` picks the pass: "auto" respects the speaker-separation setting,
+     * "diarized" forces the separated pass (falling back to the joint track when
+     * no separate tracks exist), and "mixed" always transcribes the joint track.
      */
-    private async launchTranscriber(recording: TFile): Promise<void> {
+    private async launchTranscriber(
+        recording: TFile,
+        mode: TranscribeMode = "auto"
+    ): Promise<void> {
         if (!this.settings.apiBaseUrl || !this.settings.apiKey) {
             new Notice(t().notices.transcribeNoEndpoint);
             return;
@@ -1503,13 +1534,20 @@ export default class SystemRecordingPlugin extends Plugin {
             );
         };
         try {
-            // Try the speaker-separated pass; a null means it didn't apply or
-            // fell back, in which case we transcribe the mixed wav (which always
-            // exists) with a single call.
-            const diarizedText = await this.tryDiarizedTranscribe(
-                recording,
-                onProgress
-            );
+            // Decide whether to run speaker separation: "auto" defers to the
+            // setting, "diarized" forces it on, "mixed" forces it off. A null
+            // back from the diarized pass means it didn't apply or fell back, in
+            // which case we transcribe the mixed wav (which always exists).
+            const wantDiarized =
+                mode === "diarized" ||
+                (mode === "auto" && this.shouldSeparateSpeakers());
+            const diarizedText = wantDiarized
+                ? await this.tryDiarizedTranscribe(
+                      recording,
+                      mode === "diarized",
+                      onProgress
+                  )
+                : null;
             const diarized = diarizedText !== null;
             const rawText =
                 diarizedText ??

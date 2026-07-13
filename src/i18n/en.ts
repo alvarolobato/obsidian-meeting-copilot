@@ -82,6 +82,8 @@ export const en = {
 			"Set the AI endpoint (base URL + API key) in settings before transcribing.",
 		diarizationNoTimestamps:
 			"Speaker separation was skipped: the endpoint returned no timestamps this time. Run 'Load models' to re-check.",
+		diarizationNoTracks:
+			"No separate speaker tracks were recorded for this meeting — transcribing the single joint track instead.",
 	},
 	transcript: {
 		// Prepended to a speaker-separated transcript. Tells the enrichment model
@@ -145,6 +147,8 @@ export const en = {
 			copyLink: "Copy meeting link",
 			openRecording: "Open recording",
 			transcribe: "Transcribe recording",
+			transcribeDiarized: "Transcribe with speaker separation",
+			transcribeMixed: "Transcribe without speaker separation",
 			enrich: "Enrich with AI",
 			skipToday: "Hide for today",
 		},
