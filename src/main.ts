@@ -858,6 +858,9 @@ export default class SystemRecordingPlugin extends Plugin {
 			!Platform.isMacOS
 		) {
 			this.detector = null;
+			// No probe will fire onEnd now, so sweep any detection prompts still
+			// on screen (mirrors the calendar sweep when the scheduler stops).
+			this.dismissMeetingNotices("detect:");
 			return;
 		}
 		if (!this.detector) {
