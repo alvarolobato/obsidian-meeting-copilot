@@ -41,6 +41,40 @@ describe("isHallucinationPhrase", () => {
 		expect(isHallucinationPhrase("Transcription by CastingWords")).toBe(true);
 	});
 
+	it("flags non-English silence artifacts", () => {
+		// Amara.org credit across languages.
+		expect(
+			isHallucinationPhrase("Napisy stworzone przez społeczność Amara.org")
+		).toBe(true);
+		expect(
+			isHallucinationPhrase("Subtítulos realizados por la comunidad de Amara.org")
+		).toBe(true);
+		expect(
+			isHallucinationPhrase("Untertitel der Amara.org-Community")
+		).toBe(true);
+		// Japanese thanks-for-watching / subscribe outros (with CJK punctuation).
+		expect(isHallucinationPhrase("ご視聴ありがとうございました。")).toBe(true);
+		expect(isHallucinationPhrase("チャンネル登録をお願いします")).toBe(true);
+		// Korean, Chinese, Russian thanks-for-watching.
+		expect(isHallucinationPhrase("시청해 주셔서 감사합니다")).toBe(true);
+		expect(isHallucinationPhrase("感谢观看")).toBe(true);
+		expect(isHallucinationPhrase("Спасибо за просмотр!")).toBe(true);
+		// Latin-script sign-offs.
+		expect(isHallucinationPhrase("Gracias por ver el video")).toBe(true);
+		expect(isHallucinationPhrase("Obrigado por assistir")).toBe(true);
+		expect(isHallucinationPhrase("Merci d'avoir regardé cette vidéo")).toBe(true);
+		expect(isHallucinationPhrase("Vielen Dank fürs Zuschauen")).toBe(true);
+	});
+
+	it("does NOT flag real non-English meeting speech", () => {
+		// Japanese: "let's start the meeting".
+		expect(isHallucinationPhrase("では会議を始めましょう")).toBe(false);
+		// Spanish sentence that merely mentions a video.
+		expect(
+			isHallucinationPhrase("Vamos a revisar el diseño de la nueva página")
+		).toBe(false);
+	});
+
 	it("flags repeated thank-yous but not a bare 'you'", () => {
 		expect(isHallucinationPhrase("Thank you. Thank you. Thank you.")).toBe(true);
 		// A bare "you" is too plausible as real speech; left to confidence signals.

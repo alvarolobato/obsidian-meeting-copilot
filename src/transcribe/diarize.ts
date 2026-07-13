@@ -88,6 +88,62 @@ const SPEAKERS: Record<Speaker, { rank: number; label: string }> = {
 	them: { rank: 1, label: "Them" },
 };
 
+// Cross-talk (bleed) de-dup thresholds. Two segments are the "same" utterance
+// echoed across streams when they overlap in time AND their word sets are
+// mostly shared. Kept conservative so genuine simultaneous-but-different speech
+// (real cross-talk) survives.
+const CROSSTALK_SIMILARITY = 0.6;
+const CROSSTALK_MIN_TOKENS = 3;
+
+/** Words only, lowercased, punctuation stripped — for fuzzy cross-stream matching. */
+function tokenize(text: string): string[] {
+	const norm = text
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}\s]/gu, "")
+		.replace(/\s+/g, " ")
+		.trim();
+	return norm.length === 0 ? [] : norm.split(" ");
+}
+
+/** Jaccard overlap of the two segments' word sets (0 when either is empty). */
+function textSimilarity(a: string, b: string): number {
+	const ta = new Set(tokenize(a));
+	const tb = new Set(tokenize(b));
+	if (ta.size === 0 || tb.size === 0) return 0;
+	let intersection = 0;
+	for (const t of ta) {
+		if (tb.has(t)) intersection++;
+	}
+	const union = ta.size + tb.size - intersection;
+	return union === 0 ? 0 : intersection / union;
+}
+
+function timeOverlaps(a: DiarSegment, b: DiarSegment): boolean {
+	return Math.min(a.end, b.end) - Math.max(a.start, b.start) > 0;
+}
+
+/**
+ * Drop mic ("me") segments that are really system audio bleeding into the mic:
+ * when the speakers play the remote participants, that audio leaks back into
+ * the mic and Whisper transcribes it a second time on the "me" stream. The
+ * echoed copy overlaps its "them" twin in time and repeats most of its words,
+ * so we drop the "me" copy and keep "them" (the true source). With headphones
+ * there is no bleed and this never fires. Short segments are kept — too little
+ * text to tell an echo from a genuine "yeah"/"right" over the other speaker.
+ */
+function dropCrossTalk(meSegs: DiarSegment[], themSegs: DiarSegment[]): DiarSegment[] {
+	if (themSegs.length === 0) return meSegs;
+	return meSegs.filter((me) => {
+		if (tokenize(me.text).length < CROSSTALK_MIN_TOKENS) return true;
+		const isEcho = themSegs.some(
+			(them) =>
+				timeOverlaps(me, them) &&
+				textSimilarity(me.text, them.text) >= CROSSTALK_SIMILARITY
+		);
+		return !isEcho;
+	});
+}
+
 /**
  * Sort a single stream by start, drop the duplicate a segment picks up from an
  * overlapping chunk boundary, then (when we have them) drop segments that fall
@@ -159,8 +215,10 @@ function prepareStream(segments: DiarSegment[], windows?: Array<[number, number]
  * every line is labelled from the other; both empty yields "".
  */
 export function mergeDiarized(me: DiarSegment[], them: DiarSegment[], windows?: SpeechWindows): string {
-	const meSegs = prepareStream(me, windows?.me);
 	const themSegs = prepareStream(them, windows?.them);
+	// Drop system-audio bleed from the mic stream before interleaving, so a
+	// remote participant's line isn't attributed to both "Them" and "Me".
+	const meSegs = dropCrossTalk(prepareStream(me, windows?.me), themSegs);
 
 	const labeled: Array<{ speaker: Speaker; seg: DiarSegment }> = [
 		...meSegs.map((seg) => ({ speaker: "me" as const, seg })),

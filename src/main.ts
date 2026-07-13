@@ -32,7 +32,9 @@ import {
     recordingLinkTarget,
     sanitizeName,
     scanMeetingNotes,
+    stripTranscript,
     templateStaticRoot,
+    transcriptAtBottom,
     upsertSection,
 } from "./notes/meetingNote";
 import {
@@ -72,6 +74,7 @@ import {
     sidecarPathsFor,
 } from "./transcribe/sidecar";
 import type { SpeechWindows } from "./transcribe/diarize";
+import { computeSpeechWindows } from "./transcribe/vadWindows";
 import { parseDictionary } from "./transcribe/dictionary";
 import type { TranscriptionModel } from "./transcribe/vendor/ApiSettings";
 import {
@@ -587,13 +590,25 @@ export default class SystemRecordingPlugin extends Plugin {
         eventId?: string;
         note?: TFile;
     }) {
+        console.warn("[Meeting Copilot][recorder] startRecording requested", {
+            notePath: meeting.notePath,
+            eventId: meeting.eventId,
+            isRecording: this.recorder.isRecording,
+            starting: this.starting,
+        });
         if (this.recorder.isRecording) {
+            console.warn(
+                "[Meeting Copilot][recorder] startRecording skipped: already recording"
+            );
             new Notice(t().notices.alreadyRecording);
             return;
         }
 
         // A start is already in progress (binary provisioning may be awaiting)
         if (this.starting) {
+            console.warn(
+                "[Meeting Copilot][recorder] startRecording skipped: a start is already in progress"
+            );
             return;
         }
 
@@ -1442,12 +1457,22 @@ export default class SystemRecordingPlugin extends Plugin {
             return null;
         }
 
-        // speech.json is optional: a missing or malformed sidecar yields
-        // undefined windows, and the merge then keeps every segment.
-        let windows: SpeechWindows | undefined;
-        const speech = await this.resolveExistingFile(sidecars.speech);
-        if (speech) {
-            windows = parseSpeechWindows(await this.app.vault.read(speech));
+        // Speech windows gate out Whisper's silence hallucinations without
+        // touching the audio (so the two streams keep their shared clock).
+        // Prefer local WebRTC VAD — a real speech/non-speech classifier — over
+        // the recorder's crude RMS gate. Fall back to the helper's speech.json
+        // when the WASM isn't present or decoding fails, and to no filtering
+        // (undefined) when neither is available.
+        let windows: SpeechWindows | undefined = await computeSpeechWindows(
+            this.app,
+            meFile,
+            themFile
+        );
+        if (!windows) {
+            const speech = await this.resolveExistingFile(sidecars.speech);
+            if (speech) {
+                windows = parseSpeechWindows(await this.app.vault.read(speech));
+            }
         }
         const result = await transcribeDiarized(
             this.app,
@@ -1533,6 +1558,13 @@ export default class SystemRecordingPlugin extends Plugin {
                 "busy"
             );
         };
+        const transcribeStart = Date.now();
+        const sizeMb = (recording.stat?.size ?? 0) / (1024 * 1024);
+        // console.warn so the timing line shows in Obsidian's console without
+        // enabling Verbose logging (mirrors the vendored engine's own logger).
+        console.warn(
+            `[Meeting Copilot][transcribe] "${recording.name}" begin (mode=${mode}, size=${sizeMb.toFixed(1)}MB)`
+        );
         try {
             // Decide whether to run speaker separation: "auto" defers to the
             // setting, "diarized" forces it on, "mixed" forces it off. A null
@@ -1558,6 +1590,12 @@ export default class SystemRecordingPlugin extends Plugin {
                     undefined,
                     onProgress
                 ));
+            const totalSecs = ((Date.now() - transcribeStart) / 1000).toFixed(1);
+            console.warn(
+                `[Meeting Copilot][transcribe] "${recording.name}" transcription finished in ${totalSecs}s (diarized=${diarized}${
+                    wantDiarized && !diarized ? ", fell back to mixed" : ""
+                })`
+            );
             // The diarized path already filters silence hallucinations per
             // segment before merging. The mixed path has no segment seam, so a
             // silent recording can come back as nothing but a stock YouTube-outro
@@ -1955,7 +1993,15 @@ export default class SystemRecordingPlugin extends Plugin {
             });
             // Re-read in case the note changed during the network call.
             const current = await this.app.vault.read(file);
-            let updated = current;
+            // The transcript callout has no heading of its own, so it lives
+            // inside whatever section precedes it (usually "## Action items").
+            // Pull it out before any section edits — otherwise extractSection
+            // would scoop it up and merged action items would land *after* it —
+            // and re-pin it to the very bottom once everything else is placed.
+            const bottomTranscript = extractTranscript(current);
+            let updated = bottomTranscript.trim().length
+                ? stripTranscript(current)
+                : current;
             let calloutBody = output;
             // Lift action items out of the summary into real obsidian-tasks
             // checkboxes under "## Action items" (merged, never duplicated).
@@ -1969,6 +2015,10 @@ export default class SystemRecordingPlugin extends Plugin {
                 }
             }
             updated = withEnrichedBlock(updated, calloutBody);
+            // Keep the transcript pinned to the very bottom of the note.
+            if (bottomTranscript.trim().length) {
+                updated = transcriptAtBottom(updated, bottomTranscript);
+            }
             await this.app.vault.modify(file, updated);
             await this.app.fileManager.processFrontMatter(file, (f) => {
                 (f as Record<string, unknown>).status = "enriched";

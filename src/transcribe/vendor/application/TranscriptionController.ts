@@ -333,7 +333,10 @@ export class TranscriptionController {
 
 		let chunkingService: ChunkingService;
 		if (this.serverSideVADFallback) {
-			this.logger.warn('Creating WebAudio chunking service because local VAD is unavailable');
+			// MEETING-COPILOT PATCH: warn -> debug. Server-side chunking is the
+			// expected default for the mixed path (local VAD windows are computed
+			// separately for the diarized path), so this fired on every run.
+			this.logger.debug('Creating WebAudio chunking service because local VAD is unavailable');
 			const fallbackChunkingService = new WebAudioChunkingService(chunkingConfig);
 			fallbackChunkingService.setPreferredChunkDuration(
 				chunkingConfig.constraints.chunkDurationSeconds

@@ -31,6 +31,8 @@ re-synced, **except** the small, clearly marked patches below. Grep for
 | `core/audio/AudioTypes.ts` | `ProcessedAudio.source` made optional | never read; pinning the decoded AudioBuffer OOMs long meetings (issue #26) |
 | `infrastructure/audio/WebAudioEngine.ts` | stop populating `ProcessedAudio.source` | drops a decoded-AudioBuffer pin worth ~460 MB on a 2h meeting (issue #26) |
 | `infrastructure/audio/FallbackEngine.ts` | stop populating `ProcessedAudio.source` | same pin as WebAudioEngine (issue #26) |
+| `infrastructure/api/ApiClient.ts` | `executeWithRetry` now retries transient network-level throws (`net::ERR_NETWORK_IO_SUSPENDED`, `ECONNRESET`, timeouts, …) with the existing exponential backoff | upstream re-threw them immediately, so a brief network drop mid-transcription failed a chunk permanently and sheared the transcript |
+| `application/TranscriptionController.ts` | one `warn` → `debug` for "local VAD unavailable" | server-side chunking is our expected mixed-path default, so it fired on every run |
 
 Two files are **added** (not from upstream):
 
@@ -44,10 +46,15 @@ Two files are **added** (not from upstream):
 
 - **Key storage:** Meeting Copilot passes the key prefixed with `PLAIN::` so the
   vendored `SafeStorageService.decryptFromStore` returns it verbatim (no edit).
-- **VAD:** Meeting Copilot only offers `server` / `disabled`. Local VAD
-  (`vad/processors/WebrtcVadProcessor.ts`) dynamically imports
-  `@echogarden/fvad-wasm`, which is marked **external** in esbuild and never
-  reached at the server default — so no WASM asset ships.
+- **VAD:** the vendored engine still runs the mixed path with `server` /
+  `disabled` (fixed-window chunking). Meeting Copilot additionally reuses the
+  vendored `vad/processors/WebrtcVadProcessor.ts` **outside** the engine —
+  `../vadWindows.ts` runs it over the me/them sidecars to compute speech windows
+  for the diarized merge. `@echogarden/fvad-wasm` is therefore now a real
+  bundled dependency (the glue compiles into `main.js`) and `fvad.wasm` ships as
+  a plugin asset (copied next to `main.js` by esbuild / deploy-local / release).
+  If the WASM is absent, window detection falls back to the recorder's RMS
+  `speech.json`, then to no filtering.
 - **i18n:** `../TranscriptionService.ts` calls the vendored
   `initializeTranslations()` / `initializeI18n()` once at load.
 

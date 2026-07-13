@@ -64,6 +64,35 @@ const PHRASE_PATTERNS: RegExp[] = [
 	/^subtitles? (?:by|provided by|created by|are provided by)\b.*/,
 	/^(?:transcription|transcribed|captions?) (?:by|provided by)\b.*/,
 	/^(?:english )?(?:sub)?titles?\s+.*community$/,
+
+	// --- Non-English silence artifacts ------------------------------------
+	// Whisper invents localized YouTube outros / subtitle credits on silence
+	// just as readily as English ones. These are all whole-segment stock
+	// phrases that never occur in real work-meeting speech, so matching them
+	// (some as substrings, since Whisper pads the outro) is safe.
+
+	// The Amara.org subtitle credit appears verbatim across many languages
+	// ("Napisy … Amara.org", "Subtítulos … Amara.org", "Untertitel der
+	// Amara.org-Community", …). The domain token alone is a reliable tell.
+	/amara\.org/,
+	// Japanese: "ご視聴ありがとうございました" (thanks for watching) and the
+	// "チャンネル登録"/"高評価" subscribe/like CTA.
+	/ご視聴.*ありがとう/,
+	/チャンネル登録/,
+	/高評価/,
+	// Korean: "시청해 주셔서 감사합니다" (thanks for watching), "구독" (subscribe).
+	/시청.*감사/,
+	/구독.*(?:좋아요|부탁)/,
+	// Chinese: "感谢观看" / "谢谢观看" (thanks for watching), "请订阅" (subscribe).
+	/(?:感谢|谢谢)(?:观看|收看|大家)/,
+	/请(?:订阅|点赞|关注)/,
+	// Spanish / Portuguese / French / German thanks-for-watching sign-offs.
+	/^(?:muchas )?gracias por (?:ver|verlo|acompañar).*/,
+	/^obrigado por (?:assistir|ver).*/,
+	/^merci d['’]?avoir regard[ée].*/,
+	/^(?:vielen )?dank(?:e)? (?:fürs|für das) zuschauen$/,
+	// Russian: "Спасибо за просмотр" (thanks for watching).
+	/спасибо за просмотр/,
 ];
 
 /**
@@ -91,7 +120,9 @@ function normalize(text: string): string {
 		.replace(/^["'“”‘’\s]+|["'“”‘’\s]+$/g, "")
 		.toLowerCase()
 		.replace(/\s+/g, " ")
-		.replace(/[.!?…]+$/g, "")
+		// Trailing sentence punctuation, incl. CJK/full-width so a Japanese or
+		// Chinese outro ending in "。" / "！" normalizes to the bare phrase.
+		.replace(/[.!?…。！？，、]+$/gu, "")
 		.trim();
 }
 

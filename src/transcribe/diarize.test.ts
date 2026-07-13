@@ -29,6 +29,60 @@ describe("mergeDiarized", () => {
 		);
 	});
 
+	describe("cross-talk (system-audio bleed) de-dup", () => {
+		it("drops a mic echo of an overlapping, near-identical them segment", () => {
+			// Speakers play the remote participant; that audio leaks into the mic
+			// and Whisper transcribes it again on the me stream at the same time.
+			const them = [seg("let us review the quarterly numbers", 10, 13)];
+			const me = [seg("let us review the quarterly numbers", 10, 13)];
+			expect(mergeDiarized(me, them)).toBe(
+				"Them: let us review the quarterly numbers"
+			);
+		});
+
+		it("drops the echo even with minor transcription differences", () => {
+			// Whisper adds a trailing word on the cleaner them stream; the word
+			// sets still overlap well above threshold.
+			const them = [seg("let us review the quarterly numbers now", 10, 13)];
+			const me = [seg("let us review the quarterly numbers", 10, 13)];
+			expect(mergeDiarized(me, them)).toBe(
+				"Them: let us review the quarterly numbers now"
+			);
+		});
+
+		it("keeps a short mic reaction over the other speaker", () => {
+			// Too few words to distinguish an echo from a genuine backchannel.
+			const them = [seg("and so the plan is to ship on friday", 10, 14)];
+			const me = [seg("yeah exactly", 11, 12)];
+			expect(mergeDiarized(me, them)).toBe(
+				["Them: and so the plan is to ship on friday", "Me: yeah exactly"].join(
+					"\n"
+				)
+			);
+		});
+
+		it("keeps genuinely different simultaneous speech", () => {
+			// Them starts slightly earlier so ordering is deterministic.
+			const them = [seg("i think we should postpone the launch", 10, 13)];
+			const me = [seg("no we already promised the customer", 10.5, 13)];
+			expect(mergeDiarized(me, them)).toBe(
+				[
+					"Them: i think we should postpone the launch",
+					"Me: no we already promised the customer",
+				].join("\n")
+			);
+		});
+
+		it("keeps an identical me line that does not overlap in time", () => {
+			// Same words but at a different moment — a real repeated phrase, not bleed.
+			const them = [seg("thanks for the update", 5, 7)];
+			const me = [seg("thanks for the update", 30, 32)];
+			expect(mergeDiarized(me, them)).toBe(
+				["Them: thanks for the update", "Me: thanks for the update"].join("\n")
+			);
+		});
+	});
+
 	it("collapses consecutive segments from the same speaker into one line", () => {
 		const me = [seg("one", 0, 1), seg("two", 1, 2), seg("three", 2, 3)];
 		const them = [seg("reply", 4, 5)];
