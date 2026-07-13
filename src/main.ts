@@ -839,10 +839,18 @@ export default class SystemRecordingPlugin extends Plugin {
 		);
 	}
 
-	/** Starts the scheduler when auto-record is on and authenticated; stops it otherwise. */
+	/**
+	 * Starts the scheduler when any calendar automation is on (notifications,
+	 * auto-start, or auto-stop) and we're authenticated; stops it otherwise.
+	 * Auto-start/stop drive the scheduler on their own — they aren't inert just
+	 * because the notification prompts are turned off.
+	 */
 	updateScheduler(): void {
 		const shouldRun =
-			this.settings.calendarAutoRecord && this.oauth.isAuthenticated();
+			(this.settings.calendarAutoRecord ||
+				this.settings.calendarAutoStart ||
+				this.settings.calendarAutoStop) &&
+			this.oauth.isAuthenticated();
 		if (shouldRun) {
 			if (!this.scheduler) {
 				this.scheduler = new CalendarScheduler({
@@ -1188,6 +1196,9 @@ export default class SystemRecordingPlugin extends Plugin {
 	 * prompt is mainly a heads-up (Record still lets them start early).
 	 */
 	private handleEventUpcoming(event: ScheduledEvent): void {
+		// The scheduler may be running purely for auto-start/stop; the lead-time
+		// heads-up is a notification, so only show it when notifications are on.
+		if (!this.settings.calendarAutoRecord) return;
 		const minutesUntil = Math.max(
 			1,
 			Math.round((event.start - Date.now()) / 60000)
@@ -1219,6 +1230,9 @@ export default class SystemRecordingPlugin extends Plugin {
 			this.dismissMeetingNotice(SystemRecordingPlugin.CAL_NOTICE_PREFIX + event.id);
 			return;
 		}
+		// Auto-start is off and notifications are off (scheduler is running only
+		// for auto-stop): don't surface a start prompt the user didn't ask for.
+		if (!this.settings.calendarAutoRecord) return;
 		const lateMs = Date.now() - event.start;
 		const subtitle =
 			lateMs > GRACE_MS
@@ -2088,7 +2102,10 @@ export default class SystemRecordingPlugin extends Plugin {
             if (isDiarizationCancelled(e, signal)) {
                 new Notice(t().notices.transcribeCancelled);
                 this.setActionStatus(t().statusBar.transcribeCancelled, "error");
-                throw e;
+                // Re-throw as the queue's cancellation type so the caller's
+                // guard treats it as an expected cancel (no "failed" log) —
+                // matching the waiting-job path, which rejects with this error.
+                throw new TranscriptionCancelledError();
             }
             const msg = e instanceof Error ? e.message : String(e);
             // The engine throws the partial text (marker-prefixed) for a

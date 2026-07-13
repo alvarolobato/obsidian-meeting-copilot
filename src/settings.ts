@@ -357,6 +357,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.calendarAutoStart = value;
 						await this.plugin.saveSettings();
+						this.plugin.updateScheduler();
 					})
 			);
 
@@ -369,6 +370,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.calendarAutoStop = value;
 						await this.plugin.saveSettings();
+						this.plugin.updateScheduler();
 					})
 			);
 
