@@ -128,7 +128,6 @@ export const en = {
 		startedMinAgo: (min: number) =>
 			`Started ${min} min${min === 1 ? "" : "s"} ago`,
 		notificationHint: "click for options",
-		willAutoRecord: "Recording will start automatically",
 		join: "Join",
 		record: "Record",
 		joinAndRecord: "Join & record",
@@ -292,7 +291,7 @@ export const en = {
 		},
 		calendarAutoStop: {
 			name: "Auto-stop recording",
-			desc: "Stop a calendar meeting's recording automatically when the event ends. A recording that outlives its meeting (e.g. after the laptop sleeps) is always stopped on the next check regardless of this setting.",
+			desc: "Stop a calendar meeting's recording automatically when the event ends. When off, you're prompted to stop instead (including when a recording outlives its meeting, e.g. after the laptop sleeps).",
 		},
 		targetCalendarId: {
 			name: "Target calendar ID",

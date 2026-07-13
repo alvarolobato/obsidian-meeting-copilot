@@ -962,7 +962,7 @@ export default class SystemRecordingPlugin extends Plugin {
 		// (scheduler) notification — don't stack a second detection prompt for
 		// what is almost certainly the same meeting. (No scheduler / no live
 		// event ⇒ this is an unplanned meeting, so still prompt.)
-		if (this.scheduler?.hasActiveEvent()) return;
+		if (this.scheduler?.isRunning && this.scheduler.hasActiveEvent()) return;
 		// A detected meeting has no calendar link to join, so only offer Record.
 		this.promptMeeting({
 			key: `detect:${app}`,
@@ -971,12 +971,6 @@ export default class SystemRecordingPlugin extends Plugin {
 			meetLink: null,
 			onRecord: () => void this.startAdHocMeeting(),
 		});
-	}
-
-	/** True when the active recording is unplanned (ad-hoc/detected), not a calendar meeting. */
-	private isAdhocRecording(): boolean {
-		const id = this.currentRecordingEventId;
-		return id === null || isAdhocId(id);
 	}
 
 	/**
@@ -1046,16 +1040,33 @@ export default class SystemRecordingPlugin extends Plugin {
 			opts.meetLink && opts.meetLink.startsWith("https://")
 				? opts.meetLink
 				: null;
-		const join = link
+		// Every channel (in-app notice, native OS buttons, modal) shares these
+		// handlers, and each first dismisses the in-app notice for this meeting:
+		// acting from the OS notification or the modal must not leave the parallel
+		// in-app Notice lingering on screen.
+		const dismissNotice = (): void => this.dismissMeetingNotice(opts.key);
+		const onRecord = (): void => {
+			dismissNotice();
+			opts.onRecord();
+		};
+		const onOpenNote = opts.onOpenNote
 			? (): void => {
+					dismissNotice();
+					opts.onOpenNote?.();
+				}
+			: null;
+		const onJoin = link
+			? (): void => {
+					dismissNotice();
 					opts.onLinkOpened?.();
 					this.openMeetingLink(link);
 				}
 			: null;
-		const onJoin = join;
-		const onJoinAndRecord = join
-			? () => {
-					join();
+		const onJoinAndRecord = link
+			? (): void => {
+					dismissNotice();
+					opts.onLinkOpened?.();
+					this.openMeetingLink(link);
 					opts.onRecord();
 				}
 			: null;
@@ -1071,10 +1082,10 @@ export default class SystemRecordingPlugin extends Plugin {
 			actions.push({ label: e.joinAndRecord, onClick: onJoinAndRecord, cta: true });
 			if (onJoin) actions.push({ label: e.join, onClick: onJoin });
 		} else {
-			actions.push({ label: e.record, onClick: opts.onRecord, cta: true });
+			actions.push({ label: e.record, onClick: onRecord, cta: true });
 		}
-		if (opts.onOpenNote)
-			actions.push({ label: e.openNote, onClick: opts.onOpenNote });
+		if (onOpenNote)
+			actions.push({ label: e.openNote, onClick: onOpenNote });
 		// Supersede an earlier prompt for the *same* meeting (e.g. the lead-time
 		// notice when the start boundary now fires) rather than stacking a second
 		// persistent notice — but leave other meetings' prompts alone so
@@ -1109,9 +1120,9 @@ export default class SystemRecordingPlugin extends Plugin {
 					openNoteLabel: e.openNote,
 					dismissLabel: e.dismiss,
 					onJoin: onJoin ?? ((): void => undefined),
-					onRecord: opts.onRecord,
-					onJoinAndRecord: onJoinAndRecord ?? opts.onRecord,
-					onOpenNote: opts.onOpenNote ?? null,
+					onRecord,
+					onJoinAndRecord: onJoinAndRecord ?? onRecord,
+					onOpenNote,
 				}).open();
 			},
 			actions.map((a) => ({ text: a.label, run: a.onClick }))
