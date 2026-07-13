@@ -131,6 +131,7 @@ export const en = {
 		join: "Join",
 		record: "Record",
 		joinAndRecord: "Join & record",
+		openNote: "Open note",
 		dismiss: "Dismiss",
 		autoStarted: (title: string) => `Recording "${title}"`,
 		autoStopped: (title: string) => `"${title}" ended — recording stopped`,

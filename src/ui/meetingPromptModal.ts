@@ -10,6 +10,7 @@ export interface MeetingPromptModalOptions {
 	joinLabel: string;
 	recordLabel: string;
 	joinAndRecordLabel: string;
+	openNoteLabel: string;
 	dismissLabel: string;
 	/** Open the meeting link only. */
 	onJoin: () => void;
@@ -17,12 +18,15 @@ export interface MeetingPromptModalOptions {
 	onRecord: () => void;
 	/** Open the link and start recording. */
 	onJoinAndRecord: () => void;
+	/** Open (creating if needed) the meeting note without recording; null hides the action. */
+	onOpenNote: (() => void) | null;
 }
 
 /**
  * The rich meeting prompt opened when the user clicks the system notification
- * for an upcoming/starting meeting. Offers Join, Record, and (when a link
- * exists) Join & record, plus a plain dismiss. Each action closes the modal.
+ * for an upcoming/starting meeting. Offers Join, Record, (when a link exists)
+ * Join & record, and (when provided) Open note, plus a plain dismiss. Each
+ * action closes the modal.
  *
  * The two-step notification → modal flow is deliberate: renderer Web
  * Notifications can't render action buttons, so the notification carries the
@@ -45,6 +49,8 @@ export class MeetingPromptModal extends Modal {
 			cls: "mc-meeting-prompt-subtitle",
 		});
 
+		// Granola-style layout: a combined primary (Join & record) when a link
+		// exists, then Join, then Open note; otherwise Record is the primary.
 		const setting = new Setting(contentEl);
 		if (this.opts.hasLink) {
 			setting.addButton((b) =>
@@ -58,17 +64,20 @@ export class MeetingPromptModal extends Modal {
 					.setButtonText(this.opts.joinLabel)
 					.onClick(() => this.run(this.opts.onJoin))
 			);
-			setting.addButton((b) =>
-				b
-					.setButtonText(this.opts.recordLabel)
-					.onClick(() => this.run(this.opts.onRecord))
-			);
 		} else {
 			setting.addButton((b) =>
 				b
 					.setButtonText(this.opts.recordLabel)
 					.setCta()
 					.onClick(() => this.run(this.opts.onRecord))
+			);
+		}
+		if (this.opts.onOpenNote) {
+			const openNote = this.opts.onOpenNote;
+			setting.addButton((b) =>
+				b
+					.setButtonText(this.opts.openNoteLabel)
+					.onClick(() => this.run(openNote))
 			);
 		}
 		setting.addButton((b) =>

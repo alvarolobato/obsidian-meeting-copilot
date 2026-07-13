@@ -968,12 +968,13 @@ export default class SystemRecordingPlugin extends Plugin {
 	 *
 	 *  - a **native OS notification** (title = meeting name, body = timing +
 	 *    hint) whose click focuses Obsidian and opens the rich prompt modal, and
-	 *  - an in-app **multi-action Notice** with the same Join / Record /
-	 *    Join & record buttons for when Obsidian is already in front.
+	 *  - an in-app **multi-action Notice** with the same buttons for when
+	 *    Obsidian is already in front.
 	 *
 	 * Web Notifications can't render action buttons, so the notification is the
 	 * attention-getter and the modal/notice carry the actual choices. `onRecord`
-	 * is the record action; a valid https `meetLink` adds the Join affordances.
+	 * is the record action; a valid https `meetLink` adds the Join affordances,
+	 * and an `onOpenNote` adds an "Open note" action (Granola-style).
 	 */
 	private promptMeeting(opts: {
 		/** Stable per-meeting key: a same-key reprompt supersedes, distinct keys coexist. */
@@ -982,6 +983,8 @@ export default class SystemRecordingPlugin extends Plugin {
 		subtitle: string;
 		meetLink: string | null;
 		onRecord: () => void;
+		/** Opens (creating if needed) the meeting note without recording. Omitted for ad-hoc/detected meetings. */
+		onOpenNote?: () => void;
 		/** Called whenever the user opens the link (Join / Join & record), so the auto-open at start can be suppressed. */
 		onLinkOpened?: () => void;
 	}): void {
@@ -1004,16 +1007,20 @@ export default class SystemRecordingPlugin extends Plugin {
 			: null;
 
 		// In-app multi-action notice (guaranteed path when Obsidian is in front).
+		// Order mirrors the modal / Granola: a combined primary (Join & record)
+		// when there's a link — else Record — then Join, then Open note. The
+		// combined action is the record path when a link exists, so no separate
+		// Record button is needed there.
 		const e = t().event;
 		const actions: NoticeAction[] = [];
-		if (onJoinAndRecord)
+		if (onJoinAndRecord) {
 			actions.push({ label: e.joinAndRecord, onClick: onJoinAndRecord, cta: true });
-		if (onJoin) actions.push({ label: e.join, onClick: onJoin });
-		actions.push({
-			label: e.record,
-			onClick: opts.onRecord,
-			cta: !onJoinAndRecord,
-		});
+			if (onJoin) actions.push({ label: e.join, onClick: onJoin });
+		} else {
+			actions.push({ label: e.record, onClick: opts.onRecord, cta: true });
+		}
+		if (opts.onOpenNote)
+			actions.push({ label: e.openNote, onClick: opts.onOpenNote });
 		// Supersede an earlier prompt for the *same* meeting (e.g. the lead-time
 		// notice when the start boundary now fires) rather than stacking a second
 		// persistent notice — but leave other meetings' prompts alone so
@@ -1040,10 +1047,12 @@ export default class SystemRecordingPlugin extends Plugin {
 				joinLabel: e.join,
 				recordLabel: e.record,
 				joinAndRecordLabel: e.joinAndRecord,
+				openNoteLabel: e.openNote,
 				dismissLabel: e.dismiss,
 				onJoin: onJoin ?? ((): void => undefined),
 				onRecord: opts.onRecord,
 				onJoinAndRecord: onJoinAndRecord ?? opts.onRecord,
+				onOpenNote: opts.onOpenNote ?? null,
 			}).open();
 		});
 	}
@@ -1170,10 +1179,36 @@ export default class SystemRecordingPlugin extends Plugin {
 			meetLink: event.meetLink,
 			onRecord: () =>
 				void this.startMeetingRecording(this.toMeetingInfo(event), event.end),
+			// Open (or create) the meeting note without recording — the "Open
+			// note" affordance, mirroring the agenda card.
+			onOpenNote: () => void this.openOrCreateEventNote(this.toMeetingInfo(event)),
 			// A manual Join opens the link, so don't let the auto-open fire again
 			// when the start boundary is crossed.
 			onLinkOpened: () => this.openedLinkEventIds.add(event.id),
 		});
+	}
+
+	/**
+	 * Opens the meeting note for an event, creating it first if none exists yet.
+	 * Unlike the record path this never starts a recording — it's the prompt's
+	 * "Open note" action (and reuses an already-created note so a later Record
+	 * links into the same note rather than duplicating it).
+	 */
+	private async openOrCreateEventNote(info: MeetingEventInfo): Promise<void> {
+		try {
+			const existing = buildNoteIndex(this.app).get(info.id)?.file ?? null;
+			const file =
+				existing ??
+				(await createMeetingNote(this.app, info, this.noteConfig())).file;
+			await this.app.workspace.getLeaf(false).openFile(file);
+			this.agendaEvents.emit("changed", undefined);
+		} catch (e) {
+			new Notice(
+				t().notices.recordingError(
+					e instanceof Error ? e.message : String(e)
+				)
+			);
+		}
 	}
 
 	/**
