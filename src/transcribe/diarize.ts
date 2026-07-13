@@ -6,10 +6,20 @@
  * segments back into one speaker-labelled transcript.
  */
 
+import { isHallucinationPhrase } from "./hallucination";
+
 export interface DiarSegment {
 	text: string;
 	start: number;
 	end: number;
+	/**
+	 * Whisper `verbose_json` per-segment confidence signals, when the endpoint
+	 * returns them. Used to drop silence hallucinations before merging. All
+	 * optional — endpoints that omit them simply skip confidence filtering.
+	 */
+	noSpeechProb?: number;
+	avgLogprob?: number;
+	compressionRatio?: number;
 }
 
 /**
@@ -30,6 +40,35 @@ function rangesTouch(aStart: number, aEnd: number, bStart: number, bEnd: number)
 
 function withinAnyWindow(seg: DiarSegment, windows: Array<[number, number]>): boolean {
 	return windows.some(([ws, we]) => rangesTouch(seg.start, seg.end, ws, we));
+}
+
+// Whisper's own silence/degenerate-output thresholds (the defaults its decoder
+// uses to blank a segment): a segment is treated as no-speech when the model is
+// confident the audio is silence (no_speech_prob high) AND the text it emitted
+// anyway is low-probability (avg_logprob low). compression_ratio catches the
+// other failure mode — looping/repetitive gibberish over noise.
+const NO_SPEECH_PROB_MAX = 0.6;
+const AVG_LOGPROB_MIN = -1.0;
+const COMPRESSION_RATIO_MAX = 2.4;
+
+/**
+ * True when a segment's confidence signals mark it as a silence hallucination.
+ * Requires the endpoint to have returned the signals; when they're absent this
+ * is a no-op (the phrase filter and speech-window filter still apply).
+ */
+function isLowConfidenceHallucination(seg: DiarSegment): boolean {
+	if (
+		seg.noSpeechProb !== undefined &&
+		seg.avgLogprob !== undefined &&
+		seg.noSpeechProb > NO_SPEECH_PROB_MAX &&
+		seg.avgLogprob < AVG_LOGPROB_MIN
+	) {
+		return true;
+	}
+	if (seg.compressionRatio !== undefined && seg.compressionRatio > COMPRESSION_RATIO_MAX) {
+		return true;
+	}
+	return false;
 }
 
 // One table for the me-first pairing: rank orders a start-time tie (me before
@@ -54,8 +93,14 @@ const SPEAKERS: Record<Speaker, { rank: number; label: string }> = {
  */
 function prepareStream(segments: DiarSegment[], windows?: Array<[number, number]>): DiarSegment[] {
 	const sorted = segments
-		.map((s) => ({ text: s.text.trim(), start: s.start, end: s.end }))
+		.map((s) => ({ ...s, text: s.text.trim() }))
 		.filter((s) => s.text.length > 0)
+		// Drop silence hallucinations before they reach the shared clock: the
+		// endpoint's own confidence signals (when present) and a whole-segment
+		// stock-phrase match ("Thanks for watching.", "[Music]", …). Both are
+		// per-segment and conservative, so a real utterance survives.
+		.filter((s) => !isLowConfidenceHallucination(s))
+		.filter((s) => !isHallucinationPhrase(s.text))
 		.sort((a, b) => a.start - b.start || a.end - b.end);
 
 	const deduped: DiarSegment[] = [];

@@ -139,6 +139,42 @@ describe("mergeDiarized", () => {
 		});
 	});
 
+	describe("silence-hallucination filtering", () => {
+		it("drops a whole-segment stock phrase before merging", () => {
+			const me = [seg("real point", 0, 2), seg("Thanks for watching!", 5, 6)];
+			expect(mergeDiarized(me, [])).toBe("Me: real point");
+		});
+
+		it("drops a bracketed non-speech token", () => {
+			const them = [seg("[Music]", 0, 4), seg("welcome all", 5, 7)];
+			expect(mergeDiarized([], them)).toBe("Them: welcome all");
+		});
+
+		it("drops a low-confidence silence segment via Whisper signals", () => {
+			// no_speech_prob high AND avg_logprob low => Whisper's own silence rule.
+			const me: DiarSegment[] = [
+				{ text: "you", start: 0, end: 1, noSpeechProb: 0.9, avgLogprob: -1.5 },
+				{ text: "on the topic of billing", start: 5, end: 8, noSpeechProb: 0.02, avgLogprob: -0.2 },
+			];
+			expect(mergeDiarized(me, [])).toBe("Me: on the topic of billing");
+		});
+
+		it("keeps a real segment even with high no_speech_prob when avg_logprob is healthy", () => {
+			const me: DiarSegment[] = [
+				{ text: "quick point here", start: 0, end: 2, noSpeechProb: 0.9, avgLogprob: -0.3 },
+			];
+			expect(mergeDiarized(me, [])).toBe("Me: quick point here");
+		});
+
+		it("drops a segment with a runaway compression ratio (looping gibberish)", () => {
+			const me: DiarSegment[] = [
+				{ text: "la la la la la la", start: 0, end: 3, compressionRatio: 3.1 },
+				{ text: "actual content", start: 5, end: 7 },
+			];
+			expect(mergeDiarized(me, [])).toBe("Me: actual content");
+		});
+	});
+
 	it("handles a realistic interleaved conversation with dedupe and filtering", () => {
 		const me = [
 			seg("Hi, thanks for joining", 0, 3),

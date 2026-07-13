@@ -191,6 +191,29 @@ export function transcribeAudio(
 export interface DiarizedResult {
 	text: string;
 	diarized: boolean;
+	/**
+	 * Why a non-diarized result came back, so the caller can react correctly:
+	 *   - "capability": the endpoint transcribed audio but ignored the timestamp
+	 *     request, so no future meeting can diarize either — invalidate the probe.
+	 *   - "error": a transient failure this run (flaky chunk, network). The next
+	 *     meeting may well succeed, so DON'T touch the cached probe.
+	 * Undefined when `diarized` is true.
+	 */
+	reason?: "capability" | "error";
+}
+
+/**
+ * Whether a non-diarized fallback should invalidate the cached timestamp probe.
+ *
+ * Only a genuine capability miss (the endpoint transcribed audio but ignored
+ * the timestamp request) means no future meeting can diarize, so the probe
+ * should be cleared. A transient error this run (a flaky chunk, a network blip)
+ * says nothing about the endpoint's capability, so the probe must stay put —
+ * otherwise one bad run silently disables speaker separation for every future
+ * meeting until the user manually re-checks (issue #61).
+ */
+export function shouldInvalidateProbe(result: DiarizedResult): boolean {
+	return !result.diarized && result.reason === "capability";
 }
 
 /**
@@ -247,13 +270,13 @@ export function transcribeDiarized(
 			// me + them + fallback 3 we'd pay by checking after both passes.
 			const meSegments = extractSegments(meResult);
 			if (isCapabilityMiss(meSegments, resultText(meResult))) {
-				return { text: "", diarized: false };
+				return { text: "", diarized: false, reason: "capability" };
 			}
 
 			const themResult = await runController(app, themFile, cfg, signal, "disabled", themProgress);
 			const themSegments = extractSegments(themResult);
 			if (isCapabilityMiss(themSegments, resultText(themResult))) {
-				return { text: "", diarized: false };
+				return { text: "", diarized: false, reason: "capability" };
 			}
 
 			// Both passes honored timestamps. A stream empty here is legitimately
@@ -268,7 +291,7 @@ export function transcribeDiarized(
 			// be transcribed, so warn and let the caller fall back to it rather
 			// than letting the throw escape and leave no transcript written.
 			console.warn("Diarized transcription pass failed; falling back to mixed file", error);
-			return { text: "", diarized: false };
+			return { text: "", diarized: false, reason: "error" };
 		}
 	});
 }

@@ -54,8 +54,10 @@ import { findExpiredRecordings, underFolder } from "./recordings/retention";
 const ACTION_ITEMS_HEADING = "## Action items";
 import { chatComplete } from "./enrich/llm";
 import { isPartialTranscript } from "./transcribe/partial";
+import { stripHallucinatedLines } from "./transcribe/hallucination";
 import {
     initTranscribeEngine,
+    shouldInvalidateProbe,
     transcribeAudio,
     transcribeDiarized,
     type TranscribeConfig,
@@ -1397,8 +1399,9 @@ export default class SystemRecordingPlugin extends Plugin {
      * the endpoint is known to emit timestamps. Returns the diarized transcript,
      * or null when separation doesn't apply (feature off, or no sidecars on
      * disk) or the endpoint returned no segments this pass and we fell back to
-     * the mixed file. On that fallback it also invalidates the cached probe so
-     * future meetings don't keep paying for the extra passes.
+     * the mixed file. It only invalidates the cached probe when the fallback was
+     * a genuine capability miss (no timestamps); a transient error leaves the
+     * probe intact so speaker separation isn't disabled for future meetings.
      */
     private async tryDiarizedTranscribe(
         recording: TFile,
@@ -1432,6 +1435,18 @@ export default class SystemRecordingPlugin extends Plugin {
             onProgress
         );
         if (result.diarized) return result.text;
+
+        // A transient failure this run (a flaky chunk, a network blip) must not
+        // be misread as "this endpoint can't do timestamps": that would null the
+        // probe and silently disable speaker separation for every future meeting
+        // until the user manually re-checks (issue #61). Only a genuine
+        // capability miss warrants invalidating the probe.
+        if (!shouldInvalidateProbe(result)) {
+            console.warn(
+                "[Meeting Copilot] diarization pass errored; using mixed audio for this meeting (probe left intact)"
+            );
+            return null;
+        }
 
         // The endpoint didn't return timestamps this pass (a misconfiguration
         // slipping past the probe). Invalidate the cached probe so we stop
@@ -1496,7 +1511,7 @@ export default class SystemRecordingPlugin extends Plugin {
                 onProgress
             );
             const diarized = diarizedText !== null;
-            const text =
+            const rawText =
                 diarizedText ??
                 (await transcribeAudio(
                     this.app,
@@ -1505,6 +1520,12 @@ export default class SystemRecordingPlugin extends Plugin {
                     undefined,
                     onProgress
                 ));
+            // The diarized path already filters silence hallucinations per
+            // segment before merging. The mixed path has no segment seam, so a
+            // silent recording can come back as nothing but a stock YouTube-outro
+            // phrase; strip those whole lines so it's treated as empty rather
+            // than written out as a bogus note/title.
+            const text = diarized ? rawText : stripHallucinatedLines(rawText);
 
             const trimmed = text.trim();
             if (!trimmed) {

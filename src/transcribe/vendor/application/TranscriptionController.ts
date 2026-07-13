@@ -72,9 +72,10 @@ export class TranscriptionController {
 		endTime?: number,
 		abortSignal?: AbortSignal
 	// MEETING-COPILOT PATCH: the object return additionally carries the
-	// timestamped segments (when the model produced any) so callers can do
-	// speaker separation on a shared timeline. See VENDOR.md.
-	): Promise<string | { text: string; modelUsed: string; segments?: Array<{ text: string; start: number; end: number }> }> {
+	// timestamped segments (when the model produced any), with optional
+	// per-segment confidence signals, so callers can do speaker separation on a
+	// shared timeline and drop silence hallucinations. See VENDOR.md.
+	): Promise<string | { text: string; modelUsed: string; segments?: Array<{ text: string; start: number; end: number; noSpeechProb?: number; avgLogprob?: number; compressionRatio?: number }> }> {
 		this.logger.info('Starting transcription', {
 			file: audioFile.name,
 			model: this.settings.model,
@@ -192,7 +193,7 @@ export class TranscriptionController {
 			if (result.modelUsed) {
 				// MEETING-COPILOT PATCH: attach segments when present so callers
 				// can merge two speaker streams by time. See VENDOR.md.
-				const withModel: { text: string; modelUsed: string; segments?: Array<{ text: string; start: number; end: number }> } = {
+				const withModel: { text: string; modelUsed: string; segments?: Array<{ text: string; start: number; end: number; noSpeechProb?: number; avgLogprob?: number; compressionRatio?: number }> } = {
 					text: correctedText,
 					modelUsed: result.modelUsed
 				};
