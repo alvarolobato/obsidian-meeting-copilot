@@ -7,7 +7,9 @@ import type { RecordingFormat } from "./transcribe/sidecar";
 export type { RecordingFormat };
 
 export interface RecorderStatus {
-    status: "recording" | "stopped" | "error";
+    // "warning" is non-fatal (e.g. a device-change capture restart failed);
+    // recording continues.
+    status: "recording" | "stopped" | "error" | "warning";
     duration?: number;
     file?: string;
     message?: string;

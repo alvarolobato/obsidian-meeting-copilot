@@ -116,6 +116,12 @@ if #available(macOS 13.0, *) {
         mixer.appendMicrophoneAudio(buffer)
     }
 
+    // Surface non-fatal capture recovery failures (e.g. a device-change restart
+    // that didn't take) without ending the recording.
+    captureManager.onWarning = { message in
+        emitJSON(["status": "warning", "message": message])
+    }
+
     // Start capture
     _ = Task {
         do {
@@ -131,21 +137,22 @@ if #available(macOS 13.0, *) {
     // finalize/exit path (frames are legitimately read after stop).
     var stopRequested = false
 
-    // Fail fast on a dead capture. macOS delivers ZERO frames — silently, with
-    // no thrown error — when the helper binary's Screen Recording / Microphone
-    // TCC grant was invalidated (its code hash changed on an update). Without
-    // this, the user records an entire meeting into the void and only finds out
-    // at stop ("No audio was captured"). Both sources feed the mixer within a
-    // second or two even in silence, so nothing after this window means the
-    // capture is broken — report an actionable permission error while it still
-    // matters.
+    // Fail fast on a dead capture. Both sources feed the mixer within a second
+    // or two even in silence, so zero frames well past that means capture never
+    // came up — most often because an audio device change (Zoom launching after
+    // we start and grabbing the input/output device) stopped both paths before
+    // the recovery could re-establish them, or because the helper's Screen
+    // Recording / Microphone TCC grant was invalidated (its code hash changed on
+    // an update). Either way, without this the user records a whole meeting into
+    // the void and only learns at stop ("No audio was captured"). Report it
+    // while it's still actionable.
     let watchdogSeconds = 8.0
     DispatchQueue.global().asyncAfter(deadline: .now() + watchdogSeconds) {
         guard !stopRequested else { return }
         let frames = mixer.capturedFrames
         if frames.system == 0 && frames.mic == 0 {
             fail(
-                "No audio captured after \(Int(watchdogSeconds))s. Grant Obsidian BOTH Screen Recording and Microphone access in System Settings → Privacy & Security, then restart Obsidian and record again."
+                "No audio captured after \(Int(watchdogSeconds))s. If a meeting app (e.g. Zoom) started after recording, stop and start recording again once it's running. Otherwise grant Obsidian both Screen Recording and Microphone access in System Settings → Privacy & Security and restart Obsidian."
             )
         }
     }

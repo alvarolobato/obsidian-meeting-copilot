@@ -1696,6 +1696,11 @@ export default class SystemRecordingPlugin extends Plugin {
         } else if (status.status === "error") {
             this.resetRecordingUi();
             this.notifyRecordingError(status.message ?? t().notices.unknownError);
+        } else if (status.status === "warning") {
+            // Non-fatal: a capture path hit trouble (usually a device-change
+            // restart that didn't take). Recording continues, but tell the user
+            // so a silent stream isn't discovered only at stop.
+            if (status.message) new Notice(status.message);
         }
     }
 
