@@ -69,6 +69,13 @@ function toMono(buffer: AudioBuffer): Float32Array {
  * Decode an audio file (wav or m4a) to mono PCM at 16 kHz. Decoding into a
  * 16 kHz context lets the browser resample once, up front, so the whole file
  * never sits in RAM at the capture rate.
+ *
+ * Memory note: this still materializes the full mono stream (~115 MB/hour at
+ * 16 kHz Float32) plus the VAD's internal Int16 copy. The two streams are
+ * processed serially so only one is resident at a time; for very long
+ * meetings (2h+) a streaming/frame-based decode is the proper fix (tracked as
+ * a follow-up). If decoding OOMs, computeSpeechWindows swallows it and the
+ * caller falls back to the recorder's RMS windows.
  */
 async function decodeMono16k(
 	app: App,

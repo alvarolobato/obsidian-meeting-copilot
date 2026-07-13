@@ -31,6 +31,26 @@ export interface SpeechWindows {
 	them: Array<[number, number]>;
 }
 
+/**
+ * Combine two window sources per stream: keep `primary`'s windows for a stream
+ * when it detected any speech, else fall back to `fallback`'s for that stream.
+ * Lets local WebRTC VAD and the recorder's RMS gate cover for each other when
+ * one under-detects a stream (e.g. a quiet mic the RMS gate found but VAD
+ * didn't, or vice versa). Returns undefined only when both are undefined; an
+ * empty result for a stream still means "keep all" downstream.
+ */
+export function preferWindows(
+	primary?: SpeechWindows,
+	fallback?: SpeechWindows
+): SpeechWindows | undefined {
+	if (!primary) return fallback;
+	if (!fallback) return primary;
+	return {
+		me: primary.me.length > 0 ? primary.me : fallback.me,
+		them: primary.them.length > 0 ? primary.them : fallback.them,
+	};
+}
+
 type Speaker = "me" | "them";
 
 /** Inclusive: two ranges that merely touch at an endpoint still count. */
@@ -94,6 +114,10 @@ const SPEAKERS: Record<Speaker, { rank: number; label: string }> = {
 // (real cross-talk) survives.
 const CROSSTALK_SIMILARITY = 0.6;
 const CROSSTALK_MIN_TOKENS = 3;
+// A real bleed echo sits almost on top of its source in time. Requiring the mic
+// segment to be mostly covered by the them segment avoids dropping genuine
+// simultaneous-but-distinct speech that only briefly overlaps.
+const CROSSTALK_MIN_OVERLAP = 0.5;
 
 /** Words only, lowercased, punctuation stripped — for fuzzy cross-stream matching. */
 function tokenize(text: string): string[] {
@@ -118,8 +142,12 @@ function textSimilarity(a: string, b: string): number {
 	return union === 0 ? 0 : intersection / union;
 }
 
-function timeOverlaps(a: DiarSegment, b: DiarSegment): boolean {
-	return Math.min(a.end, b.end) - Math.max(a.start, b.start) > 0;
+/** Fraction of `a`'s duration that falls within `b` (0 when they don't overlap). */
+function overlapFraction(a: DiarSegment, b: DiarSegment): number {
+	const overlap = Math.min(a.end, b.end) - Math.max(a.start, b.start);
+	if (overlap <= 0) return 0;
+	const duration = a.end - a.start;
+	return duration <= 0 ? 0 : overlap / duration;
 }
 
 /**
@@ -137,7 +165,7 @@ function dropCrossTalk(meSegs: DiarSegment[], themSegs: DiarSegment[]): DiarSegm
 		if (tokenize(me.text).length < CROSSTALK_MIN_TOKENS) return true;
 		const isEcho = themSegs.some(
 			(them) =>
-				timeOverlaps(me, them) &&
+				overlapFraction(me, them) >= CROSSTALK_MIN_OVERLAP &&
 				textSimilarity(me.text, them.text) >= CROSSTALK_SIMILARITY
 		);
 		return !isEcho;

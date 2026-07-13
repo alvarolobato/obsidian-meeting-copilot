@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { mergeDiarized, type DiarSegment, type SpeechWindows } from "./diarize";
+import {
+	mergeDiarized,
+	preferWindows,
+	type DiarSegment,
+	type SpeechWindows,
+} from "./diarize";
 
 function seg(text: string, start: number, end: number): DiarSegment {
 	return { text, start, end };
@@ -80,6 +85,46 @@ describe("mergeDiarized", () => {
 			expect(mergeDiarized(me, them)).toBe(
 				["Them: thanks for the update", "Me: thanks for the update"].join("\n")
 			);
+		});
+
+		it("keeps similar speech that only briefly overlaps (not a full echo)", () => {
+			// High word overlap (Jaccard 0.75) but the mic segment only clips the
+			// tail of the them segment (~11% of its duration), so it's kept — a
+			// real echo would sit almost entirely on top of its source.
+			const them = [seg("we should ship the release on friday", 10, 16)];
+			const me = [seg("we should ship the release on monday", 15.5, 20)];
+			expect(mergeDiarized(me, them)).toBe(
+				[
+					"Them: we should ship the release on friday",
+					"Me: we should ship the release on monday",
+				].join("\n")
+			);
+		});
+	});
+
+	describe("preferWindows", () => {
+		const local: SpeechWindows = { me: [[1, 2]], them: [[3, 4]] };
+		const rms: SpeechWindows = { me: [[5, 6]], them: [[7, 8]] };
+
+		it("returns the other when one is undefined", () => {
+			expect(preferWindows(undefined, rms)).toBe(rms);
+			expect(preferWindows(local, undefined)).toBe(local);
+			expect(preferWindows(undefined, undefined)).toBeUndefined();
+		});
+
+		it("keeps primary windows for a stream that detected speech", () => {
+			expect(preferWindows(local, rms)).toEqual({
+				me: [[1, 2]],
+				them: [[3, 4]],
+			});
+		});
+
+		it("falls back per stream when primary found no speech there", () => {
+			const primary: SpeechWindows = { me: [], them: [[3, 4]] };
+			expect(preferWindows(primary, rms)).toEqual({
+				me: [[5, 6]], // fell back to RMS for the empty mic stream
+				them: [[3, 4]], // kept local for the stream that had speech
+			});
 		});
 	});
 

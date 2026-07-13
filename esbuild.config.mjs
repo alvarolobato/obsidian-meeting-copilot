@@ -14,8 +14,9 @@ function copyFvadWasm() {
 	if (existsSync(FVAD_WASM_SRC)) {
 		copyFileSync(FVAD_WASM_SRC, FVAD_WASM_DEST);
 	} else {
-		// Missing binary is not fatal: local VAD falls back to server-side
-		// chunking. Remove any stale copy so we don't ship a mismatched asset.
+		// Missing binary is not fatal: diarization window detection falls back to
+		// the recorder's RMS speech.json (then to no filtering). Remove any stale
+		// copy so we don't ship a mismatched asset.
 		rmSync(FVAD_WASM_DEST, { force: true });
 	}
 }

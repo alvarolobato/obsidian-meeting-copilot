@@ -67,32 +67,33 @@ const PHRASE_PATTERNS: RegExp[] = [
 
 	// --- Non-English silence artifacts ------------------------------------
 	// Whisper invents localized YouTube outros / subtitle credits on silence
-	// just as readily as English ones. These are all whole-segment stock
-	// phrases that never occur in real work-meeting speech, so matching them
-	// (some as substrings, since Whisper pads the outro) is safe.
+	// just as readily as English ones. Each is anchored to the WHOLE segment
+	// (like the English patterns above) and length-bounded, so a long real
+	// sentence that merely mentions one of these terms is NOT dropped — only a
+	// segment that IS essentially the outro/credit. The confidence signals in
+	// diarize.ts remain the language-agnostic backstop for anything padded
+	// beyond these bounds.
 
 	// The Amara.org subtitle credit appears verbatim across many languages
 	// ("Napisy … Amara.org", "Subtítulos … Amara.org", "Untertitel der
-	// Amara.org-Community", …). The domain token alone is a reliable tell.
-	/amara\.org/,
+	// Amara.org-Community", …). Bounded so it only matches a credit-length line.
+	/^.{0,80}amara\.org.{0,20}$/,
 	// Japanese: "ご視聴ありがとうございました" (thanks for watching) and the
-	// "チャンネル登録"/"高評価" subscribe/like CTA.
-	/ご視聴.*ありがとう/,
-	/チャンネル登録/,
-	/高評価/,
-	// Korean: "시청해 주셔서 감사합니다" (thanks for watching), "구독" (subscribe).
-	/시청.*감사/,
-	/구독.*(?:좋아요|부탁)/,
-	// Chinese: "感谢观看" / "谢谢观看" (thanks for watching), "请订阅" (subscribe).
-	/(?:感谢|谢谢)(?:观看|收看|大家)/,
-	/请(?:订阅|点赞|关注)/,
-	// Spanish / Portuguese / French / German thanks-for-watching sign-offs.
-	/^(?:muchas )?gracias por (?:ver|verlo|acompañar).*/,
-	/^obrigado por (?:assistir|ver).*/,
-	/^merci d['’]?avoir regard[ée].*/,
-	/^(?:vielen )?dank(?:e)? (?:fürs|für das) zuschauen$/,
+	// "チャンネル登録…お願い(します)" subscribe CTA.
+	/^.{0,16}ご視聴.{0,12}ありがとう.{0,12}$/,
+	/^.{0,12}チャンネル登録.{0,12}お願い.{0,8}$/,
+	// Korean: "시청해 주셔서 감사합니다" (thanks for watching).
+	/^.{0,20}시청.{0,12}감사(?:합니다|드립니다)$/,
+	// Chinese: "感谢观看" / "谢谢收看" (thanks for watching), "订阅…频道" (subscribe).
+	/^.{0,10}(?:感谢|谢谢).{0,6}(?:观看|收看).{0,10}$/,
+	/^.{0,8}订阅.{0,8}频道.{0,8}$/,
 	// Russian: "Спасибо за просмотр" (thanks for watching).
-	/спасибо за просмотр/,
+	/^.{0,16}спасибо за просмотр.{0,16}$/,
+	// Spanish / Portuguese / French / German thanks-for-watching sign-offs.
+	/^(?:muchas )?gracias por (?:ver|verlo|acompañar)\b.{0,30}$/,
+	/^obrigado por (?:assistir|ver)\b.{0,30}$/,
+	/^merci d['’]?avoir regard[eé].{0,30}$/,
+	/^(?:vielen )?dank(?:e)? (?:fürs|für das) zuschauen$/,
 ];
 
 /**

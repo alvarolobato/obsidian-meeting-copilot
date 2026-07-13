@@ -73,7 +73,7 @@ import {
     parseSpeechWindows,
     sidecarPathsFor,
 } from "./transcribe/sidecar";
-import type { SpeechWindows } from "./transcribe/diarize";
+import { preferWindows, type SpeechWindows } from "./transcribe/diarize";
 import { computeSpeechWindows } from "./transcribe/vadWindows";
 import { parseDictionary } from "./transcribe/dictionary";
 import type { TranscriptionModel } from "./transcribe/vendor/ApiSettings";
@@ -1460,20 +1460,16 @@ export default class SystemRecordingPlugin extends Plugin {
         // Speech windows gate out Whisper's silence hallucinations without
         // touching the audio (so the two streams keep their shared clock).
         // Prefer local WebRTC VAD — a real speech/non-speech classifier — over
-        // the recorder's crude RMS gate. Fall back to the helper's speech.json
-        // when the WASM isn't present or decoding fails, and to no filtering
-        // (undefined) when neither is available.
-        let windows: SpeechWindows | undefined = await computeSpeechWindows(
-            this.app,
-            meFile,
-            themFile
-        );
-        if (!windows) {
-            const speech = await this.resolveExistingFile(sidecars.speech);
-            if (speech) {
-                windows = parseSpeechWindows(await this.app.vault.read(speech));
-            }
+        // the recorder's crude RMS gate, but merge per stream: if VAD found no
+        // speech on a stream, fall back to the recorder's speech.json for that
+        // stream (and to no filtering when neither is available).
+        const localWindows = await computeSpeechWindows(this.app, meFile, themFile);
+        let rmsWindows: SpeechWindows | undefined;
+        const speech = await this.resolveExistingFile(sidecars.speech);
+        if (speech) {
+            rmsWindows = parseSpeechWindows(await this.app.vault.read(speech));
         }
+        const windows = preferWindows(localWindows, rmsWindows);
         const result = await transcribeDiarized(
             this.app,
             meFile,

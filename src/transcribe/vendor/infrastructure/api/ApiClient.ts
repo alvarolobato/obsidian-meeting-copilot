@@ -228,6 +228,10 @@ export abstract class ApiClient {
 				// Check if retryable
 				if (this.isRetryable(response.status) && retryCount < this.config.maxRetries) {
 					await this.delay(this.config.retryDelay * Math.pow(2, retryCount)); // Exponential backoff
+					// A cancel during the backoff must abort, not fire another request.
+					if (options.signal?.aborted) {
+						throw new Error('Request cancelled by user');
+					}
 					return this.executeWithRetry<T>(url, options, retryCount + 1);
 				}
 
@@ -266,6 +270,10 @@ export abstract class ApiClient {
 					error
 				);
 				await this.delay(this.config.retryDelay * Math.pow(2, retryCount));
+				// A cancel during the backoff must abort, not fire another request.
+				if (options.signal?.aborted) {
+					throw new Error('Request cancelled by user');
+				}
 				return this.executeWithRetry<T>(url, options, retryCount + 1);
 			}
 			if (error instanceof Error) {
@@ -287,26 +295,28 @@ export abstract class ApiClient {
 		}
 		const code = (error as { code?: unknown }).code;
 		const haystack = `${error.message} ${typeof code === 'string' ? code : ''}`.toLowerCase();
+		// Specific network tells only — deliberately NOT bare "timeout" or
+		// "network error", which appear in application-level messages that retry
+		// can't fix (e.g. a workflow "chunk processing timeout").
 		return [
-			'net::',
+			'net::', // Chromium/Electron net errors (net::ERR_*)
 			'err_network',
 			'err_connection',
 			'err_internet_disconnected',
 			'err_name_not_resolved',
 			'err_timed_out',
+			'etimedout', // Node errno
+			'esockettimedout',
 			'econnreset',
 			'econnrefused',
 			'econnaborted',
-			'etimedout',
 			'enetdown',
 			'enetunreach',
 			'ehostunreach',
 			'eai_again',
 			'epipe',
 			'socket hang up',
-			'network error',
-			'failed to fetch',
-			'timeout'
+			'failed to fetch' // fetch/undici network failure
 		].some((needle) => haystack.includes(needle));
 	}
 

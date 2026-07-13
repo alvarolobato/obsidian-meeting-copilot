@@ -16,8 +16,8 @@ class TestClient extends ApiClient {
 	testConnection(): Promise<boolean> {
 		return Promise.resolve(true);
 	}
-	run(): Promise<{ ok: boolean }> {
-		return this.get<{ ok: boolean }>("/ping");
+	run(signal?: AbortSignal): Promise<{ ok: boolean }> {
+		return this.get<{ ok: boolean }>("/ping", undefined, signal);
 	}
 	protected override getTimerWindow(): Window {
 		return globalThis as unknown as Window;
@@ -81,6 +81,36 @@ describe("ApiClient network-error retry", () => {
 		});
 
 		await expect(client().run()).rejects.toThrow(/parse failure/);
+		expect(calls).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not retry application-level 'timeout' messages", async () => {
+		// A workflow-level "chunk processing timeout" is not a network failure
+		// and must not be retried (the predicate matches specific network tells,
+		// not the bare word "timeout").
+		const calls = vi.fn();
+		__setRequestUrl(() => {
+			calls();
+			throw new Error("Chunk processing timeout after post-processing");
+		});
+
+		await expect(client().run()).rejects.toThrow(/Chunk processing timeout/);
+		expect(calls).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not retry after the signal aborts during backoff", async () => {
+		const calls = vi.fn();
+		const controller = new AbortController();
+		__setRequestUrl(() => {
+			calls();
+			// Abort as soon as the first attempt fails, before the backoff elapses.
+			controller.abort();
+			throw new Error("net::ERR_NETWORK_IO_SUSPENDED");
+		});
+
+		await expect(client().run(controller.signal)).rejects.toThrow(
+			/cancelled by user/
+		);
 		expect(calls).toHaveBeenCalledTimes(1);
 	});
 
