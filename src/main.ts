@@ -15,8 +15,8 @@ import * as path from "path";
 import { GoogleOAuth, type StoredTokens } from "./auth/googleOAuth";
 import { listEvents } from "./calendar/googleCalendar";
 import { parseKeywords } from "./calendar/eventFilter";
-import { CalendarScheduler, ScheduledEvent } from "./calendar/scheduler";
-import { actionNotice } from "./ui/actionNotice";
+import { CalendarScheduler, GRACE_MS, ScheduledEvent } from "./calendar/scheduler";
+import { actionNotice, multiActionNotice, NoticeAction } from "./ui/actionNotice";
 import {
     ADHOC_ID_PREFIX,
     createMeetingNote,
@@ -59,6 +59,7 @@ import { isPartialTranscript } from "./transcribe/partial";
 import { stripHallucinatedLines } from "./transcribe/hallucination";
 import {
     initTranscribeEngine,
+    isDiarizationCancelled,
     shouldInvalidateProbe,
     transcribeAudio,
     transcribeDiarized,
@@ -105,6 +106,12 @@ import {
 } from "./ui/agenda/components/meetingRow";
 import { registerIcons, RECORD_ICON } from "./ui/icons";
 import { notifyOs, requestNotificationPermission } from "./ui/osNotification";
+import { MeetingPromptModal } from "./ui/meetingPromptModal";
+import {
+    QueueSnapshot,
+    TranscriptionCancelledError,
+    TranscriptionQueue,
+} from "./transcribe/queue";
 import { MeetingDetector } from "./detect/meetingDetector";
 import { googleMeetActive, zoomInMeeting } from "./detect/probe";
 import { execFile } from "child_process";
@@ -161,12 +168,38 @@ export default class SystemRecordingPlugin extends Plugin {
 	private currentMeetingNote: TFile | null = null;
 	/** Calendar event id of the in-progress meeting recording, for agenda state. */
 	private currentRecordingEventId: string | null = null;
+	/** End time (epoch ms) of the calendar event being recorded, for auto-stop/sleep recovery. Null for ad-hoc. */
+	private currentRecordingEventEnd: number | null = null;
 	/** Vault-relative path of the in-progress recording, protected from retention. */
 	private currentRecordingPath: string | null = null;
 	/** Note paths currently being enriched, to prevent overlapping LLM runs. */
 	private enrichingPaths = new Set<string>();
-	/** Audio paths currently being transcribed, to prevent overlapping runs. */
-	private transcribingPaths = new Set<string>();
+	/** Visible, serial transcription queue (running + waiting), with cancellation. */
+	private transcriptionQueue = new TranscriptionQueue((s) =>
+		this.renderQueueStatus(s)
+	);
+	/** Calendar event ids whose meeting link was already auto-opened, so it opens once. */
+	private openedLinkEventIds = new Set<string>();
+	/**
+	 * In-app meeting prompts currently on screen, keyed by meeting (calendar
+	 * event id, or a detection key). A new prompt for the *same* key supersedes
+	 * its predecessor (upcoming → start), while distinct meetings coexist so
+	 * overlapping / post-wake catch-up prompts don't clobber each other.
+	 */
+	private meetingNotices = new Map<string, Notice>();
+	/**
+	 * The current "meeting ended — stop recording?" prompt, if any. A recording
+	 * never stops on its own (unless the user opted into calendar auto-stop), so
+	 * the end of a meeting only offers to stop; we keep one reference to supersede
+	 * a stale prompt and to clear it once recording actually ends.
+	 */
+	private stopPromptNotice: Notice | null = null;
+	/** Resolvers waiting for the current recording to fully stop (back-to-back chaining). */
+	private stopWaiters: Array<() => void> = [];
+	/** True while a stopped recording is still being linked/handled in attachRecording. */
+	private attaching = false;
+	/** Wall-clock of the previous duration tick, for sleep detection while recording. */
+	private lastDurationTickAt: number | null = null;
 	/** Note paths currently being offered an AI title, to prevent duplicate modals. */
 	private titleSuggestingPaths = new Set<string>();
 	/** One-shot startup retention sweep, cleared on unload. */
@@ -292,6 +325,18 @@ export default class SystemRecordingPlugin extends Plugin {
 			callback: () => void this.createDashboard(),
 		});
 
+		this.addCommand({
+			id: "cancel-transcription",
+			name: t().commands.cancelTranscription,
+			callback: () => this.cancelActiveTranscription(),
+		});
+
+		// Once the vault index is ready, nudge the user about recordings that
+		// finished but were never transcribed (e.g. a reload mid-transcription).
+		this.app.workspace.onLayoutReady(() =>
+			this.notifyPendingTranscriptions()
+		);
+
 		// Sweep expired recordings shortly after startup (never blocks load).
 		this.retentionTimeout = window.setTimeout(() => {
 			this.retentionTimeout = null;
@@ -309,7 +354,11 @@ export default class SystemRecordingPlugin extends Plugin {
             // Fatal failures (spawn error / non-zero exit) flip isRecording off
             // before invoking onError; a stderr line while still recording is
             // non-fatal, so only reset the UI when recording has truly stopped.
-            if (!this.recorder.isRecording) this.resetRecordingUi();
+            // Skip while attachRecording is in flight — a late stderr/exit line
+            // must not tear down state (or early-release a back-to-back waiter)
+            // mid-attach; attachRecording's finally owns that teardown.
+            if (!this.recorder.isRecording && !this.attaching)
+                this.resetRecordingUi();
         };
 
 		this.updateScheduler();
@@ -327,8 +376,13 @@ export default class SystemRecordingPlugin extends Plugin {
             window.clearTimeout(this.retentionTimeout);
             this.retentionTimeout = null;
         }
+		this.transcriptionQueue.cancelAll();
 		this.scheduler?.stop();
 		this.agendaEvents.clear();
+		for (const notice of this.meetingNotices.values()) notice.hide();
+		this.meetingNotices.clear();
+		this.stopPromptNotice?.hide();
+		this.stopPromptNotice = null;
     }
 
     async loadSettings() {
@@ -586,25 +640,38 @@ export default class SystemRecordingPlugin extends Plugin {
         }
     }
 
-    private async startRecording(meeting: {
-        folder: string;
-        basename: string;
-        notePath: string;
-        eventId?: string;
-        note?: TFile;
-    }) {
+    private async startRecording(
+        meeting: {
+            folder: string;
+            basename: string;
+            notePath: string;
+            eventId?: string;
+            /** Calendar event end (epoch ms) for auto-stop; null/omitted for ad-hoc. */
+            eventEnd?: number | null;
+            note?: TFile;
+        },
+        opts?: { replaceCurrent?: boolean }
+    ) {
         console.warn("[Meeting Copilot][recorder] startRecording requested", {
             notePath: meeting.notePath,
             eventId: meeting.eventId,
             isRecording: this.recorder.isRecording,
             starting: this.starting,
+            replaceCurrent: opts?.replaceCurrent ?? false,
         });
         if (this.recorder.isRecording) {
-            console.warn(
-                "[Meeting Copilot][recorder] startRecording skipped: already recording"
-            );
-            new Notice(t().notices.alreadyRecording);
-            return;
+            // Back-to-back meetings: stop the prior recording (and let it finish
+            // linking/auto-transcribing) before starting this one, so B's first
+            // minutes aren't lost to an "already recording" bail.
+            if (opts?.replaceCurrent) {
+                await this.stopAndWait();
+            } else {
+                console.warn(
+                    "[Meeting Copilot][recorder] startRecording skipped: already recording"
+                );
+                new Notice(t().notices.alreadyRecording);
+                return;
+            }
         }
 
         // A start is already in progress (binary provisioning may be awaiting)
@@ -666,6 +733,7 @@ export default class SystemRecordingPlugin extends Plugin {
             this.currentMeetingNotePath = meeting.notePath;
             this.currentMeetingNote = meeting.note ?? null;
             this.currentRecordingEventId = meeting.eventId ?? null;
+            this.currentRecordingEventEnd = meeting.eventEnd ?? null;
 
             this.currentRecordingPath = relativePath;
             const vaultBasePath =
@@ -687,6 +755,9 @@ export default class SystemRecordingPlugin extends Plugin {
             this.startDurationTimer();
             this.updateRibbonIcon(true);
             this.agendaEvents.emit("changed", undefined);
+            // A recording is now underway, so any pending "meeting detected —
+            // record?" prompt is moot regardless of how this start was triggered.
+            this.dismissMeetingNotices("detect:");
 
             new Notice(t().notices.recordingStarted);
         } finally {
@@ -702,6 +773,33 @@ export default class SystemRecordingPlugin extends Plugin {
 
         this.recorder.stop();
         new Notice(t().notices.stoppingRecording);
+    }
+
+    /**
+     * Stops the current recording and resolves once it has fully wound down —
+     * the recorder has terminated and its file has been linked/handled — so a
+     * back-to-back recording can start against clean state. Resolves immediately
+     * when nothing is recording.
+     */
+    private stopAndWait(): Promise<void> {
+        // "Fully wound down" means both the recorder has terminated *and* the
+        // just-stopped file has finished linking/handling — not merely
+        // `isRecording === false` — so a chained start begins against clean
+        // shared state. Wait when either is still true.
+        if (!this.recorder.isRecording && !this.attaching) {
+            return Promise.resolve();
+        }
+        return new Promise<void>((resolve) => {
+            this.stopWaiters.push(resolve);
+            if (this.recorder.isRecording) this.recorder.stop();
+        });
+    }
+
+    /** Resolves any pending back-to-back waiters once a stop has fully settled. */
+    private resolveStopWaiters(): void {
+        const waiters = this.stopWaiters;
+        this.stopWaiters = [];
+        for (const resolve of waiters) resolve();
     }
 
 	// MARK: - Calendar integration
@@ -732,6 +830,7 @@ export default class SystemRecordingPlugin extends Plugin {
 		if (this.authExpired) return;
 		this.authExpired = true;
 		this.scheduler?.stop();
+		this.dismissMeetingNotices(SystemRecordingPlugin.CAL_NOTICE_PREFIX);
 		this.agendaEvents.emit("changed", undefined);
 		actionNotice(
 			t().notices.calendarReconnect,
@@ -740,15 +839,27 @@ export default class SystemRecordingPlugin extends Plugin {
 		);
 	}
 
-	/** Starts the scheduler when auto-record is on and authenticated; stops it otherwise. */
+	/**
+	 * Starts the scheduler when any calendar automation is on (notifications,
+	 * auto-start, or auto-stop) and we're authenticated; stops it otherwise.
+	 * Auto-start/stop drive the scheduler on their own — they aren't inert just
+	 * because the notification prompts are turned off.
+	 */
 	updateScheduler(): void {
 		const shouldRun =
-			this.settings.calendarAutoRecord && this.oauth.isAuthenticated();
+			(this.settings.calendarAutoRecord ||
+				this.settings.calendarAutoStart ||
+				this.settings.calendarAutoStop) &&
+			this.oauth.isAuthenticated();
 		if (shouldRun) {
 			if (!this.scheduler) {
 				this.scheduler = new CalendarScheduler({
 					now: () => Date.now(),
 					fetchEvents: (minMs, maxMs) => this.fetchCalendarEvents(minMs, maxMs),
+					leadMs: () =>
+						Math.max(0, this.settings.notifyBeforeStartMinutes) *
+						60 * 1000,
+					onEventUpcoming: (event) => this.handleEventUpcoming(event),
 					onEventStart: (event) => this.handleEventStart(event),
 					onEventEnd: (event) => this.handleEventEnd(event),
 					onError: (message) => {
@@ -763,6 +874,10 @@ export default class SystemRecordingPlugin extends Plugin {
 			if (!this.scheduler.isRunning) this.scheduler.start();
 		} else {
 			this.scheduler?.stop();
+			// No more boundary callbacks will fire, so sweep any calendar prompts
+			// still on screen rather than leaving them stale (detection prompts,
+			// driven separately, are left alone).
+			this.dismissMeetingNotices(SystemRecordingPlugin.CAL_NOTICE_PREFIX);
 		}
 	}
 
@@ -790,6 +905,9 @@ export default class SystemRecordingPlugin extends Plugin {
 			!Platform.isMacOS
 		) {
 			this.detector = null;
+			// No probe will fire onEnd now, so sweep any detection prompts still
+			// on screen (mirrors the calendar sweep when the scheduler stops).
+			this.dismissMeetingNotices("detect:");
 			return;
 		}
 		if (!this.detector) {
@@ -848,53 +966,198 @@ export default class SystemRecordingPlugin extends Plugin {
 	/** Offers to record when a meeting is detected — unless we're already recording. */
 	private onMeetingDetected(app: string): void {
 		if (this.recorder.isRecording) return;
-		this.promptMeeting(t().detect.detected(app), t().detect.recordPrompt, () => {
-			void this.startAdHocMeeting();
+		// A calendar meeting happening right now already produced its own
+		// (scheduler) notification — don't stack a second detection prompt for
+		// what is almost certainly the same meeting. (No scheduler / no live
+		// event ⇒ this is an unplanned meeting, so still prompt.)
+		if (this.scheduler?.isRunning && this.scheduler.hasActiveEvent()) return;
+		// A detected meeting has no calendar link to join, so only offer Record.
+		this.promptMeeting({
+			key: `detect:${app}`,
+			title: t().detect.detected(app),
+			subtitle: t().event.startingNow,
+			meetLink: null,
+			onRecord: () => void this.startAdHocMeeting(),
 		});
 	}
 
-	/** True when the active recording is unplanned (ad-hoc/detected), not a calendar meeting. */
-	private isAdhocRecording(): boolean {
-		const id = this.currentRecordingEventId;
-		return id === null || isAdhocId(id);
-	}
-
 	/**
-	 * When a detected meeting ends, stop the recording automatically — but only
-	 * for unplanned (ad-hoc/detected) recordings. Calendar-driven recordings are
-	 * left to the scheduler's own event-end handling.
+	 * When a detected meeting ends, never stop the recording on its own — offer
+	 * to stop instead, for both ad-hoc and scheduled recordings. (Auto-stop only
+	 * ever happens at a calendar event's own end when the user opted into it; see
+	 * {@link handleEventEnd}.)
 	 */
 	private onMeetingEnded(app: string): void {
+		// The detected meeting is over, so a pending "record?" prompt for it is
+		// moot — drop it whether or not we go on to offer a stop below.
+		this.dismissMeetingNotice(`detect:${app}`);
 		// Ignore if detection was disabled meanwhile (an in-flight poll's onEnd
-		// must not auto-stop after the user opted out), and only stop once *all*
+		// must not prompt after the user opted out), and only act once *all*
 		// detected meetings have ended so one of several concurrent calls ending
-		// doesn't truncate a still-active recording.
+		// doesn't prompt while another is still live.
 		if (!this.detector || this.detector.activeCount() > 0) return;
-		if (!this.recorder.isRecording || !this.isAdhocRecording()) {
-			return;
-		}
-		new Notice(t().detect.endedStopping(app));
-		this.stopRecording();
+		if (!this.recorder.isRecording) return;
+		this.promptStopRecording(t().detect.ended(app));
 	}
 
 	/**
-	 * Prompts the user to act on a meeting. Always shows an in-app actionable
-	 * Notice (so the prompt is there when they return to Obsidian) and, when
-	 * Obsidian is unfocused, additionally fires a native OS notification that's
-	 * visible while minimized. The OS notification is best-effort (needs a
-	 * granted permission); the in-app Notice is the guaranteed path.
+	 * Offers to stop the current recording (a recording never stops on its own).
+	 * Supersedes any prior stop prompt so end-of-meeting triggers that overlap
+	 * (detected-meeting end + calendar event end) don't stack two notices.
 	 */
-	private promptMeeting(
-		message: string,
-		actionLabel: string,
-		onAction: () => void
-	): void {
-		const focused =
-			typeof document !== "undefined" && document.hasFocus
-				? document.hasFocus()
-				: true;
-		if (!focused) notifyOs(message, actionLabel, onAction);
-		actionNotice(message, actionLabel, onAction);
+	private promptStopRecording(message: string): void {
+		this.stopPromptNotice?.hide();
+		this.stopPromptNotice = actionNotice(
+			message,
+			t().event.stopRecordingAction,
+			() => {
+				this.stopPromptNotice = null;
+				this.stopRecording();
+			}
+		);
+	}
+
+	/**
+	 * Prompts the user to act on an upcoming/starting meeting. Two channels fire
+	 * together, regardless of window focus (a focused-but-elsewhere user — other
+	 * Space/monitor, Obsidian behind other windows — would otherwise miss it):
+	 *
+	 *  - a **native OS notification** (title = meeting name, body = timing +
+	 *    hint) whose click focuses Obsidian and opens the rich prompt modal, and
+	 *  - an in-app **multi-action Notice** with the same buttons for when
+	 *    Obsidian is already in front.
+	 *
+	 * Web Notifications can't render action buttons, so the notification is the
+	 * attention-getter and the modal/notice carry the actual choices. `onRecord`
+	 * is the record action; a valid https `meetLink` adds the Join affordances,
+	 * and an `onOpenNote` adds an "Open note" action (Granola-style).
+	 */
+	private promptMeeting(opts: {
+		/** Stable per-meeting key: a same-key reprompt supersedes, distinct keys coexist. */
+		key: string;
+		title: string;
+		subtitle: string;
+		meetLink: string | null;
+		onRecord: () => void;
+		/** Opens (creating if needed) the meeting note without recording. Omitted for ad-hoc/detected meetings. */
+		onOpenNote?: () => void;
+		/** Called whenever the user opens the link (Join / Join & record), so the auto-open at start can be suppressed. */
+		onLinkOpened?: () => void;
+	}): void {
+		const link =
+			opts.meetLink && opts.meetLink.startsWith("https://")
+				? opts.meetLink
+				: null;
+		// Every channel (in-app notice, native OS buttons, modal) shares these
+		// handlers, and each first dismisses the in-app notice for this meeting:
+		// acting from the OS notification or the modal must not leave the parallel
+		// in-app Notice lingering on screen.
+		const dismissNotice = (): void => this.dismissMeetingNotice(opts.key);
+		const onRecord = (): void => {
+			dismissNotice();
+			opts.onRecord();
+		};
+		const onOpenNote = opts.onOpenNote
+			? (): void => {
+					dismissNotice();
+					opts.onOpenNote?.();
+				}
+			: null;
+		const onJoin = link
+			? (): void => {
+					dismissNotice();
+					opts.onLinkOpened?.();
+					this.openMeetingLink(link);
+				}
+			: null;
+		const onJoinAndRecord = link
+			? (): void => {
+					dismissNotice();
+					opts.onLinkOpened?.();
+					this.openMeetingLink(link);
+					opts.onRecord();
+				}
+			: null;
+
+		// In-app multi-action notice (guaranteed path when Obsidian is in front).
+		// Order mirrors the modal / Granola: a combined primary (Join & record)
+		// when there's a link — else Record — then Join, then Open note. The
+		// combined action is the record path when a link exists, so no separate
+		// Record button is needed there.
+		const e = t().event;
+		const actions: NoticeAction[] = [];
+		if (onJoinAndRecord) {
+			actions.push({ label: e.joinAndRecord, onClick: onJoinAndRecord, cta: true });
+			if (onJoin) actions.push({ label: e.join, onClick: onJoin });
+		} else {
+			actions.push({ label: e.record, onClick: onRecord, cta: true });
+		}
+		if (onOpenNote)
+			actions.push({ label: e.openNote, onClick: onOpenNote });
+		// Supersede an earlier prompt for the *same* meeting (e.g. the lead-time
+		// notice when the start boundary now fires) rather than stacking a second
+		// persistent notice — but leave other meetings' prompts alone so
+		// overlapping meetings each keep theirs.
+		this.meetingNotices.get(opts.key)?.hide();
+		this.meetingNotices.set(
+			opts.key,
+			multiActionNotice(
+				`${opts.title} — ${opts.subtitle}`,
+				actions,
+				// Once the user picks an action the notice is gone — drop our
+				// bookkeeping entry so the map only ever holds live prompts.
+				() => this.meetingNotices.delete(opts.key)
+			)
+		);
+
+		// Native OS notification (visible while minimized / on another Space).
+		// When the platform supports it the same actions render as real macOS
+		// buttons (first inline, rest under the notification's dropdown); its
+		// body click — and the no-actions fallback banner — opens the rich modal.
+		notifyOs(
+			opts.title,
+			`${opts.subtitle} · ${e.notificationHint}`,
+			() => {
+				new MeetingPromptModal(this.app, {
+					title: opts.title,
+					subtitle: opts.subtitle,
+					hasLink: link !== null,
+					joinLabel: e.join,
+					recordLabel: e.record,
+					joinAndRecordLabel: e.joinAndRecord,
+					openNoteLabel: e.openNote,
+					dismissLabel: e.dismiss,
+					onJoin: onJoin ?? ((): void => undefined),
+					onRecord,
+					onJoinAndRecord: onJoinAndRecord ?? onRecord,
+					onOpenNote,
+				}).open();
+			},
+			actions.map((a) => ({ text: a.label, run: a.onClick }))
+		);
+	}
+
+	/** Prefix for calendar-event prompt keys (vs. `detect:` for detected meetings). */
+	private static readonly CAL_NOTICE_PREFIX = "cal:";
+
+	/**
+	 * Dismisses the persistent meeting prompt for one key (if any). Used once a
+	 * decision has been made for the meeting (auto-start fired, we're already
+	 * recording it, or it just ended) so a now-stale prompt doesn't linger or
+	 * stack under a new one.
+	 */
+	private dismissMeetingNotice(key: string): void {
+		this.meetingNotices.get(key)?.hide();
+		this.meetingNotices.delete(key);
+	}
+
+	/** Dismisses every live prompt whose key starts with `prefix`. */
+	private dismissMeetingNotices(prefix: string): void {
+		for (const [key, notice] of this.meetingNotices) {
+			if (!key.startsWith(prefix)) continue;
+			notice.hide();
+			this.meetingNotices.delete(key);
+		}
 	}
 
 	private async fetchCalendarEvents(
@@ -926,43 +1189,149 @@ export default class SystemRecordingPlugin extends Plugin {
 		}));
 	}
 
-	private handleEventStart(event: ScheduledEvent): void {
-		// Only open https links — meetLink comes from external calendar data,
-		// so guard against javascript:/file:/custom-scheme URIs.
-		if (
-			event.meetLink &&
-			this.settings.openMeetAutomatically &&
-			event.meetLink.startsWith("https://")
-		) {
-			window.open(event.meetLink, "_blank");
-		}
-		this.promptMeeting(
-			t().event.started(event.summary),
-			t().event.createNoteAndRecord,
-			() => {
-				void this.startMeetingRecording(this.toMeetingInfo(event));
-			}
+	/**
+	 * Fired `notifyBeforeStartMinutes` before an event begins: warn the user the
+	 * meeting is about to start, with Join / Record options. When auto-start is
+	 * on the recording will begin on its own at the boundary, so the lead-time
+	 * prompt is mainly a heads-up (Record still lets them start early).
+	 */
+	private handleEventUpcoming(event: ScheduledEvent): void {
+		// The scheduler may be running purely for auto-start/stop; the lead-time
+		// heads-up is a notification, so only show it when notifications are on.
+		if (!this.settings.calendarAutoRecord) return;
+		const minutesUntil = Math.max(
+			1,
+			Math.round((event.start - Date.now()) / 60000)
 		);
+		this.promptCalendarMeeting(event, t().event.startsInMin(minutesUntil));
 	}
 
-	/** Creates & opens the meeting note from calendar data, then records beside it. */
-	private async startMeetingRecording(info: MeetingEventInfo): Promise<void> {
+	private handleEventStart(event: ScheduledEvent): void {
+		this.maybeOpenMeetLink(event);
+
+		// Auto-start: begin recording without asking (back-to-back chaining stops
+		// any prior recording first). Skip if we're already recording this event
+		// (e.g. the user hit Record on the lead-time prompt).
+		if (this.settings.calendarAutoStart) {
+			// The lead-time heads-up is now moot — recording is (or is about to
+			// be) underway — so clear it rather than leaving it on screen.
+			this.dismissMeetingNotice(SystemRecordingPlugin.CAL_NOTICE_PREFIX + event.id);
+			if (this.currentRecordingEventId !== event.id) {
+				new Notice(t().event.autoStarted(event.summary));
+				void this.startMeetingRecording(this.toMeetingInfo(event), event.end);
+			}
+			return;
+		}
+
+		// Otherwise prompt — unless the user already started recording this event
+		// from the lead-time prompt (its Record button), in which case there's
+		// nothing to ask.
+		if (this.currentRecordingEventId === event.id) {
+			this.dismissMeetingNotice(SystemRecordingPlugin.CAL_NOTICE_PREFIX + event.id);
+			return;
+		}
+		// Auto-start is off and notifications are off (scheduler is running only
+		// for auto-stop): don't surface a start prompt the user didn't ask for.
+		if (!this.settings.calendarAutoRecord) return;
+		const lateMs = Date.now() - event.start;
+		const subtitle =
+			lateMs > GRACE_MS
+				? t().event.startedMinAgo(Math.max(1, Math.round(lateMs / 60000)))
+				: t().event.startingNow;
+		this.promptCalendarMeeting(event, subtitle);
+	}
+
+	/** Opens the event's meeting link once, if configured and it's a safe https URL. */
+	private maybeOpenMeetLink(event: ScheduledEvent): void {
+		if (
+			!this.settings.openMeetAutomatically ||
+			!event.meetLink ||
+			!event.meetLink.startsWith("https://") ||
+			this.openedLinkEventIds.has(event.id)
+		) {
+			return;
+		}
+		// Guard against double-opening across the upcoming/start boundaries.
+		this.openedLinkEventIds.add(event.id);
+		window.open(event.meetLink, "_blank");
+	}
+
+	/** Shared calendar meeting prompt (upcoming + start). */
+	private promptCalendarMeeting(event: ScheduledEvent, subtitle: string): void {
+		this.promptMeeting({
+			key: SystemRecordingPlugin.CAL_NOTICE_PREFIX + event.id,
+			title: event.summary,
+			subtitle,
+			meetLink: event.meetLink,
+			onRecord: () =>
+				void this.startMeetingRecording(this.toMeetingInfo(event), event.end),
+			// Open (or create) the meeting note without recording — the "Open
+			// note" affordance, mirroring the agenda card.
+			onOpenNote: () => void this.openOrCreateEventNote(this.toMeetingInfo(event)),
+			// A manual Join opens the link, so don't let the auto-open fire again
+			// when the start boundary is crossed.
+			onLinkOpened: () => this.openedLinkEventIds.add(event.id),
+		});
+	}
+
+	/**
+	 * Opens the meeting note for an event, creating it first if none exists yet.
+	 * Unlike the record path this never starts a recording — it's the prompt's
+	 * "Open note" action (and reuses an already-created note so a later Record
+	 * links into the same note rather than duplicating it).
+	 */
+	private async openOrCreateEventNote(info: MeetingEventInfo): Promise<void> {
+		try {
+			const existing = buildNoteIndex(this.app).get(info.id)?.file ?? null;
+			const file =
+				existing ??
+				(await createMeetingNote(this.app, info, this.noteConfig())).file;
+			await this.app.workspace.getLeaf(false).openFile(file);
+			this.agendaEvents.emit("changed", undefined);
+		} catch (e) {
+			new Notice(
+				t().notices.recordingError(
+					e instanceof Error ? e.message : String(e)
+				)
+			);
+		}
+	}
+
+	/**
+	 * Creates & opens the meeting note from calendar data, then records beside
+	 * it. `eventEndMs` is the event's end time, tracked so the recording can be
+	 * auto-stopped at the boundary (and recovered after sleep). Passing
+	 * `replaceCurrent` lets a back-to-back meeting stop the prior recording
+	 * first instead of bailing with "already recording".
+	 */
+	private async startMeetingRecording(
+		info: MeetingEventInfo,
+		eventEndMs?: number
+	): Promise<void> {
 		if (!Platform.isMacOS) {
 			new Notice(t().notices.macOnly);
 			return;
 		}
+		// Fall back to the meeting's own end so the sleep/wake auto-stop safety net
+		// covers every meeting recording (e.g. agenda "Create and record"), not
+		// just the calendar-scheduler paths that pass an explicit end.
+		const endMs = eventEndMs ?? info.end.getTime();
 		try {
 			const ref = await createMeetingNote(this.app, info, this.noteConfig());
 			await this.app.workspace.getLeaf(false).openFile(ref.file);
-			await this.startRecording({
-				folder: ref.folder,
-				basename: ref.basename,
-				notePath: ref.notePath,
-				eventId: info.id,
-				// Track the live TFile so a rename mid-recording still links the
-				// WAV correctly (matches the ad-hoc path).
-				note: ref.file,
-			});
+			await this.startRecording(
+				{
+					folder: ref.folder,
+					basename: ref.basename,
+					notePath: ref.notePath,
+					eventId: info.id,
+					eventEnd: Number.isFinite(endMs) ? endMs : null,
+					// Track the live TFile so a rename mid-recording still links the
+					// WAV correctly (matches the ad-hoc path).
+					note: ref.file,
+				},
+				{ replaceCurrent: true }
+			);
 		} catch (e) {
 			new Notice(t().notices.recordingError(e instanceof Error ? e.message : String(e)));
 		}
@@ -1014,8 +1383,14 @@ export default class SystemRecordingPlugin extends Plugin {
 	}
 
 	private handleEventEnd(event: ScheduledEvent): void {
-		// Only offer to stop when *this* meeting's recording is the active one,
-		// so overlapping meetings can't stop the wrong recording (or prompt when
+		// The meeting is over: forget its auto-open state so a later recurrence
+		// (same id, re-added by a poll) can open its link afresh, and drop any
+		// lingering upcoming/start prompt for it (whether or not we recorded).
+		this.openedLinkEventIds.delete(event.id);
+		this.dismissMeetingNotice(SystemRecordingPlugin.CAL_NOTICE_PREFIX + event.id);
+
+		// Only act when *this* meeting's recording is the active one, so
+		// overlapping meetings can't stop the wrong recording (or prompt when
 		// nothing is being recorded).
 		if (
 			!this.recorder.isRecording ||
@@ -1023,13 +1398,16 @@ export default class SystemRecordingPlugin extends Plugin {
 		) {
 			return;
 		}
-		actionNotice(
-			t().event.ended(event.summary),
-			t().event.stopRecordingAction,
-			() => {
-				this.stopRecording();
-			}
-		);
+
+		// A recording never stops on its own — offer to stop — *unless* the user
+		// opted into calendar auto-stop, in which case the meeting's own end (even
+		// one crossed late after a wake) stops it.
+		if (this.settings.calendarAutoStop) {
+			new Notice(t().event.autoStopped(event.summary));
+			this.stopRecording();
+			return;
+		}
+		this.promptStopRecording(t().event.ended(event.summary));
 	}
 
     // MARK: - Meeting agenda
@@ -1445,7 +1823,8 @@ export default class SystemRecordingPlugin extends Plugin {
     private async tryDiarizedTranscribe(
         recording: TFile,
         forced: boolean,
-        onProgress?: (percent: number) => void
+        onProgress?: (percent: number) => void,
+        signal?: AbortSignal
     ): Promise<string | null> {
         // Discover the split sidecars by naming convention so separation works
         // for both the auto-transcribe after stop and a manual re-run on an old
@@ -1479,7 +1858,7 @@ export default class SystemRecordingPlugin extends Plugin {
             themFile,
             this.buildTranscribeConfig(),
             windows,
-            undefined,
+            signal,
             onProgress
         );
         if (result.diarized) return result.text;
@@ -1523,9 +1902,13 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /**
-     * Transcribes an audio file with the vendored engine (headless — no modal,
-     * no separate transcript file). The transcript text is routed through the
-     * same insert+enrich path used elsewhere.
+     * Enqueues an audio file for headless transcription (no modal, no separate
+     * transcript file). Transcriptions run one at a time through the visible
+     * {@link TranscriptionQueue}, so a second request waits (and is shown as
+     * queued) rather than fighting the first. The transcription slot is released
+     * as soon as the transcript is inserted; enrichment then runs *outside* the
+     * queue so a slow LLM call doesn't hold up the next transcription (or keep
+     * the recording flagged in-progress, which used to block a re-transcribe).
      *
      * `mode` picks the pass: "auto" respects the speaker-separation setting,
      * "diarized" forces the separated pass (falling back to the joint track when
@@ -1539,24 +1922,87 @@ export default class SystemRecordingPlugin extends Plugin {
             new Notice(t().notices.transcribeNoEndpoint);
             return;
         }
-        // Guard against overlapping runs (double-click, or auto-transcribe
-        // racing a manual trigger) — each would cost an API call and write.
-        if (this.transcribingPaths.has(recording.path)) {
+        // Dedupe overlapping runs (double-click, or auto-transcribe racing a
+        // manual trigger) — each would cost an API call and write.
+        if (this.transcriptionQueue.has(recording.path)) {
             new Notice(t().notices.transcribeInProgress);
             return;
         }
-        this.transcribingPaths.add(recording.path);
-        this.setActionStatus(t().statusBar.transcribing, "busy");
-        // Surface the engine's chunk-based percentage in the status bar. Guarded
-        // so a stray late callback can't overwrite the terminal status once the
-        // run has left the transcribing state.
+        const label = this.transcribeLabelFor(recording);
+        // A run already occupies the single slot, so this one will wait; say so.
+        if (this.transcriptionQueue.snapshot().running) {
+            new Notice(t().notices.transcribeQueued(label));
+        }
+
+        // A holder (not a closed-over `let`) so TypeScript keeps the value's type
+        // after the await instead of narrowing it to the initializer.
+        const enrichAfter: { value: { note: TFile; transcript: string } | null } = {
+            value: null,
+        };
+        try {
+            await this.transcriptionQueue.enqueue({
+                id: recording.path,
+                label,
+                run: async (signal) => {
+                    enrichAfter.value = await this.transcribeToNote(
+                        recording,
+                        label,
+                        mode,
+                        signal
+                    );
+                },
+            });
+        } catch (e) {
+            // Cancellation is expected; other failures were already surfaced with
+            // their own notice/status inside transcribeToNote.
+            if (!(e instanceof TranscriptionCancelledError)) {
+                console.warn("[Meeting Copilot] transcription failed", e);
+            }
+            return;
+        }
+
+        const pending = enrichAfter.value;
+        if (
+            pending &&
+            this.settings.enableEnrichment &&
+            this.settings.enrichOnTranscribe
+        ) {
+            // Pass the fresh transcript so enrichment works even when
+            // insertTranscript is off and the note has no transcript yet.
+            await this.enrichMeetingNote(pending.note, pending.transcript);
+        }
+    }
+
+    /**
+     * The single transcription pass run by the queue. Returns the note + fresh
+     * transcript to enrich afterward, or null when there's nothing to enrich
+     * (empty/partial result, or no owning note). Throws only on cancellation, so
+     * the queue rejects and the caller skips enrichment.
+     */
+    private async transcribeToNote(
+        recording: TFile,
+        label: string,
+        mode: TranscribeMode,
+        signal: AbortSignal
+    ): Promise<{ note: TFile; transcript: string } | null> {
+        // Single-owner progress: only the running job writes to the shared bar,
+        // labelled with the meeting name (and any queued-behind count).
         const onProgress = (pct: number): void => {
-            if (!this.transcribingPaths.has(recording.path)) return;
+            if (this.transcriptionQueue.snapshot().running?.id !== recording.path) {
+                return;
+            }
+            const waiting = this.transcriptionQueue.waitingCount;
             this.setActionStatus(
-                t().statusBar.transcribingProgress(Math.round(pct)),
+                waiting > 0
+                    ? t().statusBar.queuedCount(label, waiting)
+                    : t().statusBar.transcribingNamedProgress(
+                          label,
+                          Math.round(pct)
+                      ),
                 "busy"
             );
         };
+        this.setActionStatus(t().statusBar.transcribingNamed(label), "busy");
         const transcribeStart = Date.now();
         const sizeMb = (recording.stat?.size ?? 0) / (1024 * 1024);
         // console.warn so the timing line shows in Obsidian's console without
@@ -1576,7 +2022,8 @@ export default class SystemRecordingPlugin extends Plugin {
                 ? await this.tryDiarizedTranscribe(
                       recording,
                       mode === "diarized",
-                      onProgress
+                      onProgress,
+                      signal
                   )
                 : null;
             const diarized = diarizedText !== null;
@@ -1586,7 +2033,7 @@ export default class SystemRecordingPlugin extends Plugin {
                     this.app,
                     recording,
                     this.buildTranscribeConfig(),
-                    undefined,
+                    signal,
                     onProgress
                 ));
             const totalSecs = ((Date.now() - transcribeStart) / 1000).toFixed(1);
@@ -1614,37 +2061,52 @@ export default class SystemRecordingPlugin extends Plugin {
                 );
                 new Notice(t().notices.transcribeEmpty);
                 if (!this.recorder.isRecording) this.clearActionStatus();
-                return;
+                return null;
             }
             // A partial/failed run comes back as a marker-prefixed string
             // (not clean transcript text), so don't insert it as the transcript.
             if (isPartialTranscript(trimmed)) {
                 new Notice(t().notices.transcribePartial);
                 this.setActionStatus(t().statusBar.transcribeFailed, "error");
-                return;
+                return null;
             }
             // Tell the reader (and the enrichment model) who "Me"/"Them" are,
             // so owner attribution of action items has something to go on.
             const finalText = diarized
                 ? `${t().transcript.speakerBanner}\n\n${text}`
                 : text;
-            const noteFound = await this.handleTranscriptionCompleted({
+            const result = await this.handleTranscriptionCompleted({
                 audioFile: recording,
                 transcription: finalText,
                 file: null,
             });
             console.warn(
                 `[Meeting Copilot][transcribe] "${recording.name}" completed: note ${
-                    noteFound ? "found and updated" : "NOT found (no note matched this recording)"
+                    result.note
+                        ? "found and updated"
+                        : "NOT found (no note matched this recording)"
                 }`
             );
-            if (!noteFound) {
+            if (!result.note) {
                 new Notice(t().notices.transcribeNoNote(recording.basename));
+                return null;
             }
             // The .me/.them/.speech sidecars are left in place: a later manual
             // re-transcribe reuses them, and the retention sweep ages them out
             // on the same rule as the audio.
+            return { note: result.note, transcript: result.transcript ?? finalText };
         } catch (e) {
+            // A user cancellation must propagate so the queue rejects (and the
+            // caller skips enrichment); everything else is a recoverable failure
+            // surfaced here.
+            if (isDiarizationCancelled(e, signal)) {
+                new Notice(t().notices.transcribeCancelled);
+                this.setActionStatus(t().statusBar.transcribeCancelled, "error");
+                // Re-throw as the queue's cancellation type so the caller's
+                // guard treats it as an expected cancel (no "failed" log) —
+                // matching the waiting-job path, which rejects with this error.
+                throw new TranscriptionCancelledError();
+            }
             const msg = e instanceof Error ? e.message : String(e);
             // The engine throws the partial text (marker-prefixed) for a
             // partial/failed run rather than returning it, so classify it.
@@ -1654,8 +2116,69 @@ export default class SystemRecordingPlugin extends Plugin {
                 new Notice(t().notices.transcribeError(msg));
             }
             this.setActionStatus(t().statusBar.transcribeFailed, "error");
-        } finally {
-            this.transcribingPaths.delete(recording.path);
+            return null;
+        }
+    }
+
+    /** A friendly name for a recording in the queue UI: its meeting note's title, else the file basename. */
+    private transcribeLabelFor(recording: TFile): string {
+        const note = findMeetingNoteForAudio(this.app, recording);
+        if (note) {
+            const fm = this.app.metadataCache.getFileCache(note)?.frontmatter as
+                | Record<string, unknown>
+                | undefined;
+            const title = fm?.["title"];
+            if (typeof title === "string" && title.trim()) return title.trim();
+            return note.basename;
+        }
+        return recording.basename;
+    }
+
+    /** Reflects the queue's running/waiting state in the status bar (single-owner). */
+    private renderQueueStatus(snapshot: QueueSnapshot): void {
+        // The live recording timer owns the bar; and an idle queue leaves any
+        // just-set terminal status (added / failed / cancelled) to settle on its
+        // own rather than clearing it here.
+        if (this.recorder.isRecording || !snapshot.running) return;
+        const waiting = snapshot.waiting.length;
+        this.setActionStatus(
+            waiting > 0
+                ? t().statusBar.queuedCount(snapshot.running.label, waiting)
+                : t().statusBar.transcribingNamed(snapshot.running.label),
+            "busy"
+        );
+    }
+
+    /** Cancels the running transcription and drops any queued behind it (command-palette action). */
+    private cancelActiveTranscription(): void {
+        const snapshot = this.transcriptionQueue.snapshot();
+        if (!snapshot.running && snapshot.waiting.length === 0) {
+            new Notice(t().notices.nothingTranscribing);
+            return;
+        }
+        this.transcriptionQueue.cancelAll();
+    }
+
+    /**
+     * On startup, count meeting notes that finished recording but were never
+     * transcribed (status `recorded` + an existing linked recording) and nudge
+     * the user — a plugin reload mid-transcription otherwise silently drops the
+     * queued work with nothing prompting recovery.
+     */
+    private notifyPendingTranscriptions(): void {
+        let pending = 0;
+        for (const entry of scanMeetingNotes(this.app)) {
+            if (entry.status !== "recorded") continue;
+            const link = recordingLinkTarget(entry.recording);
+            if (!link) continue;
+            const dest = this.app.metadataCache.getFirstLinkpathDest(
+                link,
+                entry.file.path
+            );
+            if (dest instanceof TFile) pending++;
+        }
+        if (pending > 0) {
+            new Notice(t().notices.recordingsPending(pending), 10000);
         }
     }
 
@@ -1707,10 +2230,14 @@ export default class SystemRecordingPlugin extends Plugin {
             } else {
                 // Stopped without a reported file (e.g. a clean helper exit with
                 // no terminal payload); reset so the UI doesn't stay stuck.
-                this.resetRecordingUi();
+                // Skip while a prior attach is still in flight — its finally owns
+                // teardown and releasing back-to-back waiters (see onError).
+                if (!this.attaching) this.resetRecordingUi();
             }
         } else if (status.status === "error") {
-            this.resetRecordingUi();
+            // Don't tear down mid-attach (would early-release a back-to-back
+            // waiter and race shared state); attachRecording's finally handles it.
+            if (!this.attaching) this.resetRecordingUi();
             this.notifyRecordingError(status.message ?? t().notices.unknownError);
         } else if (status.status === "warning") {
             // Non-fatal: a capture path hit trouble (usually a device-change
@@ -1780,11 +2307,39 @@ export default class SystemRecordingPlugin extends Plugin {
         if (this.statusBarEl) {
             this.statusBarEl.removeClass("system-recording-hidden");
         }
+        this.lastDurationTickAt = Date.now();
 
         this.durationInterval = window.setInterval(() => {
+            // A big real-time jump between 1 s ticks means the machine slept. If a
+            // calendar recording's meeting is long over (its end + grace has
+            // passed), the scheduler may have dropped the event while asleep, so
+            // handle it here as a safety net rather than record indefinitely:
+            // auto-stop when the user opted in, otherwise just offer to stop
+            // (a recording never stops on its own without that opt-in).
+            const now = Date.now();
+            if (
+                this.lastDurationTickAt !== null &&
+                now - this.lastDurationTickAt > GRACE_MS &&
+                this.currentRecordingEventEnd !== null &&
+                now > this.currentRecordingEventEnd + GRACE_MS &&
+                this.recorder.isRecording
+            ) {
+                this.lastDurationTickAt = now;
+                const title =
+                    this.currentMeetingNote?.basename ?? t().adhoc.defaultTitle;
+                if (this.settings.calendarAutoStop) {
+                    new Notice(t().event.autoStopped(title));
+                    this.stopRecording();
+                    return;
+                }
+                this.promptStopRecording(t().event.ended(title));
+                return;
+            }
+            this.lastDurationTickAt = now;
+
             if (!this.recordingStartTime || !this.statusBarEl) return;
             const elapsed = Math.floor(
-                (Date.now() - this.recordingStartTime) / 1000
+                (now - this.recordingStartTime) / 1000
             );
             const h = String(Math.floor(elapsed / 3600)).padStart(2, "0");
             const m = String(Math.floor((elapsed % 3600) / 60)).padStart(2, "0");
@@ -1800,6 +2355,7 @@ export default class SystemRecordingPlugin extends Plugin {
             window.clearInterval(this.durationInterval);
             this.durationInterval = null;
         }
+        this.lastDurationTickAt = null;
     }
 
     /** Returns all recording UI/state to idle after a stop or failure. */
@@ -1811,7 +2367,15 @@ export default class SystemRecordingPlugin extends Plugin {
         this.currentMeetingNotePath = null;
         this.currentMeetingNote = null;
         this.currentRecordingEventId = null;
+        this.currentRecordingEventEnd = null;
+        // Recording has ended, so any "meeting ended — stop recording?" prompt is
+        // moot; drop it.
+        this.stopPromptNotice?.hide();
+        this.stopPromptNotice = null;
         this.agendaEvents.emit("changed", undefined);
+        // A stop that ends without going through attachRecording (no file, or an
+        // error) must still release any back-to-back waiter.
+        this.resolveStopWaiters();
     }
 
     /** Clears any action-status timeout, styling, and DOM (shared teardown). */
@@ -1835,6 +2399,25 @@ export default class SystemRecordingPlugin extends Plugin {
         if (this.statusBarEl) {
             this.statusBarEl.addClass("system-recording-hidden");
         }
+    }
+
+    /** True while a transcription is actively running (it owns the status bar). */
+    private get transcriptionRunning(): boolean {
+        return this.transcriptionQueue.snapshot().running !== null;
+    }
+
+    /**
+     * Enrichment/title status writes yield the status bar to an active
+     * transcription (which now runs concurrently, since enrichment happens after
+     * the queue slot is released). Keeps the bar single-owner: transcription
+     * progress wins; enrichment shows its state only when the queue is idle.
+     */
+    private setEnrichStatus(
+        text: string,
+        state: "busy" | "success" | "error"
+    ): void {
+        if (this.transcriptionRunning) return;
+        this.setActionStatus(text, state);
     }
 
     /**
@@ -1886,11 +2469,15 @@ export default class SystemRecordingPlugin extends Plugin {
         }
     }
 
-    /** Inserts a finished transcription into its meeting note, then refreshes the agenda. */
-    /** Returns true when a matching meeting note was found (regardless of insert). */
+    /**
+     * Inserts a finished transcription into its meeting note and refreshes the
+     * agenda. Returns the owning note (when found) and the fresh transcript, so
+     * the caller can enrich *after* the transcription queue slot is released
+     * (enrichment no longer runs from inside this method — see launchTranscriber).
+     */
     private async handleTranscriptionCompleted(
         payload: unknown
-    ): Promise<boolean> {
+    ): Promise<{ note: TFile | null; transcript: string | null }> {
         let enrichTarget: TFile | null = null;
         let transcriptText: string | null = null;
         let inserted = false;
@@ -1943,17 +2530,7 @@ export default class SystemRecordingPlugin extends Plugin {
         } else if (!this.recorder.isRecording) {
             this.hideStatusBar();
         }
-        if (
-            enrichTarget &&
-            this.settings.enableEnrichment &&
-            this.settings.enrichOnTranscribe
-        ) {
-            // Pass the fresh transcript so enrichment works even when
-            // insertTranscript is off and the note has no transcript yet.
-            // enrichMeetingNote also offers an AI title for unplanned meetings.
-            await this.enrichMeetingNote(enrichTarget, transcriptText ?? undefined);
-        }
-        return enrichTarget !== null;
+        return { note: enrichTarget, transcript: transcriptText };
     }
 
     /** Enriches the active markdown note, if it is one. */
@@ -2016,7 +2593,7 @@ export default class SystemRecordingPlugin extends Plugin {
             };
 
             new Notice(t().notices.enriching);
-            this.setActionStatus(t().statusBar.enriching, "busy");
+            this.setEnrichStatus(t().statusBar.enriching, "busy");
             const output = await chatComplete({
                 baseUrl: apiBaseUrl,
                 apiKey: apiKey,
@@ -2057,14 +2634,14 @@ export default class SystemRecordingPlugin extends Plugin {
                 (f as Record<string, unknown>).status = "enriched";
             });
             new Notice(t().notices.enrichDone(file.basename));
-            this.setActionStatus(t().statusBar.enriched, "success");
+            this.setEnrichStatus(t().statusBar.enriched, "success");
             this.agendaEvents.emit("changed", undefined);
             enrichedOk = true;
         } catch (e) {
             new Notice(
                 t().notices.enrichError(e instanceof Error ? e.message : String(e))
             );
-            this.setActionStatus(t().statusBar.enrichFailed, "error");
+            this.setEnrichStatus(t().statusBar.enrichFailed, "error");
         } finally {
             this.enrichingPaths.delete(file.path);
         }
@@ -2120,7 +2697,7 @@ export default class SystemRecordingPlugin extends Plugin {
                     : extractTranscript(content);
             if (!notes && !transcript) return;
 
-            this.setActionStatus(t().adhoc.suggestingTitle, "busy");
+            this.setEnrichStatus(t().adhoc.suggestingTitle, "busy");
             const raw = await chatComplete({
                 baseUrl: apiBaseUrl,
                 apiKey,
@@ -2128,7 +2705,9 @@ export default class SystemRecordingPlugin extends Plugin {
                 system: TITLE_SYSTEM_PROMPT,
                 user: buildTitlePrompt(notes, transcript),
             });
-            this.clearActionStatus();
+            // Don't wipe a concurrent transcription's status; we only set ours
+            // when the queue was idle.
+            if (!this.transcriptionRunning) this.clearActionStatus();
             const title = this.cleanSuggestedTitle(raw);
             if (!title) return;
 
@@ -2151,7 +2730,7 @@ export default class SystemRecordingPlugin extends Plugin {
             }).open();
         } catch (e) {
             console.warn("[Meeting Copilot] title suggestion failed", e);
-            this.clearActionStatus();
+            if (!this.transcriptionRunning) this.clearActionStatus();
         } finally {
             this.titleSuggestingPaths.delete(file.path);
         }
@@ -2433,6 +3012,7 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     private async attachRecording(fileName: string) {
+        this.attaching = true;
         // Prefer the live TFile (survives a rename during recording); fall back
         // to the path captured at start.
         const noteRef = this.currentMeetingNote;
@@ -2446,8 +3026,10 @@ export default class SystemRecordingPlugin extends Plugin {
         this.currentMeetingNotePath = null;
         this.currentMeetingNote = null;
         this.currentRecordingEventId = null;
+        this.currentRecordingEventEnd = null;
         this.currentRecordingPath = null;
         this.agendaEvents.emit("changed", undefined);
+        try {
         if (notePath) {
             const file =
                 noteRef ?? this.app.vault.getAbstractFileByPath(notePath);
@@ -2508,6 +3090,12 @@ export default class SystemRecordingPlugin extends Plugin {
             }
         }
         this.insertRecordingLink(fileName);
+        } finally {
+            // Release any back-to-back waiter now that the prior recording has
+            // been fully linked/handled and shared state is clean.
+            this.attaching = false;
+            this.resolveStopWaiters();
+        }
     }
 
     /**

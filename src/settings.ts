@@ -60,6 +60,19 @@ export interface SystemRecordingSettings {
 	googleClientSecret: string;
 	googleTokens: StoredTokens | null;
 	calendarAutoRecord: boolean;
+	/**
+	 * Automatically start recording at a calendar event's start, instead of only
+	 * prompting. Opt-in; pairs with `calendarAutoStop`.
+	 */
+	calendarAutoStart: boolean;
+	/** Automatically stop a calendar recording when the event ends (opt-in). */
+	calendarAutoStop: boolean;
+	/**
+	 * How many minutes before an event's start to fire the "meeting is about to
+	 * start" notification. 0 disables the pre-start notification (you're still
+	 * prompted at the start itself).
+	 */
+	notifyBeforeStartMinutes: number;
 	calendarId: string;
 	exclusionKeywords: string;
 	openMeetAutomatically: boolean;
@@ -126,6 +139,9 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	googleClientSecret: "",
 	googleTokens: null,
 	calendarAutoRecord: false,
+	calendarAutoStart: false,
+	calendarAutoStop: false,
+	notifyBeforeStartMinutes: 1,
 	calendarId: "primary",
 	exclusionKeywords: "",
 	openMeetAutomatically: true,
@@ -310,6 +326,49 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.calendarAutoRecord)
 					.onChange(async (value) => {
 						this.plugin.settings.calendarAutoRecord = value;
+						await this.plugin.saveSettings();
+						this.plugin.updateScheduler();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName(s.settings.notifyBeforeStart.name)
+			.setDesc(s.settings.notifyBeforeStart.desc)
+			.addText((text) => {
+				text.inputEl.type = "number";
+				text
+					.setValue(
+						String(this.plugin.settings.notifyBeforeStartMinutes)
+					)
+					.onChange(async (value) => {
+						const n = Number.parseInt(value, 10);
+						this.plugin.settings.notifyBeforeStartMinutes =
+							Number.isFinite(n) && n >= 0 ? Math.min(n, 60) : 1;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName(s.settings.calendarAutoStart.name)
+			.setDesc(s.settings.calendarAutoStart.desc)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.calendarAutoStart)
+					.onChange(async (value) => {
+						this.plugin.settings.calendarAutoStart = value;
+						await this.plugin.saveSettings();
+						this.plugin.updateScheduler();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName(s.settings.calendarAutoStop.name)
+			.setDesc(s.settings.calendarAutoStop.desc)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.calendarAutoStop)
+					.onChange(async (value) => {
+						this.plugin.settings.calendarAutoStop = value;
 						await this.plugin.saveSettings();
 						this.plugin.updateScheduler();
 					})
