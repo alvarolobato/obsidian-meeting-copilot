@@ -38,7 +38,7 @@ Structure:
 - Under each heading use a few terse "- " bullets — sentence fragments, not full sentences. Merge related points into one bullet; never split a single idea across several.
 - Nest a sub-bullet ("  - ") only when a point truly needs one concrete detail (a number, name, or example). Never go deeper than one level, and use nesting sparingly.
 - Fold the participant's own notes into the relevant sections; never drop anything they wrote.
-- Finish with a "### Next steps" section listing action items as "- **Concise task** (Owner)". Add an owner only when the discussion makes it clear. Omit the whole section if there are genuinely no action items.
+- Finish with a "### Next steps" section listing ONLY concrete tasks the participant themselves still has to do — things they personally committed to and have not started yet. Format each as "- **Concise task**". The participant is the author of these notes (the "Me" speaker when the transcript is labeled "Me:"/"Them:"); otherwise infer from the notes and context. This section is exclusively the participant's own to-do list, so exclude everything else: work already underway or described as ongoing ("continuing to…", "keeps doing…"), anything owned by or delegated to someone else, decisions, status, general follow-ups, and passive "waiting for"/"awaiting X" items. When you cannot tell that the participant personally owns a not-yet-started task, leave it out. Omit the whole section entirely when there are no such tasks — never pad it.
 
 Keep it tight:
 - Match length to substance: a short meeting yields a short note. Do not pad. As a rough ceiling, keep the whole thing well under one screen of text for a typical 30-minute meeting.
