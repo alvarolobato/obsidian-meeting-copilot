@@ -16,15 +16,22 @@ export const ATTENTION_BLOCK_LANG = "meeting-copilot-attention";
  * in newer Dataview releases. Pure so it can be tested without a vault.
  */
 export function buildDashboardBlock(): string {
-	// `start` is wrapped in `date()` everywhere it's compared, sorted, or
-	// rendered. The frontmatter value is a local ISO stamp (e.g.
-	// "2026-07-14T05:00:15"); if Dataview hasn't already coerced it to a date
-	// object it's a plain string, and comparing a string against `now` (a date)
-	// falls back to Dataview's cross-type ordering — where "string" sorts after
-	// "date" — so `start >= now` is true for *every* meeting. That dumped all
-	// past meetings into "Upcoming" and left "Past" empty. `date(start)` forces
-	// the parse so the comparison is chronological; it's a no-op when the value
-	// is already a date.
+	// Two Dataview gotchas govern the upcoming/past split:
+	//
+	// 1. The current instant is the literal `date(now)` — a bare `now` is NOT a
+	//    keyword, so Dataview reads it as the (missing) field `now` = null.
+	//    `date(start) >= null` is true for *every* row under Dataview's
+	//    cross-type/null ordering, so a bare `now` dumped all past meetings into
+	//    "Upcoming" and left "Past" empty. `date(now)` includes the time (unlike
+	//    `date(today)`, which is midnight), so same-day meetings that already
+	//    ended correctly fall under Past.
+	// 2. `start` is wrapped in `date()` everywhere it's compared, sorted, or
+	//    rendered. The frontmatter value is a local ISO stamp (e.g.
+	//    "2026-07-14T05:00:15"); `date()` forces the parse so the comparison is
+	//    chronological, and is a no-op when Dataview already coerced it. The
+	//    leading `date(start)` truthiness check drops meeting notes that have no
+	//    `start` at all (some legacy `meeting_url` notes) so a null start can't
+	//    be miscategorised into either bucket.
 	const cols =
 		"TABLE WITHOUT ID file.link AS Meeting, " +
 		'dateformat(date(start), "yyyy-MM-dd HH:mm") AS Date, status AS Status, ' +
@@ -34,16 +41,14 @@ export function buildDashboardBlock(): string {
 		"## Upcoming meetings",
 		"```dataview",
 		cols,
-		// Compare against the current instant (`now`, not `date(now)` midnight)
-		// so same-day meetings that already ended fall under Past.
-		"WHERE (event_id OR meeting_url) AND date(start) >= now",
+		"WHERE (event_id OR meeting_url) AND date(start) AND date(start) >= date(now)",
 		"SORT date(start) ASC",
 		"```",
 		"",
 		"## Past meetings",
 		"```dataview",
 		cols,
-		"WHERE (event_id OR meeting_url) AND date(start) < now",
+		"WHERE (event_id OR meeting_url) AND date(start) AND date(start) < date(now)",
 		"SORT date(start) DESC",
 		"```",
 		"",
