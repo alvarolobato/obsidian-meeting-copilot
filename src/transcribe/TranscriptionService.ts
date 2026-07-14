@@ -21,11 +21,19 @@ import { Logger, LogLevel } from "./vendor/utils/Logger";
 import { ProgressTracker } from "./vendor/ui/ProgressTracker";
 import { getModelConfig } from "./vendor/config/ModelProcessingConfig";
 import { createSerialQueue } from "../util/serialize";
-import { mergeDiarized, type DiarSegment, type SpeechWindows } from "./diarize";
+import {
+	mergeDiarized,
+	type DiarSegment,
+	type PregateSource,
+	type PregateSources,
+	type SpeechWindows,
+} from "./diarize";
 import { stripHallucinatedLines } from "./hallucination";
 import {
 	encodeWavFromFloat32,
+	estimateFullPassChunkCount,
 	plannedCoverageSeconds,
+	plannedSpeechSeconds,
 	planPregatedChunks,
 	rangesToChunkBounds,
 } from "./pregate";
@@ -288,18 +296,29 @@ export function shouldInvalidateProbe(result: DiarizedResult): boolean {
 	return !result.diarized && result.reason === "capability";
 }
 
-// Extra padding (seconds) beyond the already-padded speech windows, so a word
-// onset/offset just outside a detected window isn't clipped from the upload.
-// Kept small because local VAD windows already pad ~0.3s; this also covers the
-// recorder's (unpadded) RMS windows.
-const PREGATE_PADDING_SECONDS = 0.3;
+// Extra padding (seconds) added on each side of a detected window before
+// slicing, so a word onset/offset just outside the window isn't clipped from
+// the upload. Local VAD windows are already internally padded ~0.3s and come
+// from a real speech classifier, so a small pad suffices; the recorder's RMS
+// windows are unpadded and threshold-based (quiet speech at ~-40 dBFS sits under
+// the gate), so they get a generous pad. See {@link buildPregatedChunks}.
+const PREGATE_PADDING_VAD_SECONDS = 0.5;
+const PREGATE_PADDING_RMS_SECONDS = 1.5;
 // Bridge speech windows separated by <= this much silence into one chunk, so
-// two nearby utterances don't turn into two tiny requests. Wider silent gaps
-// are dropped from the upload — the whole point of pre-gating.
-const PREGATE_MERGE_GAP_SECONDS = 1.0;
+// nearby turns don't fragment into many tiny requests. A bridged pause uploads a
+// few seconds of silence but saves a whole round trip (and its share of the
+// inter-batch rate-limit delay), which on a talk-dense stream is the difference
+// between pre-gating being a win or a regression. Wider gaps are dropped from
+// the upload — the whole point of pre-gating.
+const PREGATE_MERGE_GAP_SECONDS = 3.0;
 // Fold a split region's sub-min trailing chunk into its predecessor rather than
 // sending a tiny request. Does NOT drop short *standalone* speech windows.
 const PREGATE_MIN_CHUNK_SECONDS = 5.0;
+// Grow a lone short speech region (a backchannel: "mm-hm", "yeah") out to this
+// floor by absorbing adjacent silence, so it isn't uploaded as a sub-second,
+// context-free clip — Whisper's most hallucination-prone regime. Nothing is
+// dropped; only silence is added around the real utterance.
+const PREGATE_MIN_STANDALONE_SECONDS = 3.0;
 
 /**
  * Decode one mono stream and slice it to just its speech windows, returning
@@ -307,37 +326,76 @@ const PREGATE_MIN_CHUNK_SECONDS = 5.0;
  * offset (so the Whisper client maps returned segment times back onto the
  * shared me/them clock — no post-mapping needed).
  *
- * Returns null — "run a full pass instead" — when the stream has no windows (a
- * quiet-but-real speaker or a missing speech.json must never be silently
- * skipped), when nothing survives planning, or when decoding fails. This
- * mirrors the existing "empty windows = keep all" safety in the merge.
+ * Returns null — "run a full pass instead" — when `source` is "none" (no
+ * windows, or VAD heard nothing on this marginal stream — a quiet-but-real
+ * speaker must never be silently skipped), when nothing survives planning, when
+ * the plan wouldn't reduce the request count (a talk-dense stream fragments into
+ * more chunks than a full pass), or when decoding fails. This mirrors the
+ * existing "empty windows = keep all" safety in the merge.
  *
- * Not a new drop path: {@link mergeDiarized} already discards segments that
- * fall outside these same windows, and we upload a *superset* of them (padded,
- * with sub-`mergeGap` gaps bridged), so pre-gating drops nothing the existing
- * post-filter merge wouldn't have dropped anyway — it just avoids paying to
- * transcribe the silence first.
+ * Coverage caveat (why the pad matters): {@link mergeDiarized} keeps a whole
+ * segment that merely *touches* a window, whereas pre-gating truncates the audio
+ * at window+pad. So a segment that only *partially* overlaps a window — a quiet
+ * trailing clause the VAD/RMS gate undercounted — was kept whole by the merge
+ * but is clipped here. The padding (larger for unpadded RMS windows) is the
+ * margin against that; for a stream where the good detector heard nothing we
+ * skip pre-gating entirely (`source === "none"`) rather than trust the crude
+ * gate's edges. Segments fully outside every window are dropped by the merge
+ * anyway, so those cost nothing to skip.
  */
 async function buildPregatedChunks(
 	app: App,
 	file: TFile,
 	streamWindows: Array<[number, number]> | undefined,
-	model: string
+	source: PregateSource,
+	model: string,
+	signal?: AbortSignal
 ): Promise<AudioChunk[] | null> {
-	if (!streamWindows || streamWindows.length === 0) return null;
+	if (source === "none" || !streamWindows || streamWindows.length === 0) {
+		return null;
+	}
 	try {
 		const { audioData, sampleRate } = await decodeMono16k(app, file);
+		if (signal?.aborted) {
+			throw new DOMException("Transcription aborted", "AbortError");
+		}
 		const totalDuration = audioData.length / sampleRate;
+		// The plan is sized from the model *family* config (chunk/overlap); a
+		// `modelOverride` may rename the request target but not its chunking
+		// contract — the same assumption the vendored AudioPipeline chunking
+		// already makes, kept in parity here.
 		const modelConfig = getModelConfig(model);
 		const overlapDuration = modelConfig.vadChunking.overlapDurationSeconds;
+		const padding =
+			source === "rms"
+				? PREGATE_PADDING_RMS_SECONDS
+				: PREGATE_PADDING_VAD_SECONDS;
 		const ranges = planPregatedChunks(streamWindows, totalDuration, {
-			padding: PREGATE_PADDING_SECONDS,
+			padding,
 			maxChunkDuration: modelConfig.chunkDurationSeconds,
 			overlap: overlapDuration,
 			mergeGap: PREGATE_MERGE_GAP_SECONDS,
 			minChunkDuration: PREGATE_MIN_CHUNK_SECONDS,
+			minStandaloneDuration: PREGATE_MIN_STANDALONE_SECONDS,
 		});
 		if (ranges.length === 0) return null;
+		// Non-regressive guard: a talk-dense stream fragments into per-turn
+		// windows that can plan MORE requests than a full pass would — and
+		// request count, not bytes, drives per-call overhead and the inter-batch
+		// rate-limit stalls. When pre-gating wouldn't cut the request count, run
+		// the full pass instead (bytes saved aren't worth a wall-clock loss).
+		const fullPassChunks = estimateFullPassChunkCount(
+			totalDuration,
+			modelConfig.chunkDurationSeconds,
+			overlapDuration
+		);
+		if (ranges.length >= fullPassChunks) {
+			console.warn(
+				`[Meeting Copilot][transcribe] pre-gate ${file.name}: plan (${ranges.length} chunks) ` +
+					`>= full pass (~${fullPassChunks}); using a full pass`
+			);
+			return null;
+		}
 		const bounds = rangesToChunkBounds(ranges, sampleRate, audioData.length);
 		if (bounds.length === 0) return null;
 		const chunks: AudioChunk[] = bounds.map((b, i) => {
@@ -358,20 +416,27 @@ async function buildPregatedChunks(
 				overlapDuration: hasOverlap ? overlapDuration : 0,
 			};
 		});
-		// Coverage (union) for the silence ratio — chunk-duration sums would
-		// double-count split overlap and could read as negative silence.
+		// Two metrics: uploaded seconds (sum of chunk durations, overlap counted
+		// per chunk = what's actually sent and billed) and distinct coverage
+		// (union of ranges = timeline touched). Silence-skipped is off coverage
+		// so it can't read negative when split overlap inflates the upload.
+		const uploadedSecs = plannedSpeechSeconds(ranges);
 		const coverageSecs = plannedCoverageSeconds(ranges);
 		const skippedPct =
 			totalDuration > 0
 				? Math.max(0, (1 - coverageSecs / totalDuration) * 100)
 				: 0;
 		console.warn(
-			`[Meeting Copilot][transcribe] pre-gate ${file.name}: ${chunks.length} speech chunk(s), ` +
-				`${coverageSecs.toFixed(1)}s speech of ${totalDuration.toFixed(1)}s ` +
+			`[Meeting Copilot][transcribe] pre-gate ${file.name} (windows=${source}): ` +
+				`${chunks.length} chunk(s), ${uploadedSecs.toFixed(1)}s uploaded / ` +
+				`${coverageSecs.toFixed(1)}s covered of ${totalDuration.toFixed(1)}s ` +
 				`(${skippedPct.toFixed(0)}% silence skipped)`
 		);
 		return chunks;
 	} catch (error) {
+		// A user cancellation must propagate, not be swallowed into a full pass
+		// (which would keep transcribing after the user aborted).
+		if (isDiarizationCancelled(error, signal)) throw error;
 		// A decode/slice failure must not fail the pass: fall back to a full
 		// pass, mirroring computeSpeechWindows swallowing decode errors.
 		console.debug(
@@ -392,12 +457,24 @@ async function runStreamPass(
 	app: App,
 	file: TFile,
 	streamWindows: Array<[number, number]> | undefined,
+	source: PregateSource,
 	cfg: TranscribeConfig,
 	signal: AbortSignal | undefined,
 	onProgress: ((percent: number) => void) | undefined,
 	label: string
 ): Promise<ControllerResult> {
-	const chunks = await buildPregatedChunks(app, file, streamWindows, cfg.model);
+	// Bail before the (multi-second) decode + slice if the user already aborted.
+	if (signal?.aborted) {
+		throw new DOMException("Transcription aborted", "AbortError");
+	}
+	const chunks = await buildPregatedChunks(
+		app,
+		file,
+		streamWindows,
+		source,
+		cfg.model,
+		signal
+	);
 	return runController(
 		app,
 		file,
@@ -418,9 +495,12 @@ async function runStreamPass(
  * upload only padded speech regions and skip the (usually large) silent gaps,
  * cutting wall-clock time and API cost and starving Whisper of the silence it
  * hallucinates over. Pre-gated chunks carry their absolute original-timeline
- * offset, so segment times still land on the shared clock. A stream with no
- * windows (quiet-but-real speaker, missing speech.json) falls back to a full
- * pass so speech is never silently dropped. See {@link buildPregatedChunks}.
+ * offset, so segment times still land on the shared clock. `sources` tells each
+ * stream which detector produced its windows (see {@link pregateSources}): a
+ * stream with no windows, one the good detector heard nothing on, or one whose
+ * plan wouldn't beat a full pass falls back to a full pass, so speech is never
+ * silently dropped and the optimization never regresses. See
+ * {@link buildPregatedChunks}.
  *
  * Both passes run inside the same serial queue as {@link transcribeAudio} so
  * the process-global endpoint seam can't be overwritten mid-flight.
@@ -445,7 +525,8 @@ export function transcribeDiarized(
 	cfg: TranscribeConfig,
 	windows?: SpeechWindows,
 	signal?: AbortSignal,
-	onProgress?: (percent: number) => void
+	onProgress?: (percent: number) => void,
+	sources?: PregateSources
 ): Promise<DiarizedResult> {
 	// The two passes run back-to-back, so map each onto half of the overall bar:
 	// "me" fills 0–50%, "them" 50–100% (each pass rescaled to a full 0–100 first).
@@ -466,7 +547,7 @@ export function transcribeDiarized(
 			"[Meeting Copilot][transcribe] diarized: 2 serial passes (me, them)"
 		);
 		try {
-			const meResult = await runStreamPass(app, meFile, windows?.me, cfg, signal, meProgress, "me");
+			const meResult = await runStreamPass(app, meFile, windows?.me, sources?.me ?? "none", cfg, signal, meProgress, "me");
 			if (signal?.aborted) {
 				throw new DOMException("Transcription aborted", "AbortError");
 			}
@@ -480,7 +561,7 @@ export function transcribeDiarized(
 				return { text: "", diarized: false, reason: "capability" };
 			}
 
-			const themResult = await runStreamPass(app, themFile, windows?.them, cfg, signal, themProgress, "them");
+			const themResult = await runStreamPass(app, themFile, windows?.them, sources?.them ?? "none", cfg, signal, themProgress, "them");
 			const themSegments = extractSegments(themResult);
 			if (isCapabilityMiss(themSegments, resultText(themResult))) {
 				return { text: "", diarized: false, reason: "capability" };

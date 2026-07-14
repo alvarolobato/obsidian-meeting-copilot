@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	encodeWavFromFloat32,
+	estimateFullPassChunkCount,
 	plannedCoverageSeconds,
 	plannedSpeechSeconds,
 	planPregatedChunks,
@@ -65,6 +66,62 @@ describe("planPregatedChunks", () => {
 			padding: 0,
 		});
 		expect(chunks).toEqual([{ start: 10, end: 10.2 }]);
+	});
+
+	it("grows a lone sub-floor window out to minStandaloneDuration (end first)", () => {
+		// A 0.3s backchannel with silence on both sides grows to the 3s floor by
+		// extending its end into the following silence, keeping the real window.
+		const chunks = planPregatedChunks([[10, 10.3]], 100, {
+			...OPTS,
+			padding: 0,
+			minStandaloneDuration: 3,
+		});
+		expect(chunks).toEqual([{ start: 10, end: 13 }]);
+	});
+
+	it("extends start backwards when the trailing silence can't cover the floor", () => {
+		// Window sits 1s from the stream end, so end can only grow 1s; the rest of
+		// the 3s floor is made up by extending the start backwards.
+		const chunks = planPregatedChunks([[9, 9.3]], 10, {
+			...OPTS,
+			padding: 0,
+			minStandaloneDuration: 3,
+		});
+		expect(chunks).toEqual([{ start: 7, end: 10 }]);
+	});
+
+	it("clamps a floor-grown window to the stream and still avoids overlap", () => {
+		// Window near t=0: can't extend start below 0, grows what it can. A second
+		// short window far enough away (> mergeGap) is grown independently without
+		// the two colliding.
+		const chunks = planPregatedChunks([[0, 0.2], [20, 20.3]], 100, {
+			...OPTS,
+			padding: 0,
+			minStandaloneDuration: 3,
+		});
+		expect(chunks).toEqual([
+			{ start: 0, end: 3 },
+			{ start: 20, end: 23 },
+		]);
+	});
+
+	it("does not let two floor-grown neighbours overlap", () => {
+		// Two 0.3s windows ~3.7s apart (gap > OPTS.mergeGap 1, so not merged).
+		// Growing each to the 3s floor end-first: the first grows [10,10.3]->[10,13],
+		// the second [14,14.3]->[14,17]; they stay disjoint (13 < 14).
+		const chunks = planPregatedChunks([[10, 10.3], [14, 14.3]], 100, {
+			...OPTS,
+			padding: 0,
+			minStandaloneDuration: 3,
+		});
+		expect(chunks).toEqual([
+			{ start: 10, end: 13 },
+			{ start: 14, end: 17 },
+		]);
+		// No overlap: each chunk starts at or after the previous chunk's end.
+		for (let i = 1; i < chunks.length; i++) {
+			expect(chunks[i]!.start).toBeGreaterThanOrEqual(chunks[i - 1]!.end);
+		}
 	});
 
 	it("splits a long region into overlapping sub-chunks with the right step", () => {
@@ -256,6 +313,63 @@ describe("plannedCoverageSeconds", () => {
 			])
 		).toBe(45);
 		expect(plannedCoverageSeconds([])).toBe(0);
+	});
+});
+
+describe("estimateFullPassChunkCount", () => {
+	it("counts ceil(total / (maxDur - overlap))", () => {
+		// 1800s at 25s chunks, 5s overlap -> step 20 -> 90 chunks.
+		expect(estimateFullPassChunkCount(1800, 25, 5)).toBe(90);
+	});
+
+	it("is 0 for a non-positive duration and >= 1 otherwise", () => {
+		expect(estimateFullPassChunkCount(0, 25, 5)).toBe(0);
+		expect(estimateFullPassChunkCount(-10, 25, 5)).toBe(0);
+		expect(estimateFullPassChunkCount(1, 25, 5)).toBe(1);
+	});
+
+	it("keeps the step positive when overlap >= maxChunkDuration", () => {
+		// overlap clamped to maxDur-0.5=24.5 -> step 0.5 -> terminates (no /0).
+		expect(estimateFullPassChunkCount(10, 25, 100)).toBe(20);
+	});
+});
+
+describe("pre-gate non-regression guard (planner vs full pass)", () => {
+	// The runner returns null (full pass) when the plan has >= as many chunks as
+	// a full pass would. A talk-dense, turn-taking stream is the case that
+	// inverts: many short windows separated by the other speaker's turns.
+	it("a turn-taking stream plans more chunks than a full pass", () => {
+		const total = 600;
+		// 6s utterances every 20s (14s of the other speaker between them).
+		const windows: Array<[number, number]> = [];
+		for (let t = 0; t + 6 <= total; t += 20) windows.push([t, t + 6]);
+		const chunks = planPregatedChunks(windows, total, {
+			padding: 0.5,
+			maxChunkDuration: 25,
+			overlap: 5,
+			mergeGap: 3,
+			minChunkDuration: 5,
+			minStandaloneDuration: 3,
+		});
+		const fullPass = estimateFullPassChunkCount(total, 25, 5);
+		// ~30 windows -> ~30 chunks vs 30 full-pass; the plan does NOT win, so the
+		// guard (ranges.length >= fullPass) fires and the runner falls back.
+		expect(chunks.length).toBeGreaterThanOrEqual(fullPass);
+	});
+
+	it("a sparse stream plans far fewer chunks than a full pass", () => {
+		const total = 600;
+		// Two short utterances in 10 minutes of mostly silence.
+		const chunks = planPregatedChunks([[30, 40], [500, 512]], total, {
+			padding: 0.5,
+			maxChunkDuration: 25,
+			overlap: 5,
+			mergeGap: 3,
+			minChunkDuration: 5,
+			minStandaloneDuration: 3,
+		});
+		const fullPass = estimateFullPassChunkCount(total, 25, 5);
+		expect(chunks.length).toBeLessThan(fullPass);
 	});
 });
 

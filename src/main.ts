@@ -81,7 +81,7 @@ import {
     parseSpeechWindows,
     sidecarPathsFor,
 } from "./transcribe/sidecar";
-import { preferWindows, type SpeechWindows } from "./transcribe/diarize";
+import { preferWindows, pregateSources, type SpeechWindows } from "./transcribe/diarize";
 import { computeSpeechWindows } from "./transcribe/vadWindows";
 import { parseDictionary } from "./transcribe/dictionary";
 import type { TranscriptionModel } from "./transcribe/vendor/ApiSettings";
@@ -1879,6 +1879,12 @@ export default class SystemRecordingPlugin extends Plugin {
             rmsWindows = parseSpeechWindows(await this.app.vault.read(speech));
         }
         const windows = preferWindows(localWindows, rmsWindows);
+        // Per-stream pre-gate provenance (issue #67): the diarized pre-gate
+        // truncates each upload to these windows, a stronger contract than the
+        // merge's touch-filter, so it needs to know which detector produced them
+        // (VAD = trust, small pad; RMS-only = big pad; VAD-heard-nothing = full
+        // pass). The `windows` above still gate the merge unchanged.
+        const sources = pregateSources(localWindows, rmsWindows);
         const result = await transcribeDiarized(
             this.app,
             meFile,
@@ -1886,7 +1892,8 @@ export default class SystemRecordingPlugin extends Plugin {
             this.buildTranscribeConfig(),
             windows,
             signal,
-            onProgress
+            onProgress,
+            sources
         );
         if (result.diarized) return result.text;
 

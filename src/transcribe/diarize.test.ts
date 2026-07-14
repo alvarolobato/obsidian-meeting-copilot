@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	mergeDiarized,
 	preferWindows,
+	pregateSources,
 	type DiarSegment,
 	type SpeechWindows,
 } from "./diarize";
@@ -124,6 +125,42 @@ describe("mergeDiarized", () => {
 			expect(preferWindows(primary, rms)).toEqual({
 				me: [[5, 6]], // fell back to RMS for the empty mic stream
 				them: [[3, 4]], // kept local for the stream that had speech
+			});
+		});
+	});
+
+	describe("pregateSources", () => {
+		const vad: SpeechWindows = { me: [[1, 2]], them: [[3, 4]] };
+		const rms: SpeechWindows = { me: [[5, 6]], them: [[7, 8]] };
+
+		it("marks a stream VAD detected speech on as 'vad'", () => {
+			expect(pregateSources(vad, rms)).toEqual({ me: "vad", them: "vad" });
+		});
+
+		it("uses 'rms' only when VAD was unavailable entirely", () => {
+			// VAD undefined => it couldn't run at all; RMS is the only signal.
+			expect(pregateSources(undefined, rms)).toEqual({ me: "rms", them: "rms" });
+		});
+
+		it("refuses to pre-gate a stream VAD ran on but heard nothing", () => {
+			// VAD ran (defined) and found zero on 'me' while RMS found some: that's
+			// the marginal/quiet stream, so 'me' is 'none' (full pass), not 'rms'.
+			const vadZeroMe: SpeechWindows = { me: [], them: [[3, 4]] };
+			expect(pregateSources(vadZeroMe, rms)).toEqual({
+				me: "none",
+				them: "vad",
+			});
+		});
+
+		it("is 'none' when neither detector has windows for a stream", () => {
+			expect(pregateSources(undefined, undefined)).toEqual({
+				me: "none",
+				them: "none",
+			});
+			const bothEmpty: SpeechWindows = { me: [], them: [] };
+			expect(pregateSources(undefined, bothEmpty)).toEqual({
+				me: "none",
+				them: "none",
 			});
 		});
 	});

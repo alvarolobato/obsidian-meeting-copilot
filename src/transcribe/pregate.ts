@@ -55,15 +55,26 @@ export interface PregateOptions {
 	 * ("yeah") is still uploaded.
 	 */
 	minChunkDuration: number;
+	/**
+	 * Floor for a *standalone* chunk (a whole speech region, not a split tail):
+	 * a region shorter than this is grown into the surrounding silence up to the
+	 * floor so a lone backchannel ("mm-hm") isn't sent as a sub-second,
+	 * context-free clip — Whisper's most hallucination-prone regime. Nothing is
+	 * dropped; the extra audio is silence, and the grown chunk still carries its
+	 * true absolute offset. Defaults to 0 (off) when omitted.
+	 */
+	minStandaloneDuration?: number;
 }
 
 /**
  * Plan the chunk ranges (absolute seconds) that cover only speech.
  *
  * Steps: pad each window and clamp to `[0, totalDuration]`; sort; merge
- * overlapping windows and bridge gaps `<= mergeGap`; split any region longer
- * than `maxChunkDuration` into `overlap`-overlapping sub-chunks, folding a
- * sub-`minChunkDuration` tail into its predecessor.
+ * overlapping windows and bridge gaps `<= mergeGap`; grow a region shorter than
+ * `minStandaloneDuration` into the neighbouring silence so a lone backchannel
+ * isn't a sub-second clip; split any region longer than `maxChunkDuration` into
+ * `overlap`-overlapping sub-chunks, folding a sub-`minChunkDuration` tail into
+ * its predecessor.
  *
  * Returns `[]` when there's nothing to gate (no/blank windows, non-positive
  * duration, or everything padded away) — the caller reads that as "fall back to
@@ -107,7 +118,35 @@ export function planPregatedChunks(
 		}
 	}
 
-	// 3. Split regions longer than maxChunkDuration into overlapping sub-chunks.
+	// 3. Grow a too-short standalone region into the surrounding silence so a
+	//    lone backchannel isn't sent as a sub-second, context-free clip. Extend
+	//    the end first (into the gap before the next region), then the start
+	//    backwards for any remaining deficit, clamped to [0, totalDuration] and
+	//    to the neighbours so regions never overlap. Processing left to right and
+	//    bounding the start by the *already-grown* previous region keeps it
+	//    collision-free without a re-merge; nothing is dropped, we just upload a
+	//    little silence around the utterance.
+	const minStandalone = Math.max(0, opts.minStandaloneDuration ?? 0);
+	if (minStandalone > 0) {
+		for (let i = 0; i < merged.length; i++) {
+			const region = merged[i];
+			if (!region) continue;
+			let deficit = minStandalone - (region[1] - region[0]);
+			if (deficit <= 0) continue;
+			const next = merged[i + 1];
+			const upper = next ? next[0] : totalDuration;
+			const grow = Math.min(deficit, Math.max(0, upper - region[1]));
+			region[1] += grow;
+			deficit -= grow;
+			if (deficit > 0) {
+				const prev = merged[i - 1];
+				const lower = prev ? prev[1] : 0;
+				region[0] -= Math.min(deficit, Math.max(0, region[0] - lower));
+			}
+		}
+	}
+
+	// 4. Split regions longer than maxChunkDuration into overlapping sub-chunks.
 	const maxDur = Math.max(1, opts.maxChunkDuration);
 	// Keep the advance (maxDur - overlap) positive even if a caller passes an
 	// overlap >= maxDur, so the split loop always terminates.
@@ -185,6 +224,28 @@ export function plannedCoverageSeconds(chunks: ReadonlyArray<PregateChunk>): num
 	}
 	if (!Number.isNaN(curEnd)) covered += curEnd - curStart;
 	return covered;
+}
+
+/**
+ * Estimate how many chunks a *full* pass (the vendored engine chunking the whole
+ * stream) would produce: `ceil(totalDuration / step)`, where `step` is the
+ * chunk advance `maxChunkDuration - overlap` (clamped positive to match the
+ * planner). The runner compares this to the pre-gate plan and only pre-gates
+ * when the plan has *fewer* chunks — on a talk-dense stream, turn-granular
+ * windows can plan more requests than a full pass, and each request carries
+ * per-call overhead plus its share of the inter-batch rate-limit delay, so
+ * pre-gating there would be a wall-clock regression. This keeps the optimization
+ * strictly non-regressive on request count.
+ */
+export function estimateFullPassChunkCount(
+	totalDuration: number,
+	maxChunkDuration: number,
+	overlap: number
+): number {
+	if (!(totalDuration > 0)) return 0;
+	const maxDur = Math.max(1, maxChunkDuration);
+	const step = maxDur - Math.max(0, Math.min(overlap, maxDur - 0.5));
+	return Math.max(1, Math.ceil(totalDuration / step));
 }
 
 /** Sample-accurate bounds + absolute offsets for one planned chunk. */
