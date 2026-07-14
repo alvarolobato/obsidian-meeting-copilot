@@ -211,8 +211,32 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
         // Point the input node at the chosen device before we read its format
         // and install the tap; a missing device leaves the node on the system
         // default (and warns).
-        applyPreferredInputDevice(to: inputNode)
-        let format = inputNode.outputFormat(forBus: 0)
+        let overrodeDevice = applyPreferredInputDevice(to: inputNode)
+        // Tap format. `outputFormat(forBus:0)` is the node's graph-facing format,
+        // negotiated when the node was first realized against the *default*
+        // device. After we repoint the AUHAL at a specific device it goes stale:
+        // a tap installed with it silently receives no buffers when the chosen
+        // device's native rate differs (e.g. a 16 kHz USB headset vs a 48 kHz
+        // built-in mic) — the recording ends up one-sided with no `.me` sidecar,
+        // so diarization can't run. Read the device's own hardware format
+        // (`inputFormat(forBus:0)`) in that case; keep `outputFormat` for the
+        // system default, which the OS already negotiated correctly.
+        var format = inputNode.outputFormat(forBus: 0)
+        if overrodeDevice {
+            let hardwareFormat = inputNode.inputFormat(forBus: 0)
+            if hardwareFormat.sampleRate > 0, hardwareFormat.channelCount > 0 {
+                format = hardwareFormat
+            }
+        }
+        // installTap traps on a zero/invalid format, which would take down the
+        // whole recording (including system audio). If we somehow can't get a
+        // usable mic format, warn and record system audio only instead.
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            onWarning?(
+                "Microphone format is unavailable; recording system audio only."
+            )
+            return
+        }
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) {
             [weak self] buffer, time in
             self?.onMicrophoneAudio?(buffer, time)
@@ -226,19 +250,23 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
     /// underlying AUHAL's current-device property. No-op for the system default.
     /// Any failure (device gone, property rejected) is non-fatal: the node
     /// stays on the default and we warn, so a recording still happens.
-    private func applyPreferredInputDevice(to inputNode: AVAudioInputNode) {
-        guard let uid = preferredInputDeviceUID, !uid.isEmpty else { return }
+    ///
+    /// Returns true only when a specific device was actually applied, so the
+    /// caller knows to read that device's hardware format for the tap instead of
+    /// the (now stale) default-device format.
+    private func applyPreferredInputDevice(to inputNode: AVAudioInputNode) -> Bool {
+        guard let uid = preferredInputDeviceUID, !uid.isEmpty else { return false }
         guard let deviceID = AudioDevices.deviceID(forUID: uid) else {
             onWarning?(
                 "Selected microphone is unavailable; recording with the system default."
             )
-            return
+            return false
         }
         guard let audioUnit = inputNode.audioUnit else {
             onWarning?(
                 "Selected microphone couldn't be applied; recording with the system default."
             )
-            return
+            return false
         }
         var device = deviceID
         let status = AudioUnitSetProperty(
@@ -253,7 +281,9 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
             onWarning?(
                 "Could not select the chosen microphone (error \(status)); recording with the system default."
             )
+            return false
         }
+        return true
     }
 
     private func teardownMicEngine() {
