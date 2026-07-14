@@ -348,7 +348,7 @@ async function buildPregatedChunks(
 	file: TFile,
 	streamWindows: Array<[number, number]> | undefined,
 	source: PregateSource,
-	model: string,
+	model: TranscriptionModel,
 	signal?: AbortSignal
 ): Promise<AudioChunk[] | null> {
 	if (source === "none" || !streamWindows || streamWindows.length === 0) {
