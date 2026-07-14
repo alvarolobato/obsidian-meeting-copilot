@@ -24,7 +24,7 @@ import {
 	upsertSection,
 } from "./meetingNote";
 import { extractSection, extractTranscript } from "./enrichedBlock";
-import { mergeActionItems } from "./actionItems";
+import { refreshActionItems } from "./actionItems";
 
 // --- Fake vault/App, since the mocked "obsidian" module ships no real Vault. ---
 
@@ -276,7 +276,7 @@ describe("transcriptAtBottom", () => {
 		expect(transcript.length).toBeGreaterThan(0);
 		let updated = stripTranscript(withTranscript);
 		const existing = extractSection(updated, "## Action items");
-		const merged = mergeActionItems(existing, ["- [ ] follow up with Bob"]);
+		const merged = refreshActionItems(existing, ["- [ ] follow up with Bob"]);
 		updated = upsertSection(updated, "## Action items", merged);
 		updated = transcriptAtBottom(updated, transcript);
 

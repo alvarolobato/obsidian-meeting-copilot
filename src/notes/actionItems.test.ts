@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractActionItems, mergeActionItems } from "./actionItems";
+import { extractActionItems, refreshActionItems } from "./actionItems";
 
 describe("extractActionItems", () => {
 	it("converts a Next steps section into task lines and strips it", () => {
@@ -28,10 +28,10 @@ describe("extractActionItems", () => {
 	});
 });
 
-describe("mergeActionItems", () => {
-	it("preserves existing tasks and appends only new ones", () => {
+describe("refreshActionItems", () => {
+	it("keeps completed items and replaces the previous unchecked set", () => {
 		const existing = "- [x] done thing\n- [ ] Align on the entity model (Luca)";
-		const merged = mergeActionItems(existing, [
+		const merged = refreshActionItems(existing, [
 			"- [ ] Align on the entity model (Luca)",
 			"- [ ] Schedule 1:1 with Kate (Alvaro)",
 		]);
@@ -44,18 +44,33 @@ describe("mergeActionItems", () => {
 		);
 	});
 
-	it("dedupes ignoring bold and casing", () => {
-		const merged = mergeActionItems("- [ ] Ship the thing", [
-			"- [ ] **ship the thing**",
+	it("does not pile up reworded duplicates on re-enrich", () => {
+		// The previous run's unchecked wording is dropped, so the same task
+		// phrased differently doesn't accumulate.
+		const existing = "- [ ] Schedule a meeting with Luca and Julian";
+		const merged = refreshActionItems(existing, [
+			"- [ ] Schedule a discussion with Luca and Julian on ownership",
 		]);
-		expect(merged).toBe("- [ ] Ship the thing");
+		expect(merged).toBe(
+			"- [ ] Schedule a discussion with Luca and Julian on ownership"
+		);
 	});
 
-	it("preserves non-task text under the section", () => {
-		const existing = "Some manual note\n- [ ] existing task";
-		const merged = mergeActionItems(existing, ["- [ ] brand new task"]);
-		expect(merged).toBe(
-			"Some manual note\n- [ ] existing task\n- [ ] brand new task"
-		);
+	it("skips a fresh item that duplicates a completed one", () => {
+		const merged = refreshActionItems("- [x] Ship the thing", [
+			"- [ ] **ship the thing**",
+		]);
+		expect(merged).toBe("- [x] Ship the thing");
+	});
+
+	it("preserves non-task prose but drops previous unchecked items", () => {
+		const existing = "Some manual note\n- [ ] old task";
+		const merged = refreshActionItems(existing, ["- [ ] brand new task"]);
+		expect(merged).toBe("Some manual note\n- [ ] brand new task");
+	});
+
+	it("returns the fresh items when there is no existing section", () => {
+		const merged = refreshActionItems("", ["- [ ] first task"]);
+		expect(merged).toBe("- [ ] first task");
 	});
 });

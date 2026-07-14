@@ -51,6 +51,9 @@ export function extractActionItems(markdown: string): ExtractedActions {
 	return { items, without };
 }
 
+/** Matches an *unchecked* task line, e.g. `- [ ] foo`. */
+const UNCHECKED_TASK = /^\s*[-*]\s+\[ \]\s+/;
+
 /** Normalizes a task line for duplicate detection (drops checkbox, bold, casing). */
 function normalizeTask(line: string): string {
 	return line
@@ -62,32 +65,37 @@ function normalizeTask(line: string): string {
 }
 
 /**
- * Merges freshly generated task lines into an existing "Action items" section
- * body. The entire existing body is preserved verbatim (tasks, prose, and
- * sub-bullets), so re-enriching never loses user edits or completed work; new
- * items are appended only when not already present as a task (matched by
- * normalized text).
+ * Refreshes the "Action items" section on (re-)enrichment.
+ *
+ * Completed items (`- [x]`) and any non-task prose are kept verbatim, so
+ * done-tracking and manual notes survive. The previous *unchecked* items are
+ * dropped and replaced by the freshly generated set — otherwise each re-enrich
+ * would pile up reworded near-duplicates of the same task (the exact-text
+ * dedupe couldn't catch "Schedule a meeting with Luca" vs. "Schedule a
+ * discussion with Luca"). Freshly generated items that duplicate a kept
+ * (completed) task are skipped.
  */
-export function mergeActionItems(
+export function refreshActionItems(
 	existingSection: string,
 	newItems: string[]
 ): string {
-	const existing = existingSection.replace(/\s+$/, "");
+	const kept = existingSection
+		.replace(/\s+$/, "")
+		.split("\n")
+		.filter((l) => !UNCHECKED_TASK.test(l));
+	while (kept.length && (kept[0] ?? "").trim() === "") kept.shift();
+	while (kept.length && (kept[kept.length - 1] ?? "").trim() === "") kept.pop();
+
 	const seen = new Set(
-		existing
-			.split("\n")
-			.filter((l) => TASK_LINE.test(l))
-			.map(normalizeTask)
+		kept.filter((l) => TASK_LINE.test(l)).map(normalizeTask)
 	);
-	const toAdd: string[] = [];
+	const fresh: string[] = [];
 	for (const item of newItems) {
 		const key = normalizeTask(item);
 		if (key && !seen.has(key)) {
 			seen.add(key);
-			toAdd.push(item);
+			fresh.push(item);
 		}
 	}
-	if (existing.length === 0) return toAdd.join("\n");
-	if (toAdd.length === 0) return existing;
-	return `${existing}\n${toAdd.join("\n")}`;
+	return [...kept, ...fresh].join("\n").trim();
 }
