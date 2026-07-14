@@ -105,13 +105,17 @@ export const en = {
 		enriched: "Notes enriched",
 		enrichFailed: "Enrichment failed",
 		transcribing: "Transcribing…",
-		transcribingProgress: (pct: number) => `Transcribing… ${pct}%`,
-		transcribingNamed: (name: string) => `Transcribing ${name}…`,
+		transcribingProgress: (pct: number) => `${pct}% transcribing…`,
+		// Percent leads so it stays visible even as the meeting name (and any
+		// queued suffix) gets truncated in the narrow status bar. The busy
+		// spinner already signals "transcribing", so the verb is dropped.
+		transcribingNamed: (name: string) => `${name}…`,
 		transcribingNamedProgress: (name: string, pct: number) =>
-			`Transcribing ${name}… ${pct}%`,
+			`${pct}% ${name}`,
 		queued: (name: string) => `Queued: ${name}`,
-		queuedCount: (name: string, n: number) =>
-			`Transcribing ${name}… (+${n} queued)`,
+		queuedCount: (name: string, n: number) => `${name}… (+${n} queued)`,
+		/** Appended to the running progress line when jobs wait behind it. */
+		queuedSuffix: (n: number) => ` (+${n} queued)`,
 		queuePopoverTitle: "Transcription queue",
 		queueMore: (n: number) => `+${n} more`,
 		transcribingCount: (n: number) => `transcribing ${n}`,

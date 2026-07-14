@@ -2019,13 +2019,14 @@ export default class SystemRecordingPlugin extends Plugin {
                 return;
             }
             const waiting = this.transcriptionQueue.waitingCount;
+            // Always lead with the live percentage; append the queued count as a
+            // suffix so it no longer replaces (and hides) the progress readout.
+            const base = t().statusBar.transcribingNamedProgress(
+                label,
+                Math.round(pct)
+            );
             this.setActionStatus(
-                waiting > 0
-                    ? t().statusBar.queuedCount(label, waiting)
-                    : t().statusBar.transcribingNamedProgress(
-                          label,
-                          Math.round(pct)
-                      ),
+                waiting > 0 ? base + t().statusBar.queuedSuffix(waiting) : base,
                 "busy"
             );
         };
