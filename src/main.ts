@@ -50,7 +50,8 @@ import {
     HIDE_AI_CLASS,
     withEnrichedBlock,
 } from "./notes/enrichedBlock";
-import { extractActionItems, mergeActionItems } from "./notes/actionItems";
+import { extractActionItems, refreshActionItems } from "./notes/actionItems";
+import { normalizeManualNotes } from "./notes/manualNotes";
 import {
     ATTENTION_BLOCK_LANG,
     buildDashboardBlock,
@@ -2800,7 +2801,9 @@ export default class SystemRecordingPlugin extends Plugin {
         let enrichedOk = false;
         try {
             const content = await this.app.vault.read(file);
-            const notes = extractSection(content, "## Notes");
+            // Gather manual notes wherever they were written (incl. above the
+            // "## Notes" heading), not just the section body.
+            const notes = normalizeManualNotes(content).notes;
             const transcript =
                 transcriptOverride && transcriptOverride.trim().length > 0
                     ? transcriptOverride
@@ -2845,6 +2848,9 @@ export default class SystemRecordingPlugin extends Plugin {
             let updated = bottomTranscript.trim().length
                 ? stripTranscript(current)
                 : current;
+            // Consolidate any loose notes under "## Notes" (creating it if
+            // missing) so they're preserved in place rather than orphaned.
+            updated = normalizeManualNotes(updated).content;
             let calloutBody = output;
             // Lift action items out of the summary into real obsidian-tasks
             // checkboxes under "## Action items" (merged, never duplicated).
@@ -2852,7 +2858,7 @@ export default class SystemRecordingPlugin extends Plugin {
                 const { items, without } = extractActionItems(output);
                 if (items.length > 0) {
                     const existing = extractSection(updated, ACTION_ITEMS_HEADING);
-                    const merged = mergeActionItems(existing, items);
+                    const merged = refreshActionItems(existing, items);
                     updated = upsertSection(updated, ACTION_ITEMS_HEADING, merged);
                     calloutBody = without;
                 }
