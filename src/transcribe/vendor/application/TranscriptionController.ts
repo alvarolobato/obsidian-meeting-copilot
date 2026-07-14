@@ -30,13 +30,13 @@ import { WhisperTranscriptionStrategy } from './strategies/WhisperTranscriptionS
 import { TranscriptionWorkflow } from './workflows/TranscriptionWorkflow';
 
 import type { APITranscriptionSettings, ContextualCorrection, DictionaryEntry, UserDictionary, VADMode } from '../ApiSettings';
-import type { AudioProcessingConfig } from '../core/audio/AudioTypes';
+import type { AudioChunk, AudioProcessingConfig } from '../core/audio/AudioTypes';
 import type { ChunkingService } from '../core/chunking/ChunkingService';
 import type { ChunkingConfig } from '../core/chunking/ChunkingTypes';
 import type { DictionaryEntry as CorrectionDictionaryEntry } from '../core/transcription/DictionaryCorrector';
 import type { TranscriptionService } from '../core/transcription/TranscriptionService';
 import type { TranscriptionStrategy } from '../core/transcription/TranscriptionStrategy';
-import type { TranscriptionProgress } from '../core/transcription/TranscriptionTypes';
+import type { TranscriptionOptions, TranscriptionProgress } from '../core/transcription/TranscriptionTypes';
 import type { ProgressTracker } from '../ui/ProgressTracker';
 import type { WorkflowOptions, WorkflowResult } from './workflows/TranscriptionWorkflow';
 import type { App, TFile } from 'obsidian';
@@ -406,14 +406,16 @@ export class TranscriptionController {
 	}
 
 	/**
-	 * Create workflow based on model
+	 * Create the transcription service + strategy for the configured model.
+	 * MEETING-COPILOT PATCH: extracted from createWorkflow so the pre-gated
+	 * diarized path (transcribeChunks) can reuse the exact same model-family
+	 * selection without also building the file-chunking pipeline. See VENDOR.md.
 	 */
-	private createWorkflow(): { workflow: TranscriptionWorkflow; dictionaryCorrector: DictionaryCorrector } {
-		this.logger.debug('Creating transcription workflow', { model: this.settings.model });
-
-		// Get API key
-		const apiKey = this.getApiKey();
-
+	private createServiceAndStrategy(apiKey: string): {
+		service: TranscriptionService;
+		strategy: TranscriptionStrategy;
+		dictionaryCorrector: DictionaryCorrector;
+	} {
 		// Create dictionary corrector with user dictionary
 		const dictionaryCorrector = this.createDictionaryCorrector(apiKey);
 
@@ -440,25 +442,129 @@ export class TranscriptionController {
 				gpt4oModel = 'gpt-4o-mini-transcribe';
 			}
 
-				this.logger.debug('Using GPT-4o transcription service', { model: gpt4oModel });
-				service = new GPT4oTranscriptionService(apiKey, gpt4oModel, dictionaryCorrector);
-				strategy = new GPT4oTranscriptionStrategy(
-					service,
-					this.createProgressAdapter()
-				);
+			this.logger.debug('Using GPT-4o transcription service', { model: gpt4oModel });
+			service = new GPT4oTranscriptionService(apiKey, gpt4oModel, dictionaryCorrector);
+			strategy = new GPT4oTranscriptionStrategy(
+				service,
+				this.createProgressAdapter()
+			);
+		}
+
+		if (this.settings.debugMode) {
+			service.enableCleaningDebugMode();
+		}
+
+		return { service, strategy, dictionaryCorrector };
+	}
+
+	/**
+	 * Create workflow based on model
+	 */
+	private createWorkflow(): { workflow: TranscriptionWorkflow; dictionaryCorrector: DictionaryCorrector } {
+		this.logger.debug('Creating transcription workflow', { model: this.settings.model });
+
+		// Get API key
+		const apiKey = this.getApiKey();
+
+		const { strategy, dictionaryCorrector } = this.createServiceAndStrategy(apiKey);
+
+		// Create workflow
+		const pipeline = this.audioPipeline ?? this.createAudioPipeline();
+		this.audioPipeline = pipeline;
+		const workflow = new TranscriptionWorkflow(pipeline, strategy);
+		this.logger.debug('Workflow created successfully');
+		return { workflow, dictionaryCorrector };
+	}
+
+	/**
+	 * MEETING-COPILOT PATCH: transcribe caller-supplied, pre-built chunks
+	 * instead of loading + chunking an audio file. The diarized pre-gate
+	 * (issue #67) slices each mono stream to its detected speech windows and
+	 * tags every chunk with its ABSOLUTE original-timeline start; the Whisper
+	 * client offsets returned segment times by that start, so the segments come
+	 * back on the shared clock the me/them merge needs — no post-mapping.
+	 *
+	 * Runs only the transcription strategy (batching / rate-limit / parallelism
+	 * / segment collection), skipping VAD preprocessing and the AudioPipeline's
+	 * own chunking. The returned `text` is the strategy's merged text WITHOUT
+	 * dictionary correction; the diarized caller rebuilds its transcript from
+	 * `segments` and ignores this text (parity with the mixed path, which is the
+	 * only place dictionary correction is observable). See VENDOR.md.
+	 */
+	async transcribeChunks(
+		chunks: AudioChunk[],
+		abortSignal?: AbortSignal
+	): Promise<{ text: string; modelUsed: string; segments?: Array<{ text: string; start: number; end: number; noSpeechProb?: number; avgLogprob?: number; compressionRatio?: number }> }> {
+		this.logger.info('Starting pre-gated chunk transcription', {
+			model: this.settings.model,
+			chunks: chunks.length
+		});
+
+		try {
+			// Lean init: pre-gated chunks bypass VAD preprocessing and the
+			// AudioPipeline entirely, so we only stand up the progress calculator
+			// (createProgressAdapter needs it) and report the preparation tick —
+			// no fvad, no chunking service, no decoded-audio pins.
+			this.progressCalculator = new SimpleProgressCalculator(this.settings.postProcessingEnabled);
+			if (this.progressTracker) {
+				const currentTask = this.progressTracker.getCurrentTask();
+				if (currentTask) {
+					const prepProgress = this.progressCalculator.preparationProgress();
+					this.progressTracker.updateProgress(currentTask.id, 0, t('modal.transcription.preparingAudio'), prepProgress);
+				}
 			}
 
-			if (this.settings.debugMode) {
-				service.enableCleaningDebugMode();
+			const apiKey = this.getApiKey();
+			const { strategy } = this.createServiceAndStrategy(apiKey);
+
+			const options: TranscriptionOptions = {
+				language: this.settings.language || 'auto',
+				timestamps: true
+			};
+			if (abortSignal) {
+				options.signal = abortSignal;
 			}
 
-			// Create workflow
-				const pipeline = this.audioPipeline ?? this.createAudioPipeline();
-				this.audioPipeline = pipeline;
-				const workflow = new TranscriptionWorkflow(pipeline, strategy);
-				this.logger.debug('Workflow created successfully');
-				return { workflow, dictionaryCorrector };
+			const result = await strategy.execute(chunks, options);
+
+			if (result.partial) {
+				this.logger.warn('Partial pre-gated transcription result', { error: result.error });
+				if (result.text) {
+					// Mirror transcribe(): surface partial results as a throw so
+					// the diarized caller falls back to the mixed file.
+					throw new Error(result.text);
+				}
 			}
+
+			const out: { text: string; modelUsed: string; segments?: Array<{ text: string; start: number; end: number; noSpeechProb?: number; avgLogprob?: number; compressionRatio?: number }> } = {
+				text: result.text,
+				modelUsed: strategy.getModelUsed()
+			};
+			if (result.segments && result.segments.length > 0) {
+				out.segments = result.segments;
+			}
+			return out;
+
+		} catch (error) {
+			const partialMarker = t('modal.transcription.partialResult');
+			if (error instanceof Error && error.message.includes(partialMarker)) {
+				this.logger.warn('Pre-gated transcription returned a partial result');
+				throw error;
+			}
+			const isCancelled =
+				(abortSignal?.aborted ?? false) ||
+				(error instanceof DOMException && error.name === 'AbortError') ||
+				(error instanceof Error && error.message === t('errors.transcriptionCancelledByUser'));
+			if (isCancelled) {
+				this.logger.info('Pre-gated transcription cancelled');
+				throw error;
+			}
+			this.logger.error('Pre-gated transcription failed', error);
+			throw error;
+		} finally {
+			await this.cleanup();
+		}
+	}
 
 	/**
 	 * Apply dictionary correction to transcribed text

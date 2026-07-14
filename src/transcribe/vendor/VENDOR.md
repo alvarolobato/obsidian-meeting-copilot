@@ -34,6 +34,7 @@ re-synced, **except** the small, clearly marked patches below. Grep for
 | `infrastructure/api/ApiClient.ts` | `executeWithRetry` now retries transient network-level throws (`net::ERR_NETWORK_IO_SUSPENDED`, `ECONNRESET`, timeouts, …) with the existing exponential backoff | upstream re-threw them immediately, so a brief network drop mid-transcription failed a chunk permanently and sheared the transcript |
 | `application/TranscriptionController.ts` | one `warn` → `debug` for "local VAD unavailable" | server-side chunking is our expected mixed-path default, so it fired on every run |
 | `config/ModelProcessingConfig.ts` | `whisper`/`whisperTs`: `maxConcurrentChunks` 2 → 6, `rateLimitDelayMs` 3000 → 1000 | our LiteLLM/whisper gateway runs ~2.5x real-time per chunk, so 2-wide made a 30-min meeting take ~1700s/pass (x2 diarized); the gateway tolerates more parallelism and the network-retry backoff absorbs 429s |
+| `application/TranscriptionController.ts` | added `transcribeChunks()` (runs the strategy on caller-supplied `AudioChunk[]`, skipping file load + AudioPipeline chunking) and extracted `createServiceAndStrategy()` from `createWorkflow()` to share model-family selection | the diarized pre-gate (issue #67) slices each stream to its speech windows and uploads only speech; each chunk's absolute `startTime` is offset back onto segment times by `WhisperClient`, so the merge stays on the shared clock |
 
 Two files are **added** (not from upstream):
 

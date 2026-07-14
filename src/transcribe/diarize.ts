@@ -51,6 +51,53 @@ export function preferWindows(
 	};
 }
 
+/**
+ * Which detector produced the windows the diarized pre-gate would slice a stream
+ * to — and whether it should pre-gate at all. Pre-gating truncates the upload to
+ * the windows, so it needs windows that *cover* speech, a stronger contract than
+ * the merge's touch-filter. This tells the runner how much to trust each source:
+ *   - "vad": local WebRTC VAD detected speech on this stream — a real
+ *     speech/non-speech classifier, already internally padded, so a small pad.
+ *   - "rms": VAD was unavailable entirely (WASM missing / decode failed) and the
+ *     recorder's RMS gate provided windows — usable, but unpadded and
+ *     threshold-based, so pre-gate with a generous pad.
+ *   - "none": don't pre-gate this stream, run a full pass. Either there are no
+ *     windows at all, or — the dangerous case — VAD *ran* and found zero speech
+ *     on this stream while the cruder RMS gate found some. That's exactly a
+ *     marginal/quiet stream where truncating to the worse detector's windows
+ *     risks clipping real speech, and where a full pass is cheap anyway.
+ */
+export type PregateSource = "vad" | "rms" | "none";
+
+export interface PregateSources {
+	me: PregateSource;
+	them: PregateSource;
+}
+
+/**
+ * Classify each stream's pre-gate source from the two detectors. `vad` is
+ * `computeSpeechWindows`' result (undefined when VAD couldn't run at all); `rms`
+ * is the recorder's parsed speech.json. See {@link PregateSource}.
+ */
+export function pregateSources(
+	vad?: SpeechWindows,
+	rms?: SpeechWindows
+): PregateSources {
+	const classify = (stream: Speaker): PregateSource => {
+		const vadWindows = vad?.[stream];
+		if (vadWindows && vadWindows.length > 0) return "vad";
+		// VAD undefined means it couldn't run at all (not "ran, found nothing"),
+		// so the RMS windows are the only signal — pre-gate with them if present.
+		if (!vad) {
+			const rmsWindows = rms?.[stream];
+			return rmsWindows && rmsWindows.length > 0 ? "rms" : "none";
+		}
+		// VAD ran and found zero on this stream: don't pre-gate (full pass).
+		return "none";
+	};
+	return { me: classify("me"), them: classify("them") };
+}
+
 type Speaker = "me" | "them";
 
 /** Inclusive: two ranges that merely touch at an endpoint still count. */

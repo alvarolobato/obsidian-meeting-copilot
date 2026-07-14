@@ -77,7 +77,7 @@ function toMono(buffer: AudioBuffer): Float32Array {
  * a follow-up). If decoding OOMs, computeSpeechWindows swallows it and the
  * caller falls back to the recorder's RMS windows.
  */
-async function decodeMono16k(
+export async function decodeMono16k(
 	app: App,
 	file: TFile
 ): Promise<{ audioData: Float32Array; sampleRate: number }> {
