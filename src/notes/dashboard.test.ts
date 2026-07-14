@@ -10,8 +10,17 @@ describe("buildDashboardBlock", () => {
 	it("is vault-wide (no FROM), gated to meeting notes by event_id/meeting_url", () => {
 		const block = buildDashboardBlock();
 		expect(block).not.toContain("FROM ");
-		expect(block).toContain("WHERE (event_id OR meeting_url) AND start >= now");
-		expect(block).toContain("WHERE (event_id OR meeting_url) AND start < now");
+		expect(block).toContain(
+			"WHERE (event_id OR meeting_url) AND date(start) >= now"
+		);
+		expect(block).toContain(
+			"WHERE (event_id OR meeting_url) AND date(start) < now"
+		);
+		// `start` is coerced with `date()` so a plain-string frontmatter value
+		// isn't compared against `now` by cross-type ordering (which would put
+		// every meeting in "Upcoming").
+		expect(block).not.toContain("AND start >= now");
+		expect(block).not.toContain("AND start < now");
 		expect(block).toContain(
 			"TASK WHERE !completed AND (file.frontmatter.event_id OR file.frontmatter.meeting_url)"
 		);

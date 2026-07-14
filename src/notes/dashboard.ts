@@ -16,9 +16,18 @@ export const ATTENTION_BLOCK_LANG = "meeting-copilot-attention";
  * in newer Dataview releases. Pure so it can be tested without a vault.
  */
 export function buildDashboardBlock(): string {
+	// `start` is wrapped in `date()` everywhere it's compared, sorted, or
+	// rendered. The frontmatter value is a local ISO stamp (e.g.
+	// "2026-07-14T05:00:15"); if Dataview hasn't already coerced it to a date
+	// object it's a plain string, and comparing a string against `now` (a date)
+	// falls back to Dataview's cross-type ordering — where "string" sorts after
+	// "date" — so `start >= now` is true for *every* meeting. That dumped all
+	// past meetings into "Upcoming" and left "Past" empty. `date(start)` forces
+	// the parse so the comparison is chronological; it's a no-op when the value
+	// is already a date.
 	const cols =
 		"TABLE WITHOUT ID file.link AS Meeting, " +
-		'dateformat(start, "yyyy-MM-dd HH:mm") AS Date, status AS Status, ' +
+		'dateformat(date(start), "yyyy-MM-dd HH:mm") AS Date, status AS Status, ' +
 		'choice(recording, "🎙️", "") AS Rec';
 	return [
 		DASHBOARD_START,
@@ -27,15 +36,15 @@ export function buildDashboardBlock(): string {
 		cols,
 		// Compare against the current instant (`now`, not `date(now)` midnight)
 		// so same-day meetings that already ended fall under Past.
-		"WHERE (event_id OR meeting_url) AND start >= now",
-		"SORT start ASC",
+		"WHERE (event_id OR meeting_url) AND date(start) >= now",
+		"SORT date(start) ASC",
 		"```",
 		"",
 		"## Past meetings",
 		"```dataview",
 		cols,
-		"WHERE (event_id OR meeting_url) AND start < now",
-		"SORT start DESC",
+		"WHERE (event_id OR meeting_url) AND date(start) < now",
+		"SORT date(start) DESC",
 		"```",
 		"",
 		"## Open action items",
