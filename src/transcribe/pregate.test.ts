@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	encodeWavFromFloat32,
+	plannedCoverageSeconds,
 	plannedSpeechSeconds,
 	planPregatedChunks,
 	rangesToChunkBounds,
@@ -199,7 +200,7 @@ describe("rangesToChunkBounds", () => {
 });
 
 describe("plannedSpeechSeconds", () => {
-	it("sums chunk durations", () => {
+	it("sums chunk durations (overlap counted per chunk = bytes uploaded)", () => {
 		expect(
 			plannedSpeechSeconds([
 				{ start: 0, end: 25 },
@@ -210,6 +211,37 @@ describe("plannedSpeechSeconds", () => {
 
 	it("is 0 for an empty plan", () => {
 		expect(plannedSpeechSeconds([])).toBe(0);
+	});
+});
+
+describe("plannedCoverageSeconds", () => {
+	it("counts overlapping chunk ranges once (distinct timeline covered)", () => {
+		// Two 25s chunks overlapping 5s cover 45s of timeline, not 50.
+		expect(
+			plannedCoverageSeconds([
+				{ start: 0, end: 25 },
+				{ start: 20, end: 45 },
+			])
+		).toBe(45);
+	});
+
+	it("sums disjoint ranges and never exceeds their span", () => {
+		expect(
+			plannedCoverageSeconds([
+				{ start: 0, end: 10 },
+				{ start: 40, end: 41 },
+			])
+		).toBe(11);
+	});
+
+	it("handles unsorted input and is 0 for an empty plan", () => {
+		expect(
+			plannedCoverageSeconds([
+				{ start: 20, end: 45 },
+				{ start: 0, end: 25 },
+			])
+		).toBe(45);
+		expect(plannedCoverageSeconds([])).toBe(0);
 	});
 });
 

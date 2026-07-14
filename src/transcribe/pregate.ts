@@ -152,11 +152,37 @@ export function planPregatedChunks(
 }
 
 /**
- * Total speech seconds a plan uploads — the sum of chunk durations (overlaps
- * counted once per chunk). Handy for logging the silence-skipped ratio.
+ * Total chunk seconds a plan sends — the sum of chunk durations, so overlap
+ * between split sub-chunks is counted once *per chunk* (i.e. the audio that
+ * actually gets uploaded, overlap included). Use {@link plannedCoverageSeconds}
+ * for the distinct timeline covered.
  */
 export function plannedSpeechSeconds(chunks: ReadonlyArray<PregateChunk>): number {
 	return chunks.reduce((sum, c) => sum + Math.max(0, c.end - c.start), 0);
+}
+
+/**
+ * Distinct timeline seconds a plan covers — the union of the chunk ranges, so
+ * overlap between split sub-chunks is counted once. Unlike
+ * {@link plannedSpeechSeconds} this can never exceed the stream duration, so
+ * `1 - coverage/total` is a sound "silence skipped" ratio for logging.
+ */
+export function plannedCoverageSeconds(chunks: ReadonlyArray<PregateChunk>): number {
+	const sorted = [...chunks].sort((a, b) => a.start - b.start);
+	let covered = 0;
+	let curStart = Number.NaN;
+	let curEnd = Number.NaN;
+	for (const c of sorted) {
+		if (Number.isNaN(curEnd) || c.start > curEnd) {
+			if (!Number.isNaN(curEnd)) covered += curEnd - curStart;
+			curStart = c.start;
+			curEnd = c.end;
+		} else {
+			curEnd = Math.max(curEnd, c.end);
+		}
+	}
+	if (!Number.isNaN(curEnd)) covered += curEnd - curStart;
+	return covered;
 }
 
 /** Sample-accurate bounds + absolute offsets for one planned chunk. */

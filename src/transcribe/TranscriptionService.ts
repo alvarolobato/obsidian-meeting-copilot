@@ -25,7 +25,7 @@ import { mergeDiarized, type DiarSegment, type SpeechWindows } from "./diarize";
 import { stripHallucinatedLines } from "./hallucination";
 import {
 	encodeWavFromFloat32,
-	plannedSpeechSeconds,
+	plannedCoverageSeconds,
 	planPregatedChunks,
 	rangesToChunkBounds,
 } from "./pregate";
@@ -135,14 +135,19 @@ async function runController(
 		: cfg.model;
 	// console.warn (not .info/.debug) so the line is visible in Obsidian's
 	// console without switching on Verbose — matches the vendored Logger.
-	const source = pregatedChunks
-		? `pregated=${pregatedChunks.length}`
+	// An empty array is truthy, so gate on length: zero pre-gated chunks would
+	// transcribe nothing with no fallback. buildPregatedChunks never returns []
+	// (it returns null for "no chunks"), but this keeps the seam safe if a
+	// future caller passes one.
+	const usePregated = pregatedChunks !== undefined && pregatedChunks.length > 0;
+	const source = usePregated
+		? `pregated=${pregatedChunks?.length ?? 0}`
 		: `vad=${vadMode}`;
 	console.warn(
 		`[Meeting Copilot][transcribe] ${label} pass start (model=${modelLabel}, ${source}, postproc=${cfg.postProcessingEnabled}, dict=${cfg.dictionaryCorrectionEnabled})`
 	);
 	try {
-		const result = pregatedChunks
+		const result = usePregated && pregatedChunks
 			? await controller.transcribeChunks(pregatedChunks, signal)
 			: await controller.transcribe(file, undefined, undefined, signal);
 		console.warn(
@@ -353,12 +358,16 @@ async function buildPregatedChunks(
 				overlapDuration: hasOverlap ? overlapDuration : 0,
 			};
 		});
-		const speechSecs = plannedSpeechSeconds(ranges);
+		// Coverage (union) for the silence ratio — chunk-duration sums would
+		// double-count split overlap and could read as negative silence.
+		const coverageSecs = plannedCoverageSeconds(ranges);
 		const skippedPct =
-			totalDuration > 0 ? (1 - speechSecs / totalDuration) * 100 : 0;
+			totalDuration > 0
+				? Math.max(0, (1 - coverageSecs / totalDuration) * 100)
+				: 0;
 		console.warn(
 			`[Meeting Copilot][transcribe] pre-gate ${file.name}: ${chunks.length} speech chunk(s), ` +
-				`${speechSecs.toFixed(1)}s of ${totalDuration.toFixed(1)}s uploaded ` +
+				`${coverageSecs.toFixed(1)}s speech of ${totalDuration.toFixed(1)}s ` +
 				`(${skippedPct.toFixed(0)}% silence skipped)`
 		);
 		return chunks;
