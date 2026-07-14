@@ -194,6 +194,12 @@ export default class SystemRecordingPlugin extends Plugin {
 	private transcriptionQueue = new TranscriptionQueue((s) =>
 		this.renderQueueStatus(s)
 	);
+	/**
+	 * Last progress percent for the running transcription, so queue-change
+	 * repaints (which fire between the sparse progress ticks) can keep showing
+	 * it instead of dropping back to a percent-less label.
+	 */
+	private runningProgress: { id: string; pct: number } | null = null;
 	/** Calendar event ids whose meeting link was already auto-opened, so it opens once. */
 	private openedLinkEventIds = new Set<string>();
 	/**
@@ -2018,18 +2024,19 @@ export default class SystemRecordingPlugin extends Plugin {
             if (this.transcriptionQueue.snapshot().running?.id !== recording.path) {
                 return;
             }
-            const waiting = this.transcriptionQueue.waitingCount;
-            // Always lead with the live percentage; append the queued count as a
-            // suffix so it no longer replaces (and hides) the progress readout.
-            const base = t().statusBar.transcribingNamedProgress(
-                label,
-                Math.round(pct)
-            );
+            const rounded = Math.round(pct);
+            this.runningProgress = { id: recording.path, pct: rounded };
             this.setActionStatus(
-                waiting > 0 ? base + t().statusBar.queuedSuffix(waiting) : base,
+                this.transcribeStatusText(
+                    label,
+                    rounded,
+                    this.transcriptionQueue.waitingCount
+                ),
                 "busy"
             );
         };
+        // New job: forget the previous run's percent until its first tick.
+        this.runningProgress = null;
         this.setActionStatus(t().statusBar.transcribingNamed(label), "busy");
         const transcribeStart = Date.now();
         const sizeMb = (recording.stat?.size ?? 0) / (1024 * 1024);
@@ -2176,13 +2183,36 @@ export default class SystemRecordingPlugin extends Plugin {
         // just-set terminal status (added / failed / cancelled) to settle on its
         // own rather than clearing it here.
         if (this.recorder.isRecording || !snapshot.running) return;
-        const waiting = snapshot.waiting.length;
+        // Preserve the live percentage across queue-change repaints: progress
+        // ticks are sparse, so without this the bar would sit on a percent-less
+        // label between them whenever a job is queued behind the running one.
+        const running = snapshot.running;
+        const pct =
+            this.runningProgress?.id === running.id
+                ? this.runningProgress.pct
+                : null;
         this.setActionStatus(
-            waiting > 0
-                ? t().statusBar.queuedCount(snapshot.running.label, waiting)
-                : t().statusBar.transcribingNamed(snapshot.running.label),
+            this.transcribeStatusText(running.label, pct, snapshot.waiting.length),
             "busy"
         );
+    }
+
+    /**
+     * The status-bar line for a running transcription: percent-led when known
+     * (`12% Name`), a plain `Name…` before the first tick, with a ` (+n queued)`
+     * suffix when jobs wait behind it. Single source of truth for both the
+     * progress ticks and the queue-change repaints so they never disagree.
+     */
+    private transcribeStatusText(
+        label: string,
+        pct: number | null,
+        waiting: number
+    ): string {
+        const base =
+            pct === null
+                ? t().statusBar.transcribingNamed(label)
+                : t().statusBar.transcribingNamedProgress(label, pct);
+        return waiting > 0 ? base + t().statusBar.queuedSuffix(waiting) : base;
     }
 
     /** Enter/leave the status bar: reveal or tear down the queue popover. */
