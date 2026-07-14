@@ -21,7 +21,12 @@ enum AudioDevices {
     static func inputDevices() -> [AudioInputDevice] {
         var result: [AudioInputDevice] = []
         var seen = Set<String>()
-        for id in allDeviceIDs() where hasInput(id) {
+        // Skip virtual/loopback devices (ZoomAudioDevice, BlackHole, Loopback,
+        // Soundflower, …): they don't capture a real microphone, so recording
+        // from them yields silence or an app's internal audio routing rather
+        // than the user's voice. Real inputs (built-in, USB, Bluetooth,
+        // aggregate) are kept.
+        for id in allDeviceIDs() where hasInput(id) && !isVirtual(id) {
             guard
                 let uid = stringProperty(
                     id, kAudioDevicePropertyDeviceUID, kAudioObjectPropertyScopeGlobal
@@ -91,6 +96,23 @@ enum AudioDevices {
             ) == noErr
         else { return [] }
         return ids
+    }
+
+    /// Whether the device is a virtual/loopback driver rather than real
+    /// hardware. Unknown transport types are treated as real (don't over-filter
+    /// a device we can't classify).
+    private static func isVirtual(_ id: AudioDeviceID) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyTransportType,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var transport: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard
+            AudioObjectGetPropertyData(id, &address, 0, nil, &size, &transport) == noErr
+        else { return false }
+        return transport == kAudioDeviceTransportTypeVirtual
     }
 
     /// Whether the device has any input channels (i.e. it's a microphone/input,
