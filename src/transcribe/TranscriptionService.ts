@@ -19,9 +19,18 @@ import {
 import { PathUtils } from "./vendor/utils/PathUtils";
 import { Logger, LogLevel } from "./vendor/utils/Logger";
 import { ProgressTracker } from "./vendor/ui/ProgressTracker";
+import { getModelConfig } from "./vendor/config/ModelProcessingConfig";
 import { createSerialQueue } from "../util/serialize";
 import { mergeDiarized, type DiarSegment, type SpeechWindows } from "./diarize";
 import { stripHallucinatedLines } from "./hallucination";
+import {
+	encodeWavFromFloat32,
+	plannedSpeechSeconds,
+	planPregatedChunks,
+	rangesToChunkBounds,
+} from "./pregate";
+import { decodeMono16k } from "./vadWindows";
+import type { AudioChunk } from "./vendor/core/audio/AudioTypes";
 import en from "./vendor/i18n/translations/en";
 import ja from "./vendor/i18n/translations/ja";
 import ko from "./vendor/i18n/translations/ko";
@@ -88,7 +97,10 @@ async function runController(
 	signal?: AbortSignal,
 	vadMode: APITranscriptionSettings["vadMode"] = "server",
 	onProgress?: (percent: number) => void,
-	label = "single"
+	label = "single",
+	// When present, transcribe these pre-built (pre-gated) chunks instead of
+	// loading + chunking `file`. See {@link buildPregatedChunks} / issue #67.
+	pregatedChunks?: AudioChunk[]
 ): Promise<ControllerResult> {
 	setTranscribeBaseUrl(cfg.baseUrl);
 	setTranscribeModelOverride(cfg.modelOverride);
@@ -123,11 +135,16 @@ async function runController(
 		: cfg.model;
 	// console.warn (not .info/.debug) so the line is visible in Obsidian's
 	// console without switching on Verbose — matches the vendored Logger.
+	const source = pregatedChunks
+		? `pregated=${pregatedChunks.length}`
+		: `vad=${vadMode}`;
 	console.warn(
-		`[Meeting Copilot][transcribe] ${label} pass start (model=${modelLabel}, vad=${vadMode}, postproc=${cfg.postProcessingEnabled}, dict=${cfg.dictionaryCorrectionEnabled})`
+		`[Meeting Copilot][transcribe] ${label} pass start (model=${modelLabel}, ${source}, postproc=${cfg.postProcessingEnabled}, dict=${cfg.dictionaryCorrectionEnabled})`
 	);
 	try {
-		const result = await controller.transcribe(file, undefined, undefined, signal);
+		const result = pregatedChunks
+			? await controller.transcribeChunks(pregatedChunks, signal)
+			: await controller.transcribe(file, undefined, undefined, signal);
 		console.warn(
 			`[Meeting Copilot][transcribe] ${label} pass done in ${elapsedSecs(t0)}s`
 		);
@@ -266,9 +283,129 @@ export function shouldInvalidateProbe(result: DiarizedResult): boolean {
 	return !result.diarized && result.reason === "capability";
 }
 
+// Extra padding (seconds) beyond the already-padded speech windows, so a word
+// onset/offset just outside a detected window isn't clipped from the upload.
+// Kept small because local VAD windows already pad ~0.3s; this also covers the
+// recorder's (unpadded) RMS windows.
+const PREGATE_PADDING_SECONDS = 0.3;
+// Bridge speech windows separated by <= this much silence into one chunk, so
+// two nearby utterances don't turn into two tiny requests. Wider silent gaps
+// are dropped from the upload — the whole point of pre-gating.
+const PREGATE_MERGE_GAP_SECONDS = 1.0;
+// Fold a split region's sub-min trailing chunk into its predecessor rather than
+// sending a tiny request. Does NOT drop short *standalone* speech windows.
+const PREGATE_MIN_CHUNK_SECONDS = 5.0;
+
+/**
+ * Decode one mono stream and slice it to just its speech windows, returning
+ * upload-ready chunks whose `startTime` carries the ABSOLUTE original-timeline
+ * offset (so the Whisper client maps returned segment times back onto the
+ * shared me/them clock — no post-mapping needed).
+ *
+ * Returns null — "run a full pass instead" — when the stream has no windows (a
+ * quiet-but-real speaker or a missing speech.json must never be silently
+ * skipped), when nothing survives planning, or when decoding fails. This
+ * mirrors the existing "empty windows = keep all" safety in the merge.
+ */
+async function buildPregatedChunks(
+	app: App,
+	file: TFile,
+	streamWindows: Array<[number, number]> | undefined,
+	model: string
+): Promise<AudioChunk[] | null> {
+	if (!streamWindows || streamWindows.length === 0) return null;
+	try {
+		const { audioData, sampleRate } = await decodeMono16k(app, file);
+		const totalDuration = audioData.length / sampleRate;
+		const modelConfig = getModelConfig(model);
+		const overlapDuration = modelConfig.vadChunking.overlapDurationSeconds;
+		const ranges = planPregatedChunks(streamWindows, totalDuration, {
+			padding: PREGATE_PADDING_SECONDS,
+			maxChunkDuration: modelConfig.chunkDurationSeconds,
+			overlap: overlapDuration,
+			mergeGap: PREGATE_MERGE_GAP_SECONDS,
+			minChunkDuration: PREGATE_MIN_CHUNK_SECONDS,
+		});
+		if (ranges.length === 0) return null;
+		const bounds = rangesToChunkBounds(ranges, sampleRate, audioData.length);
+		if (bounds.length === 0) return null;
+		const chunks: AudioChunk[] = bounds.map((b, i) => {
+			// subarray is a view (no copy); encodeWavFromFloat32 reads it once.
+			const pcm = audioData.subarray(b.startSample, b.endSample);
+			// A chunk truly overlaps the previous one only when it was split off
+			// the same continuous speech region (adjacent regions don't overlap).
+			const prev = i > 0 ? bounds[i - 1] : undefined;
+			const hasOverlap = prev ? b.startTime < prev.endTime : false;
+			return {
+				id: i,
+				data: encodeWavFromFloat32(pcm, sampleRate),
+				// Absolute offset of the sliced audio, so WhisperClient maps
+				// each segment time back onto the original stream clock.
+				startTime: b.startTime,
+				endTime: b.endTime,
+				hasOverlap,
+				overlapDuration: hasOverlap ? overlapDuration : 0,
+			};
+		});
+		const speechSecs = plannedSpeechSeconds(ranges);
+		const skippedPct =
+			totalDuration > 0 ? (1 - speechSecs / totalDuration) * 100 : 0;
+		console.warn(
+			`[Meeting Copilot][transcribe] pre-gate ${file.name}: ${chunks.length} speech chunk(s), ` +
+				`${speechSecs.toFixed(1)}s of ${totalDuration.toFixed(1)}s uploaded ` +
+				`(${skippedPct.toFixed(0)}% silence skipped)`
+		);
+		return chunks;
+	} catch (error) {
+		// A decode/slice failure must not fail the pass: fall back to a full
+		// pass, mirroring computeSpeechWindows swallowing decode errors.
+		console.debug(
+			"[Meeting Copilot][transcribe] pre-gate unavailable; using a full pass",
+			error
+		);
+		return null;
+	}
+}
+
+/**
+ * Transcribe one diarized stream: pre-gate the upload to its speech windows
+ * when it has any (silence skipped), else run a full pass. Both routes go
+ * through {@link runController} with VAD off, so the endpoint seam, timing
+ * logs, and result shape are identical — only the chunk source differs.
+ */
+async function runStreamPass(
+	app: App,
+	file: TFile,
+	streamWindows: Array<[number, number]> | undefined,
+	cfg: TranscribeConfig,
+	signal: AbortSignal | undefined,
+	onProgress: ((percent: number) => void) | undefined,
+	label: string
+): Promise<ControllerResult> {
+	const chunks = await buildPregatedChunks(app, file, streamWindows, cfg.model);
+	return runController(
+		app,
+		file,
+		cfg,
+		signal,
+		"disabled",
+		onProgress,
+		label,
+		chunks ?? undefined
+	);
+}
+
 /**
  * Transcribes the two mono sidecar streams (mic = "me", system audio = "them")
  * and merges them into one speaker-labelled transcript on their shared clock.
+ *
+ * Each stream is *pre-gated* to its detected speech windows (issue #67): we
+ * upload only padded speech regions and skip the (usually large) silent gaps,
+ * cutting wall-clock time and API cost and starving Whisper of the silence it
+ * hallucinates over. Pre-gated chunks carry their absolute original-timeline
+ * offset, so segment times still land on the shared clock. A stream with no
+ * windows (quiet-but-real speaker, missing speech.json) falls back to a full
+ * pass so speech is never silently dropped. See {@link buildPregatedChunks}.
  *
  * Both passes run inside the same serial queue as {@link transcribeAudio} so
  * the process-global endpoint seam can't be overwritten mid-flight.
@@ -314,7 +451,7 @@ export function transcribeDiarized(
 			"[Meeting Copilot][transcribe] diarized: 2 serial passes (me, them)"
 		);
 		try {
-			const meResult = await runController(app, meFile, cfg, signal, "disabled", meProgress, "me");
+			const meResult = await runStreamPass(app, meFile, windows?.me, cfg, signal, meProgress, "me");
 			if (signal?.aborted) {
 				throw new DOMException("Transcription aborted", "AbortError");
 			}
@@ -328,7 +465,7 @@ export function transcribeDiarized(
 				return { text: "", diarized: false, reason: "capability" };
 			}
 
-			const themResult = await runController(app, themFile, cfg, signal, "disabled", themProgress, "them");
+			const themResult = await runStreamPass(app, themFile, windows?.them, cfg, signal, themProgress, "them");
 			const themSegments = extractSegments(themResult);
 			if (isCapabilityMiss(themSegments, resultText(themResult))) {
 				return { text: "", diarized: false, reason: "capability" };
