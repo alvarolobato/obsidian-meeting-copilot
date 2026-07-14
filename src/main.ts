@@ -2235,7 +2235,10 @@ export default class SystemRecordingPlugin extends Plugin {
     ): Promise<string | undefined> {
         const uid = this.settings.micDeviceUid;
         if (!uid) return undefined;
-        const devices = await listInputDevices(binaryPath);
+        // Short timeout: this runs on the critical path to starting a recording,
+        // so a wedged helper must not stall the meeting. Enumeration is a quick
+        // local CoreAudio query in practice.
+        const devices = await listInputDevices(binaryPath, 2000);
         if (devices.length === 0) return uid;
         if (devices.some((d) => d.uid === uid)) return uid;
         const label = this.settings.micDeviceLabel || uid;

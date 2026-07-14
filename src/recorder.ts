@@ -40,7 +40,10 @@ export interface InputDevice {
  * bad output, timeout) so the caller can just fall back to the system default.
  * macOS-only in practice; the helper is only shipped there.
  */
-export function listInputDevices(binaryPath: string): Promise<InputDevice[]> {
+export function listInputDevices(
+    binaryPath: string,
+    timeoutMs = 5000
+): Promise<InputDevice[]> {
     return new Promise((resolve) => {
         let settled = false;
         const done = (devices: InputDevice[]): void => {
@@ -58,12 +61,19 @@ export function listInputDevices(binaryPath: string): Promise<InputDevice[]> {
             done([]);
             return;
         }
-        // A hung helper must not block the settings UI forever.
+        // A hung helper must not block the caller (the settings UI, or a
+        // recording start's availability pre-check) for long. SIGKILL after a
+        // short grace so a wedged process is actually reaped.
         const timer = setTimeout(() => {
             proc.kill();
+            setTimeout(() => {
+                if (proc.exitCode === null && proc.signalCode === null) {
+                    proc.kill("SIGKILL");
+                }
+            }, 500);
             log("list-devices timed out");
             done([]);
-        }, 5000);
+        }, timeoutMs);
         let out = "";
         proc.stdout?.on("data", (d: string | Uint8Array) => {
             out += d.toString();

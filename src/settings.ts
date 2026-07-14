@@ -1271,12 +1271,6 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
     }
 
     /**
-     * Text field for one of the folder/template settings (one-off, series,
-     * ad-hoc, 1:1), which all share the same shape: a placeholder of the
-     * default value, and an empty/blank edit reverting to that default rather
-     * than being saved as "".
-     */
-    /**
      * Microphone (input device) picker with a refresh button. The device list
      * is enumerated from the recorder helper's `list-devices`; "System default"
      * is always offered, and a saved-but-currently-absent device stays visible
@@ -1375,6 +1369,12 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         }
     }
 
+    /**
+     * Text field for one of the folder/template settings (one-off, series,
+     * ad-hoc, 1:1), which all share the same shape: a placeholder of the
+     * default value, and an empty/blank edit reverting to that default rather
+     * than being saved as "".
+     */
     private addFolderField(
         setting: Setting,
         current: string,
