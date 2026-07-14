@@ -163,6 +163,17 @@ describe("mergeDiarized", () => {
 				them: "none",
 			});
 		});
+
+		it("is 'none' for both when VAD ran, heard nothing, but RMS has windows", () => {
+			// VAD ran (defined) and found zero on both streams while RMS found some:
+			// the whole meeting is marginal, so full passes rather than trusting the
+			// crude gate's edges on either stream.
+			const vadSilent: SpeechWindows = { me: [], them: [] };
+			expect(pregateSources(vadSilent, rms)).toEqual({
+				me: "none",
+				them: "none",
+			});
+		});
 	});
 
 	it("collapses consecutive segments from the same speaker into one line", () => {
