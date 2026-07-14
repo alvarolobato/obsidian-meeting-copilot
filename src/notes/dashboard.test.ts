@@ -21,6 +21,9 @@ describe("buildDashboardBlock", () => {
 		// true for every row — which put all past meetings under "Upcoming".
 		expect(block).not.toMatch(/>= now\b/);
 		expect(block).not.toMatch(/< now\b/);
+		// The instant literal, not the midnight `date(today)` — otherwise a
+		// same-day meeting that already ended would still count as upcoming.
+		expect(block).not.toContain("date(today)");
 		// `start` is coerced with `date()` so a plain-string frontmatter value
 		// isn't compared against a date by cross-type ordering.
 		expect(block).not.toContain("AND start >= ");
