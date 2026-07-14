@@ -1303,9 +1303,18 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     .setValue(current)
                     .onChange(async (value) => {
                         this.plugin.settings.micDeviceUid = value;
-                        this.plugin.settings.micDeviceLabel =
-                            this.inputDevices.find((d) => d.uid === value)
-                                ?.name ?? "";
+                        const match = this.inputDevices.find(
+                            (d) => d.uid === value
+                        );
+                        if (match) {
+                            this.plugin.settings.micDeviceLabel = match.name;
+                        } else if (!value) {
+                            // Back to system default: no label to remember.
+                            this.plugin.settings.micDeviceLabel = "";
+                        }
+                        // Else: re-selecting a saved-but-absent device — keep
+                        // the remembered label so the record-time "unavailable"
+                        // notice can still name it (a blank would show the UID).
                         await this.plugin.saveSettings();
                     });
             });

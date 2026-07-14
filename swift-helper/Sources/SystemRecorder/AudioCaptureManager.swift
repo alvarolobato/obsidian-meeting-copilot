@@ -234,7 +234,12 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
             )
             return
         }
-        guard let audioUnit = inputNode.audioUnit else { return }
+        guard let audioUnit = inputNode.audioUnit else {
+            onWarning?(
+                "Selected microphone couldn't be applied; recording with the system default."
+            )
+            return
+        }
         var device = deviceID
         let status = AudioUnitSetProperty(
             audioUnit,

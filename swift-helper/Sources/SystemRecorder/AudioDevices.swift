@@ -34,7 +34,11 @@ enum AudioDevices {
                 ?? uid
             result.append(AudioInputDevice(uid: uid, name: name))
         }
-        return result
+        // Sort by name so the picker's order is stable across refreshes
+        // (CoreAudio's raw order can shuffle as devices come and go).
+        return result.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
     }
 
     /// Resolves a saved device UID to a live `AudioDeviceID`, or nil when the
