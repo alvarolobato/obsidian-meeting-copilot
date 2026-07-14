@@ -126,6 +126,17 @@
     color: var(--text-faint);
 }
 
+/* Respect reduced-motion: no roll-up transition, no spinning icons. */
+@media (prefers-reduced-motion: reduce) {
+    .mc-queue-popover {
+        transition: none;
+    }
+    .mc-status-busy .mc-status-icon svg,
+    .mc-queue-popover-item.is-running .mc-queue-popover-icon svg {
+        animation: none;
+    }
+}
+
 .side-dock-ribbon-action.is-recording,
 .clickable-icon.is-recording {
     color: var(--text-error);

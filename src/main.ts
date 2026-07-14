@@ -272,8 +272,7 @@ export default class SystemRecordingPlugin extends Plugin {
         // Status bar
         this.statusBarEl = this.addStatusBarItem();
         this.statusBarEl.addClass("system-recording-hidden");
-        // Hovering the status bar reveals the queue popover and freezes the
-        // time/queue swap so the user can read it.
+        // Hovering the status bar reveals the queue popover with the full list.
         this.registerDomEvent(this.statusBarEl, "mouseenter", () =>
             this.setStatusHover(true)
         );
@@ -393,6 +392,8 @@ export default class SystemRecordingPlugin extends Plugin {
             window.clearTimeout(this.retentionTimeout);
             this.retentionTimeout = null;
         }
+		this.statusHovered = false;
+		this.hideQueuePopover();
 		this.transcriptionQueue.cancelAll();
 		this.scheduler?.stop();
 		this.agendaEvents.clear();
@@ -400,7 +401,6 @@ export default class SystemRecordingPlugin extends Plugin {
 		this.meetingNotices.clear();
 		this.stopPromptNotice?.hide();
 		this.stopPromptNotice = null;
-		this.hideQueuePopover();
     }
 
     async loadSettings() {
@@ -2158,7 +2158,8 @@ export default class SystemRecordingPlugin extends Plugin {
         // queue drains). The recording timer drives its own refresh, so only do
         // this on the non-recording path below.
         if (this.statusHovered) {
-            if (snapshot.running) this.showQueuePopover(snapshot);
+            if (snapshot.running || snapshot.waiting.length > 0)
+                this.showQueuePopover(snapshot);
             else this.hideQueuePopover();
         }
         // The live recording timer owns the bar; and an idle queue leaves any
@@ -2174,7 +2175,7 @@ export default class SystemRecordingPlugin extends Plugin {
         );
     }
 
-    /** Enter/leave the status bar: reveal the queue popover and pause the time/queue swap. */
+    /** Enter/leave the status bar: reveal or tear down the queue popover. */
     private setStatusHover(hovering: boolean): void {
         this.statusHovered = hovering;
         if (!hovering) {
@@ -2182,7 +2183,8 @@ export default class SystemRecordingPlugin extends Plugin {
             return;
         }
         const snapshot = this.transcriptionQueue.snapshot();
-        if (snapshot.running) this.showQueuePopover(snapshot);
+        if (snapshot.running || snapshot.waiting.length > 0)
+            this.showQueuePopover(snapshot);
     }
 
     /**
@@ -2191,7 +2193,11 @@ export default class SystemRecordingPlugin extends Plugin {
      * (no pointer events) so moving onto it never steals the hover and flickers.
      */
     private showQueuePopover(snapshot: QueueSnapshot): void {
-        if (!this.statusBarEl || !snapshot.running) return;
+        if (
+            !this.statusBarEl ||
+            (!snapshot.running && snapshot.waiting.length === 0)
+        )
+            return;
         if (!this.queuePopoverEl) {
             this.queuePopoverEl = document.body.createDiv({
                 cls: "mc-queue-popover",
@@ -2204,12 +2210,20 @@ export default class SystemRecordingPlugin extends Plugin {
             text: t().statusBar.queuePopoverTitle,
         });
         const list = el.createDiv({ cls: "mc-queue-popover-list" });
-        const running = list.createDiv({ cls: "mc-queue-popover-item is-running" });
-        setIcon(running.createSpan({ cls: "mc-queue-popover-icon" }), "loader-2");
-        running.createSpan({
-            cls: "mc-queue-popover-label",
-            text: snapshot.running.label,
-        });
+        // `running` is momentarily null between jobs; still show the queue then.
+        if (snapshot.running) {
+            const running = list.createDiv({
+                cls: "mc-queue-popover-item is-running",
+            });
+            setIcon(
+                running.createSpan({ cls: "mc-queue-popover-icon" }),
+                "loader-2"
+            );
+            running.createSpan({
+                cls: "mc-queue-popover-label",
+                text: snapshot.running.label,
+            });
+        }
         const limit = SystemRecordingPlugin.QUEUE_POPOVER_LIMIT;
         for (const item of snapshot.waiting.slice(0, limit)) {
             const row = list.createDiv({ cls: "mc-queue-popover-item" });
@@ -2448,16 +2462,17 @@ export default class SystemRecordingPlugin extends Plugin {
             this.recTimeEl?.setText(t().statusBar.recording(`${h}:${m}:${s}`));
 
             // The timer always stays put; a small badge just notes how many
-            // transcriptions are in flight (running + waiting) so switching text
-            // never resizes the bar. Empty text when the queue is idle.
+            // transcriptions are in flight so switching text never resizes the
+            // bar. Count waiting even during the brief gap where one job has
+            // finished and the next hasn't started (running momentarily null),
+            // so the badge doesn't flicker to empty between jobs.
             const snapshot = this.transcriptionQueue.snapshot();
-            const count = snapshot.running
-                ? 1 + snapshot.waiting.length
-                : 0;
+            const count =
+                snapshot.waiting.length + (snapshot.running ? 1 : 0);
             this.recQueueEl?.setText(
                 count > 0 ? t().statusBar.transcribingCount(count) : ""
             );
-            if (this.statusHovered && snapshot.running) {
+            if (this.statusHovered && count > 0) {
                 this.showQueuePopover(snapshot);
             }
         }, 1000);
@@ -2514,6 +2529,10 @@ export default class SystemRecordingPlugin extends Plugin {
 
     private hideStatusBar() {
         this.clearActionStatus();
+        // Hiding the bar (display:none) may not fire mouseleave, so drop the
+        // hover flag ourselves — otherwise a later tick could re-open the
+        // popover without the pointer actually being over the (re-shown) bar.
+        this.statusHovered = false;
         this.hideQueuePopover();
         if (this.statusBarEl) {
             this.statusBarEl.addClass("system-recording-hidden");
