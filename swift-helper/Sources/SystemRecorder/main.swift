@@ -161,12 +161,16 @@ if #available(macOS 13.0, *) {
             fail(
                 "No audio captured after \(Int(watchdogSeconds))s. If a meeting app (e.g. Zoom) started after recording, stop and start recording again once it's running. Otherwise grant Obsidian both Screen Recording and Microphone access in System Settings → Privacy & Security and restart Obsidian."
             )
-        } else if inputDeviceUID != nil && frames.mic == 0 {
-            // System audio is flowing but the explicitly-selected input device
-            // has delivered nothing. Rather than silently producing a one-sided
-            // recording (no `.me` sidecar, so diarization can't run), surface it
-            // so the user can switch input or reconnect the device. Non-fatal:
-            // the recording keeps going with system audio.
+        } else if inputDeviceUID != nil && frames.mic == 0 && captureManager.micTapActive() {
+            // System audio is flowing and a mic tap is live, but the
+            // explicitly-selected input device has delivered nothing (a live tap
+            // emits buffers continuously, even in silence, so zero frames means
+            // it never fired — not just a quiet user). Rather than silently
+            // producing a one-sided recording (no `.me` sidecar, so diarization
+            // can't run), surface it so the user can switch input or reconnect
+            // the device. Non-fatal: the recording keeps going with system
+            // audio. Gated on micTapActive() so a mic intentionally disabled for
+            // an unusable format (which already warned) doesn't warn twice.
             emitJSON([
                 "status": "warning",
                 "message": "The selected microphone produced no audio after \(Int(watchdogSeconds))s; recording continues with system audio only. Try selecting “System default” as the input device, or reconnect the microphone.",

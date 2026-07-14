@@ -48,6 +48,11 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
     private var isCapturing = false
     private var restartingSystem = false
     private var restartingMic = false
+    /// Whether the mic engine currently has a live tap installed. False when the
+    /// mic was deliberately left off at start (e.g. an unusable device format),
+    /// so the watchdog can tell an intentionally-off mic from one that's
+    /// installed but delivering nothing.
+    private var micTapInstalled = false
     private var micRestarts = 0
     private var systemRestarts = 0
     private static let maxRestarts = 30
@@ -62,6 +67,20 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
     private func capturing() -> Bool {
         restartLock.lock(); defer { restartLock.unlock() }
         return isCapturing
+    }
+
+    private func setMicTapInstalled(_ value: Bool) {
+        restartLock.lock(); defer { restartLock.unlock() }
+        micTapInstalled = value
+    }
+
+    /// Whether the mic engine currently has a live tap. Used by the no-audio
+    /// watchdog so it only warns about a silent mic when one is actually running
+    /// (not when the mic was intentionally disabled for an unusable format,
+    /// which already warned).
+    func micTapActive() -> Bool {
+        restartLock.lock(); defer { restartLock.unlock() }
+        return micTapInstalled
     }
 
     /// Claim a system-stream restart. Returns false if we shouldn't restart
@@ -214,23 +233,21 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
         let overrodeDevice = applyPreferredInputDevice(to: inputNode)
         // Tap format. `outputFormat(forBus:0)` is the node's graph-facing format,
         // negotiated when the node was first realized against the *default*
-        // device. After we repoint the AUHAL at a specific device it goes stale:
-        // a tap installed with it silently receives no buffers when the chosen
-        // device's native rate differs (e.g. a 16 kHz USB headset vs a 48 kHz
-        // built-in mic) — the recording ends up one-sided with no `.me` sidecar,
-        // so diarization can't run. Read the device's own hardware format
-        // (`inputFormat(forBus:0)`) in that case; keep `outputFormat` for the
+        // device. After we repoint the AUHAL at a specific device that format is
+        // stale: a tap installed with it silently receives no buffers when the
+        // chosen device's native rate differs (e.g. a 16 kHz USB headset vs a
+        // 48 kHz built-in mic), so the recording ends up one-sided with no
+        // `.me` sidecar and diarization can't run. For an explicitly selected
+        // device only the device's own hardware format (`inputFormat(forBus:0)`)
+        // is trustworthy — never fall back to the stale `outputFormat`, which is
+        // exactly what caused the zero-frame bug. Keep `outputFormat` for the
         // system default, which the OS already negotiated correctly.
-        var format = inputNode.outputFormat(forBus: 0)
-        if overrodeDevice {
-            let hardwareFormat = inputNode.inputFormat(forBus: 0)
-            if hardwareFormat.sampleRate > 0, hardwareFormat.channelCount > 0 {
-                format = hardwareFormat
-            }
-        }
+        let format = overrodeDevice
+            ? inputNode.inputFormat(forBus: 0)
+            : inputNode.outputFormat(forBus: 0)
         // installTap traps on a zero/invalid format, which would take down the
-        // whole recording (including system audio). If we somehow can't get a
-        // usable mic format, warn and record system audio only instead.
+        // whole recording (including system audio). If we can't get a usable
+        // mic format, warn and record system audio only instead.
         guard format.sampleRate > 0, format.channelCount > 0 else {
             onWarning?(
                 "Microphone format is unavailable; recording system audio only."
@@ -244,6 +261,7 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
         engine.prepare()
         try engine.start()
         self.audioEngine = engine
+        setMicTapInstalled(true)
     }
 
     /// Bind the mic engine's input node to `preferredInputDeviceUID` via the
@@ -290,6 +308,7 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
         audioEngine?.inputNode.removeTap(onBus: 0)
         audioEngine?.stop()
         audioEngine = nil
+        setMicTapInstalled(false)
     }
 
     /// Rebuild the mic engine/tap after an audio-graph reconfiguration. Claimed
