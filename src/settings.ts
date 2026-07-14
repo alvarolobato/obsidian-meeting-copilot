@@ -535,6 +535,8 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					});
 			});
 
+		this.renderRecordingSettings(containerEl);
+
 		// ---- AI ----
 		// One endpoint + key is used for both transcription and enrichment.
 		new Setting(containerEl).setName(s.settings.endpointHeading).setHeading();
@@ -904,7 +906,11 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					})
 			);
 
-		// ---- Recording & notes ----
+    }
+
+    /** Recording & notes settings, rendered right after meeting detection. */
+    private renderRecordingSettings(containerEl: HTMLElement): void {
+        const s = t();
 		new Setting(containerEl)
 			.setName(s.settings.recordingHeading)
 			.setHeading();
