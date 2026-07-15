@@ -3050,14 +3050,24 @@ export default class SystemRecordingPlugin extends Plugin {
         return windows.me.length > 0 || windows.them.length > 0;
     }
 
-    /** Moves a vault file to the trash if it exists; best-effort (never throws). */
-    private async trashIfExists(vaultPath: string): Promise<void> {
-        const f = this.app.vault.getAbstractFileByPath(vaultPath);
-        if (!(f instanceof TFile)) return;
+    /**
+     * Moves a vault file to the trash if it exists; never throws. Resolves via
+     * the adapter (+ retry) rather than the vault index so a just-written file
+     * the index hasn't caught up to (the .me/.them/.speech sidecars right after a
+     * stop) is still found and removed instead of orphaned. Returns true when the
+     * path is gone afterward (absent to begin with, or trashed), false only when
+     * the file exists but trashing failed — so callers can avoid unlinking a
+     * recording whose audio is still on disk.
+     */
+    private async trashIfExists(vaultPath: string): Promise<boolean> {
+        const f = await this.resolveExistingFile(vaultPath);
+        if (!f) return true;
         try {
             await this.app.fileManager.trashFile(f);
+            return true;
         } catch (e) {
             console.warn(`[Meeting Copilot] failed to trash ${vaultPath}`, e);
+            return false;
         }
     }
 
@@ -3074,7 +3084,15 @@ export default class SystemRecordingPlugin extends Plugin {
         const note = findMeetingNoteForAudio(this.app, recording);
         const prunedPath = recording.path;
         const sc = sidecarPathsFor(recording.path);
-        await this.trashIfExists(recording.path);
+        // Trash the audio first; only unlink it from the note once it's actually
+        // gone. Unlinking a still-present recording would orphan it — on disk but
+        // owned by no note, so the retention sweep would never reclaim it.
+        if (!(await this.trashIfExists(recording.path))) {
+            console.warn(
+                `[Meeting Copilot][recorder] could not discard silent recording "${recording.name}" (trash failed); left linked`
+            );
+            return;
+        }
         await this.trashIfExists(sc.me);
         await this.trashIfExists(sc.them);
         await this.trashIfExists(sc.speech);
