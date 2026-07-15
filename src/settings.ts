@@ -25,6 +25,12 @@ import {
 	fetchModelCapabilities,
 	type ModelCapability,
 } from "./transcribe/capabilities";
+import {
+	DEFAULT_LOCAL_MODEL_ID,
+	LOCAL_MODELS,
+	formatBytes,
+	localModelSpec,
+} from "./transcribe/localModels";
 import { t, type Messages } from "./i18n";
 
 export interface SystemRecordingSettings {
@@ -99,6 +105,13 @@ export interface SystemRecordingSettings {
 	// Shared OpenAI-compatible endpoint + credentials (transcription + enrichment).
 	apiBaseUrl: string;
 	apiKey: string;
+	// Transcription backend selection (issue #34).
+	/** Where audio is transcribed: the remote OpenAI-compatible endpoint, or a local on-device Whisper model. */
+	transcriptionBackend: "remote" | "local";
+	/** Local ggml model id (see {@link LOCAL_MODELS}) used when `transcriptionBackend` is "local". */
+	localWhisperModel: string;
+	/** When local transcription fails, fall back to the remote endpoint if one is configured. */
+	localFallbackToRemote: boolean;
 	// Transcription (vendored engine).
 	/** Model id sent to the endpoint (e.g. gpt-4o-transcribe, or a gateway name like llm-gateway/whisper). */
 	sttModel: string;
@@ -168,6 +181,9 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	agendaLookBackDays: 7,
 	apiBaseUrl: "https://api.openai.com/v1",
 	apiKey: "",
+	transcriptionBackend: "remote",
+	localWhisperModel: DEFAULT_LOCAL_MODEL_ID,
+	localFallbackToRemote: false,
 	sttModel: "gpt-4o-transcribe",
 	sttApiType: "gpt-4o-transcribe",
 	sttLanguage: "auto",
@@ -271,6 +287,10 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
     private inputDevices: InputDevice[] = [];
     /** True while a device enumeration is in flight, so the button can show progress and re-entry is blocked. */
     private listingDevices = false;
+    /** True while a local model download is streaming, so the row shows progress and re-entry is blocked. */
+    private downloadingModel = false;
+    /** Whole-percent progress of the in-flight local model download (0–100). */
+    private downloadProgress = 0;
 
     constructor(app: App, plugin: SystemRecordingPlugin) {
         super(app, plugin);
@@ -639,195 +659,31 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 			.setName(s.settings.transcriptionHeading)
 			.setHeading();
 
-		// Model id sent on the wire (dropdown once models are loaded, else free
-		// text). Use "Load models" in the AI endpoint section above to
-		// populate the list.
-		const sttModelSetting = new Setting(containerEl)
-			.setName(s.settings.sttModel.name)
-			.setDesc(s.settings.sttModel.desc);
-		this.addModelPicker(
-			sttModelSetting,
-			this.plugin.settings.sttModel,
-			async (value) => {
-				this.plugin.settings.sttModel = value;
-				// Keep the engine family in sync with the picked model.
-				this.plugin.settings.sttApiType = inferSttApiType(value);
-				await this.plugin.saveSettings();
-				// Update in place instead of re-rendering the whole tab (which
-				// would scroll-jump back to the top): sync the engine dropdown,
-				// refresh the badges, and kick off an assessment of the new
-				// model.
-				this.sttEngineDropdown?.setValue(this.engineDropdownValue());
-				this.refreshSttBadges();
-				this.maybeAssessSttModel();
-			},
-			// When the endpoint reports capabilities (LiteLLM), only offer
-			// models it says can transcribe. Without that info (plain OpenAI),
-			// no filter — the probe below determines transcription support.
-			this.capabilities
-				? (id) => this.capabilities?.get(id)?.transcription === true
-				: undefined
-		);
-
-		// Transcription support, with timestamp support shown as a sub-detail
-		// beneath it (it only matters for speaker separation). Both lines live
-		// in this one setting's description and are refreshed in place.
-		const supportSetting = new Setting(containerEl)
-			.setName(s.settings.transcriptionBadge.name)
-			.addButton((button) =>
-				button
-					.setButtonText(s.settings.recheckSupport.button)
-					.setTooltip(s.settings.recheckSupport.tooltip)
-					.onClick(() => this.recheckSttSupport())
-			);
-		supportSetting.descEl.empty();
-		this.sttTranscriptionBadgeEl = supportSetting.descEl.createDiv({
-			text: this.transcriptionBadgeText(s),
-		});
-		this.sttTimestampBadgeEl = supportSetting.descEl.createDiv({
-			text: this.timestampBadgeText(s),
-			cls: "mc-support-detail",
-		});
-		// Assess transcription + timestamp support for the current model (fires
-		// once per endpoint+model per session; no-op when the endpoint isn't
-		// set or a fresh verdict is already stored). The "Recheck" button above
-		// force-reruns it (and reports the outcome) when a probe came back
-		// inconclusive.
-		this.maybeAssessSttModel();
-
-		// Engine family = request routing/chunking. It's auto-set from the model
-		// above (see the picker's onChange), so this is an advanced override,
-		// only needed when a gateway's opaque model name hides which engine it
-		// really is. Word timestamps are handled automatically by the probe, so
-		// there's no separate "Whisper (word timestamps)" choice: the Whisper
-		// engine asks for timestamps and silently falls back when unsupported.
+		// Engine selector: the remote OpenAI-compatible endpoint vs. an
+		// on-device Whisper model (issue #34). Switching re-renders the section
+		// so only the chosen engine's rows show.
 		new Setting(containerEl)
-			.setName(s.settings.sttApiType.name)
-			.setDesc(s.settings.sttApiType.desc)
+			.setName(s.settings.transcriptionEngine.name)
+			.setDesc(s.settings.transcriptionEngine.desc)
 			.addDropdown((dd) => {
-				this.sttEngineDropdown = dd;
-				dd.addOption("gpt-4o-transcribe", s.settings.sttApiType.gpt4o);
-				dd.addOption(
-					"gpt-4o-mini-transcribe",
-					s.settings.sttApiType.gpt4oMini
-				);
-				dd.addOption("whisper-1-ts", s.settings.sttApiType.whisper);
-				dd.setValue(this.engineDropdownValue()).onChange(
-					async (value) => {
-						this.plugin.settings.sttApiType = STT_MODELS.includes(
-							value as SttApiType
-						)
-							? (value as SttApiType)
-							: "gpt-4o-transcribe";
-						await this.plugin.saveSettings();
-						// Update badges in place (no full re-render / scroll
-						// jump) and re-assess against the new engine family.
-						this.refreshSttBadges();
-						this.maybeAssessSttModel();
-					}
-				);
-			});
-
-		new Setting(containerEl)
-			.setName(s.settings.diarization.name)
-			.setDesc(s.settings.diarization.desc)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.diarizationEnabled)
+				dd.addOption("remote", s.settings.transcriptionEngine.remote);
+				dd.addOption("local", s.settings.transcriptionEngine.local);
+				dd
+					.setValue(this.plugin.settings.transcriptionBackend)
 					.onChange(async (value) => {
-						this.plugin.settings.diarizationEnabled = value;
+						this.plugin.settings.transcriptionBackend =
+							value === "local" ? "local" : "remote";
 						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName(s.settings.sttLanguage.name)
-			.setDesc(s.settings.sttLanguage.desc)
-			.addText((text) =>
-				text
-					.setPlaceholder("Auto-detect")
-					.setValue(this.plugin.settings.sttLanguage)
-					.onChange(async (value) => {
-						this.plugin.settings.sttLanguage =
-							value.trim() || "auto";
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName(s.settings.dictionaryCorrection.name)
-			.setDesc(s.settings.dictionaryCorrection.desc)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.dictionaryCorrectionEnabled)
-					.onChange(async (value) => {
-						this.plugin.settings.dictionaryCorrectionEnabled = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName(s.settings.dictionary.name)
-			.setDesc(s.settings.dictionary.desc)
-			.addTextArea((ta) => {
-				ta
-					.setPlaceholder(s.settings.dictionary.placeholder)
-					.setValue(this.plugin.settings.dictionary)
-					.onChange(async (value) => {
-						this.plugin.settings.dictionary = value;
-						await this.plugin.saveSettings();
+						this.display();
 					});
-				ta.inputEl.rows = TEXTAREA_ROWS;
-				ta.inputEl.addClass("meeting-copilot-template-input");
 			});
 
-		new Setting(containerEl)
-			.setName(s.settings.postProcessing.name)
-			.setDesc(s.settings.postProcessing.desc)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.postProcessingEnabled)
-					.onChange(async (value) => {
-						this.plugin.settings.postProcessingEnabled = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName(s.settings.autoTranscribe.name)
-			.setDesc(s.settings.autoTranscribe.desc)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.autoTranscribe)
-					.onChange(async (value) => {
-						this.plugin.settings.autoTranscribe = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName(s.settings.insertTranscript.name)
-			.setDesc(s.settings.insertTranscript.desc)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.insertTranscript)
-					.onChange(async (value) => {
-						this.plugin.settings.insertTranscript = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName(s.settings.debugLogging.name)
-			.setDesc(s.settings.debugLogging.desc)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.debugLogging)
-					.onChange(async (value) => {
-						this.plugin.settings.debugLogging = value;
-						await this.plugin.saveSettings();
-					})
-			);
+		if (this.plugin.settings.transcriptionBackend === "local") {
+			this.renderLocalTranscription(containerEl);
+		} else {
+			this.renderRemoteTranscription(containerEl);
+		}
+		this.renderSharedTranscription(containerEl);
 
 		// ---- AI enrichment ----
 		new Setting(containerEl).setName(s.settings.enrichHeading).setHeading();
@@ -906,6 +762,332 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					})
 			);
 
+    }
+
+    /**
+     * The remote (OpenAI-compatible endpoint) transcription rows: model picker,
+     * support badges, engine-family override, and the dictionary/GPT-correction
+     * options that only the vendored engine's pipeline applies.
+     */
+    private renderRemoteTranscription(containerEl: HTMLElement): void {
+        const s = t();
+        // Model id sent on the wire (dropdown once models are loaded, else free
+        // text). Use "Load models" in the AI endpoint section above to
+        // populate the list.
+        const sttModelSetting = new Setting(containerEl)
+            .setName(s.settings.sttModel.name)
+            .setDesc(s.settings.sttModel.desc);
+        this.addModelPicker(
+            sttModelSetting,
+            this.plugin.settings.sttModel,
+            async (value) => {
+                this.plugin.settings.sttModel = value;
+                // Keep the engine family in sync with the picked model.
+                this.plugin.settings.sttApiType = inferSttApiType(value);
+                await this.plugin.saveSettings();
+                // Update in place instead of re-rendering the whole tab (which
+                // would scroll-jump back to the top): sync the engine dropdown,
+                // refresh the badges, and kick off an assessment of the new
+                // model.
+                this.sttEngineDropdown?.setValue(this.engineDropdownValue());
+                this.refreshSttBadges();
+                this.maybeAssessSttModel();
+            },
+            // When the endpoint reports capabilities (LiteLLM), only offer
+            // models it says can transcribe. Without that info (plain OpenAI),
+            // no filter — the probe below determines transcription support.
+            this.capabilities
+                ? (id) => this.capabilities?.get(id)?.transcription === true
+                : undefined
+        );
+
+        // Transcription support, with timestamp support shown as a sub-detail
+        // beneath it (it only matters for speaker separation). Both lines live
+        // in this one setting's description and are refreshed in place.
+        const supportSetting = new Setting(containerEl)
+            .setName(s.settings.transcriptionBadge.name)
+            .addButton((button) =>
+                button
+                    .setButtonText(s.settings.recheckSupport.button)
+                    .setTooltip(s.settings.recheckSupport.tooltip)
+                    .onClick(() => this.recheckSttSupport())
+            );
+        supportSetting.descEl.empty();
+        this.sttTranscriptionBadgeEl = supportSetting.descEl.createDiv({
+            text: this.transcriptionBadgeText(s),
+        });
+        this.sttTimestampBadgeEl = supportSetting.descEl.createDiv({
+            text: this.timestampBadgeText(s),
+            cls: "mc-support-detail",
+        });
+        // Assess transcription + timestamp support for the current model (fires
+        // once per endpoint+model per session; no-op when the endpoint isn't
+        // set or a fresh verdict is already stored). The "Recheck" button above
+        // force-reruns it (and reports the outcome) when a probe came back
+        // inconclusive.
+        this.maybeAssessSttModel();
+
+        // Engine family = request routing/chunking. It's auto-set from the model
+        // above (see the picker's onChange), so this is an advanced override,
+        // only needed when a gateway's opaque model name hides which engine it
+        // really is. Word timestamps are handled automatically by the probe, so
+        // there's no separate "Whisper (word timestamps)" choice: the Whisper
+        // engine asks for timestamps and silently falls back when unsupported.
+        new Setting(containerEl)
+            .setName(s.settings.sttApiType.name)
+            .setDesc(s.settings.sttApiType.desc)
+            .addDropdown((dd) => {
+                this.sttEngineDropdown = dd;
+                dd.addOption("gpt-4o-transcribe", s.settings.sttApiType.gpt4o);
+                dd.addOption(
+                    "gpt-4o-mini-transcribe",
+                    s.settings.sttApiType.gpt4oMini
+                );
+                dd.addOption("whisper-1-ts", s.settings.sttApiType.whisper);
+                dd.setValue(this.engineDropdownValue()).onChange(
+                    async (value) => {
+                        this.plugin.settings.sttApiType = STT_MODELS.includes(
+                            value as SttApiType
+                        )
+                            ? (value as SttApiType)
+                            : "gpt-4o-transcribe";
+                        await this.plugin.saveSettings();
+                        // Update badges in place (no full re-render / scroll
+                        // jump) and re-assess against the new engine family.
+                        this.refreshSttBadges();
+                        this.maybeAssessSttModel();
+                    }
+                );
+            });
+
+        new Setting(containerEl)
+            .setName(s.settings.dictionaryCorrection.name)
+            .setDesc(s.settings.dictionaryCorrection.desc)
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.dictionaryCorrectionEnabled)
+                    .onChange(async (value) => {
+                        this.plugin.settings.dictionaryCorrectionEnabled = value;
+                        await this.plugin.saveSettings();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName(s.settings.dictionary.name)
+            .setDesc(s.settings.dictionary.desc)
+            .addTextArea((ta) => {
+                ta
+                    .setPlaceholder(s.settings.dictionary.placeholder)
+                    .setValue(this.plugin.settings.dictionary)
+                    .onChange(async (value) => {
+                        this.plugin.settings.dictionary = value;
+                        await this.plugin.saveSettings();
+                    });
+                ta.inputEl.rows = TEXTAREA_ROWS;
+                ta.inputEl.addClass("meeting-copilot-template-input");
+            });
+
+        new Setting(containerEl)
+            .setName(s.settings.postProcessing.name)
+            .setDesc(s.settings.postProcessing.desc)
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.postProcessingEnabled)
+                    .onChange(async (value) => {
+                        this.plugin.settings.postProcessingEnabled = value;
+                        await this.plugin.saveSettings();
+                    })
+            );
+    }
+
+    /**
+     * The local (on-device Whisper) transcription rows: model picker, a
+     * download/status row that streams the ggml file into the plugin's models
+     * dir (verified by SHA-256), and the remote-fallback toggle. Runs entirely
+     * on this Mac — no audio leaves the device (issue #34).
+     */
+    private renderLocalTranscription(containerEl: HTMLElement): void {
+        const s = t();
+        const spec = localModelSpec(this.plugin.settings.localWhisperModel);
+
+        new Setting(containerEl)
+            .setName(s.settings.localModel.name)
+            .setDesc(s.settings.localModel.desc)
+            .addDropdown((dd) => {
+                dd.selectEl.addClass("meeting-copilot-model-dropdown");
+                for (const m of Object.values(LOCAL_MODELS)) {
+                    dd.addOption(m.id, m.label);
+                }
+                dd.setValue(spec.id).onChange(async (value) => {
+                    this.plugin.settings.localWhisperModel = value;
+                    await this.plugin.saveSettings();
+                    // Re-render so the download row reflects the new model's
+                    // presence/size.
+                    this.display();
+                });
+            });
+
+        // Download / status row, repainted in place so a download's progress
+        // and the resulting "downloaded" state don't scroll-jump the tab.
+        const dlSetting = new Setting(containerEl).setName(
+            s.settings.localModelDownload.name
+        );
+        const setDesc = (pct: number): void => {
+            dlSetting.setDesc(s.settings.localModelDownload.downloading(pct));
+        };
+        const paint = async (): Promise<void> => {
+            dlSetting.controlEl.empty();
+            if (this.downloadingModel) {
+                setDesc(this.downloadProgress);
+                return;
+            }
+            const present = await this.plugin.localModelPresent(spec);
+            dlSetting.setDesc(
+                present
+                    ? s.settings.localModelDownload.present(
+                            formatBytes(spec.sizeBytes)
+                        )
+                    : s.settings.localModelDownload.missing(
+                            formatBytes(spec.sizeBytes)
+                        )
+            );
+            if (present) {
+                dlSetting.addButton((b) =>
+                    b
+                        .setButtonText(s.settings.localModelDownload.delete)
+                        .setWarning()
+                        .onClick(async () => {
+                            await this.plugin.deleteLocalModel(spec);
+                            void paint();
+                        })
+                );
+            } else {
+                dlSetting.addButton((b) =>
+                    b
+                        .setButtonText(s.settings.localModelDownload.download)
+                        .setCta()
+                        .onClick(() => void this.startModelDownload(spec, setDesc, paint))
+                );
+            }
+        };
+        void paint();
+
+        new Setting(containerEl)
+            .setName(s.settings.localFallback.name)
+            .setDesc(s.settings.localFallback.desc)
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.localFallbackToRemote)
+                    .onChange(async (value) => {
+                        this.plugin.settings.localFallbackToRemote = value;
+                        await this.plugin.saveSettings();
+                    })
+            );
+    }
+
+    /**
+     * Streams the selected local model to disk, updating the download row's
+     * percentage in place (throttled to whole-percent steps) and repainting to
+     * the final state when done. Guards against re-entry while a download runs.
+     */
+    private async startModelDownload(
+        spec: ReturnType<typeof localModelSpec>,
+        setDesc: (pct: number) => void,
+        paint: () => Promise<void>
+    ): Promise<void> {
+        if (this.downloadingModel) return;
+        this.downloadingModel = true;
+        this.downloadProgress = 0;
+        await paint();
+        try {
+            await this.plugin.ensureLocalModel(spec, (received, total) => {
+                const pct = total > 0 ? Math.floor((received / total) * 100) : 0;
+                if (pct !== this.downloadProgress) {
+                    this.downloadProgress = pct;
+                    setDesc(pct);
+                }
+            });
+            new Notice(t().settings.localModelDownload.done);
+        } catch (e) {
+            new Notice(
+                t().settings.localModelDownload.failed(
+                    e instanceof Error ? e.message : String(e)
+                )
+            );
+        } finally {
+            this.downloadingModel = false;
+            await paint();
+        }
+    }
+
+    /** Transcription rows shared by both engines (speaker separation, language, automation). */
+    private renderSharedTranscription(containerEl: HTMLElement): void {
+        const s = t();
+        const diarizationDesc =
+            this.plugin.settings.transcriptionBackend === "local"
+                ? s.settings.diarization.descLocal
+                : s.settings.diarization.desc;
+        new Setting(containerEl)
+            .setName(s.settings.diarization.name)
+            .setDesc(diarizationDesc)
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.diarizationEnabled)
+                    .onChange(async (value) => {
+                        this.plugin.settings.diarizationEnabled = value;
+                        await this.plugin.saveSettings();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName(s.settings.sttLanguage.name)
+            .setDesc(s.settings.sttLanguage.desc)
+            .addText((text) =>
+                text
+                    .setPlaceholder("Auto-detect")
+                    .setValue(this.plugin.settings.sttLanguage)
+                    .onChange(async (value) => {
+                        this.plugin.settings.sttLanguage =
+                            value.trim() || "auto";
+                        await this.plugin.saveSettings();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName(s.settings.autoTranscribe.name)
+            .setDesc(s.settings.autoTranscribe.desc)
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.autoTranscribe)
+                    .onChange(async (value) => {
+                        this.plugin.settings.autoTranscribe = value;
+                        await this.plugin.saveSettings();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName(s.settings.insertTranscript.name)
+            .setDesc(s.settings.insertTranscript.desc)
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.insertTranscript)
+                    .onChange(async (value) => {
+                        this.plugin.settings.insertTranscript = value;
+                        await this.plugin.saveSettings();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName(s.settings.debugLogging.name)
+            .setDesc(s.settings.debugLogging.desc)
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.debugLogging)
+                    .onChange(async (value) => {
+                        this.plugin.settings.debugLogging = value;
+                        await this.plugin.saveSettings();
+                    })
+            );
     }
 
     /** Recording & notes settings, rendered right after meeting detection. */

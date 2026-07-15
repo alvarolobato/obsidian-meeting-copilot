@@ -15,8 +15,14 @@ import {
     listInputDevices,
     type InputDevice,
 } from "./recorder";
-import { BinaryProvisioner } from "./binary";
-import { nodeDeps, resolveBinaryPath } from "./binary-runtime";
+import { AssetProvisioner, BinaryProvisioner } from "./binary";
+import {
+    assetNodeDeps,
+    nodeDeps,
+    resolveBinaryPath,
+    resolveModelPath,
+} from "./binary-runtime";
+import type { LocalModelSpec } from "./transcribe/localModels";
 import * as path from "path";
 import * as fs from "fs";
 import { GoogleOAuth, type StoredTokens } from "./auth/googleOAuth";
@@ -139,6 +145,7 @@ export default class SystemRecordingPlugin extends Plugin {
     settings: SystemRecordingSettings;
     private recorder = new Recorder();
     private provisioner = new BinaryProvisioner(nodeDeps());
+    private modelProvisioner = new AssetProvisioner(assetNodeDeps());
     private starting = false;
     /** Dedupe identical capture warnings so a flapping device can't spam. */
     private lastWarningMessage: string | null = null;
@@ -1800,12 +1807,70 @@ export default class SystemRecordingPlugin extends Plugin {
      * and the current endpoint + model has been probed and confirmed to return
      * timestamps. Gates both the split at record time and the diarized pass at
      * transcribe time.
+     *
+     * The local Whisper engine (issue #34) always emits segment timestamps, so
+     * it bypasses the remote timestamp probe entirely — diarization then hinges
+     * only on the user's toggle, not on an endpoint capability that doesn't
+     * apply on-device.
      */
     private shouldSeparateSpeakers(): boolean {
+        if (this.settings.transcriptionBackend === "local") {
+            return this.settings.diarizationEnabled;
+        }
         return canSeparateSpeakers(
             this.settings,
             probeKey(this.settings.apiBaseUrl, this.settings.sttModel)
         );
+    }
+
+    /** Absolute path where the given local model file lives (or would live). */
+    localModelPath(spec: LocalModelSpec): string {
+        return resolveModelPath(this, spec.fileName);
+    }
+
+    /**
+     * True when the model file is present on disk at its expected size. A
+     * partial/interrupted download (wrong size) reads as absent so the UI
+     * offers to re-download rather than treating it as ready.
+     */
+    async localModelPresent(spec: LocalModelSpec): Promise<boolean> {
+        try {
+            const st = await fs.promises.stat(this.localModelPath(spec));
+            return st.size === spec.sizeBytes;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Ensures the model is downloaded and SHA-256-verified, streaming it to disk
+     * on first use and reusing it thereafter. `onProgress` reports received /
+     * total bytes for a download; it isn't called when the model is already
+     * present.
+     */
+    ensureLocalModel(
+        spec: LocalModelSpec,
+        onProgress?: (received: number, total: number) => void
+    ): Promise<string> {
+        return this.modelProvisioner.ensure(
+            this.localModelPath(spec),
+            spec.url,
+            spec.sha256,
+            spec.sizeBytes,
+            {
+                onDownloadStart: () => new Notice(t().notices.downloadingModel),
+                onProgress,
+            }
+        );
+    }
+
+    /** Deletes the model file if present (best-effort; a missing file is a no-op). */
+    async deleteLocalModel(spec: LocalModelSpec): Promise<void> {
+        try {
+            await fs.promises.unlink(this.localModelPath(spec));
+        } catch {
+            // already gone / never downloaded — nothing to do
+        }
     }
 
     /**

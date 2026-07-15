@@ -100,3 +100,118 @@ export class BinaryProvisioner {
 		return binaryPath;
 	}
 }
+
+/**
+ * Injected I/O for {@link AssetProvisioner}. Kept separate from
+ * {@link ProvisionerDeps} because large model files are handled by **streaming**
+ * (download straight to disk, hash from disk) rather than buffering hundreds of
+ * MB in memory the way the small recorder binary can afford to.
+ */
+export interface AssetProvisionerDeps {
+	fileExists: (path: string) => Promise<boolean>;
+	/** Byte size of an existing file; the cheap "already downloaded?" probe. */
+	fileSize: (path: string) => Promise<number>;
+	/** SHA-256 (hex) of a file, streamed from disk so a 500 MB model isn't buffered. */
+	sha256File: (path: string) => Promise<string>;
+	/** Stream a URL to a destination path, reporting received/total bytes. */
+	downloadToFile: (
+		url: string,
+		destPath: string,
+		onProgress?: (received: number, total: number) => void
+	) => Promise<void>;
+	rename: (from: string, to: string) => Promise<void>;
+	unlink: (path: string) => Promise<void>;
+}
+
+/** Progress + lifecycle callbacks for a single {@link AssetProvisioner.ensure}. */
+export interface EnsureAssetOptions {
+	onDownloadStart?: () => void;
+	onProgress?: (received: number, total: number) => void;
+}
+
+/**
+ * Ensures a large, immutable asset (a local Whisper model — issue #34) exists at
+ * a path, streaming it from `url` when missing or the wrong size and verifying
+ * it against a pinned SHA-256 before it's swapped into place.
+ *
+ * Split from {@link BinaryProvisioner} on purpose: models are big and downloaded
+ * to disk (never buffered), the fast "present?" path is a size check (not a full
+ * re-hash on every run — the quick-roundtrip priority of #34), and they carry no
+ * Apple-Silicon gate at download time. The full SHA-256 is verified only on a
+ * fresh download, off the streamed temp file, before the atomic rename.
+ *
+ * `ensure()` dedupes overlapping downloads of the *same* destination path into
+ * one in-flight promise (keyed on the path), so a settings-tab click and an
+ * about-to-transcribe call can't race two writers onto one file.
+ */
+export class AssetProvisioner {
+	private readonly inflight = new Map<string, Promise<string>>();
+
+	constructor(private readonly deps: AssetProvisionerDeps) {}
+
+	ensure(
+		destPath: string,
+		url: string,
+		sha256: string,
+		expectedSize: number,
+		options?: EnsureAssetOptions
+	): Promise<string> {
+		const existing = this.inflight.get(destPath);
+		if (existing) return existing;
+		const p = this.provision(destPath, url, sha256, expectedSize, options).finally(
+			() => {
+				this.inflight.delete(destPath);
+			}
+		);
+		this.inflight.set(destPath, p);
+		return p;
+	}
+
+	private async provision(
+		destPath: string,
+		url: string,
+		sha256: string,
+		expectedSize: number,
+		options?: EnsureAssetOptions
+	): Promise<string> {
+		// Fast path: a present file of the exact expected size is trusted without
+		// re-hashing (models are immutable and hashing 500 MB on every
+		// transcription would tax the quick-roundtrip goal). A wrong size means a
+		// truncated/partial download, so fall through and re-fetch.
+		if (await this.deps.fileExists(destPath)) {
+			if ((await this.deps.fileSize(destPath)) === expectedSize) {
+				return destPath;
+			}
+		}
+
+		options?.onDownloadStart?.();
+
+		const tmp = `${destPath}.tmp`;
+		try {
+			await this.deps.downloadToFile(url, tmp, options?.onProgress);
+		} catch (e) {
+			await this.safeUnlink(tmp);
+			const reason = e instanceof Error ? e.message : String(e);
+			throw new Error(`Failed to download the model: ${reason}`);
+		}
+
+		try {
+			if ((await this.deps.sha256File(tmp)) !== sha256) {
+				throw new Error("Model failed verification.");
+			}
+			await this.deps.rename(tmp, destPath);
+		} catch (e) {
+			await this.safeUnlink(tmp);
+			throw e;
+		}
+		return destPath;
+	}
+
+	private async safeUnlink(path: string): Promise<void> {
+		try {
+			await this.deps.unlink(path);
+		} catch {
+			// best-effort cleanup; ignore unlink failure
+		}
+	}
+}
