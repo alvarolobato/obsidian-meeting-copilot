@@ -44,7 +44,7 @@ export const en = {
 		macOnly: "System recording is only supported on macOS",
 		downloadingHelper: "Downloading recorder helper…",
 		downloadingModel: "Downloading local Whisper model…",
-		downloadingRuntime: "Downloading local transcription runtime…",
+		downloadingRuntime: "Downloading recorder components…",
 		localFallback:
 			"Local transcription failed — falling back to the remote service.",
 		micUnavailable: (device: string) =>

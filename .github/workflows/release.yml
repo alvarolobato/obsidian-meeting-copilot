@@ -98,11 +98,21 @@ jobs:
       - name: Stage whisper dylib + verify pinned checksum
         run: |
           cp swift-helper/.build/release/whisper.framework/Versions/A/whisper whisper
-          BUILT=$(shasum -a 256 whisper | cut -d' ' -f1)
-          PINNED=$(node -e 'const fs=require("fs");const m=fs.readFileSync("src/binary.ts","utf8").match(/EXPECTED_WHISPER_SHA256\s*=\s*"([0-9a-f]+)"/);process.stdout.write(m?m[1]:"")')
-          echo "whisper dylib SHA-256: ${BUILT} (pinned ${PINNED})"
-          if [ "${BUILT}" != "${PINNED}" ]; then
-            echo "::error::Shipped whisper dylib SHA (${BUILT}) != EXPECTED_WHISPER_SHA256 (${PINNED}). Update the pinned hash/size in src/binary.ts to the new XCFramework."
+          BUILT_SHA=$(shasum -a 256 whisper | cut -d' ' -f1)
+          BUILT_SIZE=$(wc -c < whisper | tr -d ' ')
+          PINNED_SHA=$(node -e 'const fs=require("fs");const m=fs.readFileSync("src/binary.ts","utf8").match(/EXPECTED_WHISPER_SHA256\s*=\s*"([0-9a-f]+)"/);process.stdout.write(m?m[1]:"")')
+          PINNED_SIZE=$(node -e 'const fs=require("fs");const m=fs.readFileSync("src/binary.ts","utf8").match(/WHISPER_DYLIB_SIZE\s*=\s*(\d+)/);process.stdout.write(m?m[1]:"")')
+          echo "whisper dylib: sha=${BUILT_SHA} size=${BUILT_SIZE} (pinned sha=${PINNED_SHA} size=${PINNED_SIZE})"
+          # Guard a regex miss (constant renamed/reformatted) so we don't compare
+          # against an empty string and ship an unverified dylib.
+          if [ -z "${PINNED_SHA}" ] || [ -z "${PINNED_SIZE}" ]; then
+            echo "::error::Could not parse EXPECTED_WHISPER_SHA256 / WHISPER_DYLIB_SIZE from src/binary.ts"
+            exit 1
+          fi
+          # Both must match: an XCFramework bump that refreshed only one constant
+          # would otherwise pass here but break AssetProvisioner for end users.
+          if [ "${BUILT_SHA}" != "${PINNED_SHA}" ] || [ "${BUILT_SIZE}" != "${PINNED_SIZE}" ]; then
+            echo "::error::Shipped whisper dylib (sha=${BUILT_SHA}, size=${BUILT_SIZE}) != pinned (sha=${PINNED_SHA}, size=${PINNED_SIZE}). Refresh EXPECTED_WHISPER_SHA256 + WHISPER_DYLIB_SIZE in src/binary.ts for the new XCFramework."
             exit 1
           fi
 

@@ -150,6 +150,11 @@ export interface AssetProvisionerDeps {
 export interface EnsureAssetOptions {
 	onDownloadStart?: () => void;
 	onProgress?: (received: number, total: number) => void;
+	/**
+	 * Noun for this asset in error messages ("model", "recorder component", …),
+	 * so a failure is attributed to the right thing. Defaults to "model".
+	 */
+	label?: string;
 }
 
 /**
@@ -201,6 +206,7 @@ export class AssetProvisioner {
 		expectedSize: number,
 		options?: EnsureAssetOptions
 	): Promise<string> {
+		const label = options?.label ?? "model";
 		// Fast path: a present file of the exact expected size is trusted without
 		// re-hashing (models are immutable and hashing 500 MB on every
 		// transcription would tax the quick-roundtrip goal). A wrong size means a
@@ -225,7 +231,7 @@ export class AssetProvisioner {
 		} catch (e) {
 			await this.safeUnlink(tmp);
 			const reason = e instanceof Error ? e.message : String(e);
-			throw new Error(`Failed to download the model: ${reason}`);
+			throw new Error(`Failed to download the ${label}: ${reason}`);
 		}
 
 		try {
@@ -233,10 +239,10 @@ export class AssetProvisioner {
 			// Catch that by size first — it's a clearer error than a hash
 			// mismatch and skips hashing a file already known to be wrong.
 			if ((await this.deps.fileSize(tmp)) !== expectedSize) {
-				throw new Error("Model download was incomplete; please try again.");
+				throw new Error(`The ${label} download was incomplete; please try again.`);
 			}
 			if ((await this.deps.sha256File(tmp)) !== sha256) {
-				throw new Error("Model failed verification.");
+				throw new Error(`The ${label} failed verification.`);
 			}
 			await this.deps.rename(tmp, destPath);
 		} catch (e) {

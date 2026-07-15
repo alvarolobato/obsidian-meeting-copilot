@@ -220,6 +220,31 @@ describe("WhisperCppBackend", () => {
 		await expect(p).rejects.toThrow(/code 74.*dyld: library not loaded/s);
 	});
 
+	it("rejects when a job is missing a result on the done path", async () => {
+		const h = makeHarness();
+		const p = h.backend.transcribe({ jobs: [job("me"), job("them")] });
+		await flush();
+		// Only "me" comes back; "them" is missing but the helper still said done.
+		h.proc().stdout.write('{"type":"result","id":"me","text":"x"}\n{"type":"done"}\n');
+		await flush();
+		h.proc().emit("close", 0, null);
+		await expect(p).rejects.toThrow(/no result for job "them"/);
+	});
+
+	it("ignores a stray result flushed after done", async () => {
+		const h = makeHarness();
+		const p = h.backend.transcribe({ jobs: [job("single")] });
+		await flush();
+		h.proc().stdout.write('{"type":"result","id":"single","text":"real"}\n');
+		h.proc().stdout.write('{"type":"done"}\n');
+		// A late duplicate (no trailing newline) flushed on close must not win.
+		h.proc().stdout.write('{"type":"result","id":"single","text":"late"}');
+		await flush();
+		h.proc().emit("close", 0, null);
+		const [result] = await p;
+		expect(result!.text).toBe("real");
+	});
+
 	it("rejects when the helper ends without a done event", async () => {
 		const h = makeHarness();
 		const p = h.backend.transcribe({ jobs: [job("single")] });

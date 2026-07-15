@@ -18,6 +18,19 @@
  * (`continueAfterJob`) is therefore a no-op here: local Whisper always emits
  * segment timestamps, so a diarized pass can never be a capability miss, and
  * the orchestrator's post-loop check covers the impossible case regardless.
+ *
+ * A job's `speechWindows` (the remote pre-gate that trims silence off the
+ * upload, issue #67) are intentionally NOT forwarded: there's no network upload
+ * to shrink on-device, and the diarized merge already drops out-of-window and
+ * hallucinated segments after the fact, so correctness holds. Whole-file local
+ * passes just spend some compute on silence; trimming the decode to windows is
+ * a future optimization, not a correctness requirement.
+ *
+ * No internal serial queue (the remote backend needs one only to guard a
+ * process-global endpoint seam, which this backend doesn't have). Concurrent
+ * calls would each spawn their own helper — correct but Metal-contended — so
+ * callers run transcriptions one at a time through the TranscriptionQueue, as
+ * they already do.
  */
 import type { Readable } from "stream";
 import type { TFile } from "obsidian";
@@ -128,6 +141,11 @@ export class WhisperCppBackend implements TranscriptionBackend {
 		};
 		const manifestPath = await this.deps.writeManifest(JSON.stringify(manifest));
 		try {
+			// A cancel that landed during the manifest write must not still spawn
+			// the helper (the finally below removes the temp manifest).
+			if (req.signal?.aborted) {
+				throw new DOMException("Transcription aborted", "AbortError");
+			}
 			return await this.run(req, manifestPath);
 		} finally {
 			await this.deps.cleanup(manifestPath);
@@ -184,7 +202,12 @@ export class WhisperCppBackend implements TranscriptionBackend {
 					// noise (a stray warning); ignore rather than fail the run.
 					return;
 				}
-				switch (msg["type"]) {
+				const type = msg["type"];
+				// `done` is terminal: ignore any progress/result that arrives (or
+				// is flushed from the buffer) after it, so a stray trailing line
+				// can't mutate the set we're about to resolve.
+				if (sawDone && (type === "progress" || type === "result")) return;
+				switch (type) {
 					case "progress": {
 						if (!req.onProgress) break;
 						const idx = idToIndex.get(asString(msg["id"]));
@@ -281,12 +304,24 @@ export class WhisperCppBackend implements TranscriptionBackend {
 							).toFixed(1)}s`
 						);
 					}
-					// Preserve job order (the helper emits one result per job).
-					resolve(
-						req.jobs
-							.map((job) => results.get(job.id))
-							.filter((r): r is JobResult => r !== undefined)
-					);
+					// The helper emits one result per job; a missing one is a
+					// contract violation (a crash between jobs, a wrong id), not an
+					// empty transcript — reject so the orchestrator/fallback treats
+					// it as a failure rather than silently diarizing/merging a hole.
+					const ordered: JobResult[] = [];
+					for (const job of req.jobs) {
+						const r = results.get(job.id);
+						if (!r) {
+							reject(
+								new Error(
+									`Transcription helper returned no result for job "${job.id}".`
+								)
+							);
+							return;
+						}
+						ordered.push(r);
+					}
+					resolve(ordered);
 				});
 			});
 		});

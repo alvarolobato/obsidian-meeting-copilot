@@ -753,14 +753,13 @@ export default class SystemRecordingPlugin extends Plugin {
 
         this.starting = true;
         try {
-            // Ensure the recorder helper binary is present and verified
+            // Ensure the recorder helper runtime is present and verified: the
+            // binary AND the whisper.framework dylib it links at launch (dyld
+            // rejects the binary without it, so this guards recording too — not
+            // just transcription).
             let binaryPath: string;
             try {
-                binaryPath = await this.provisioner.ensure(
-                    resolveBinaryPath(this),
-                    this.manifest.version,
-                    () => new Notice(t().notices.downloadingHelper)
-                );
+                binaryPath = await this.ensureHelperRuntime();
             } catch (e) {
                 new Notice(e instanceof Error ? e.message : String(e));
                 return;
@@ -1957,32 +1956,55 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /**
-     * The on-device Whisper backend, provisioning everything it needs on first
-     * use: the recorder helper (which also hosts the `transcribe` subcommand),
-     * the `whisper.framework` dylib the helper links at launch, and the selected
-     * ggml model. Each ensure is a no-op once the asset is present and verified,
-     * so steady-state adds no download — only the first local transcription (or
-     * a model switch) pays for it, each behind its own progress notice.
+     * Ensures the recorder helper is present *and launchable*: the verified
+     * `system-recorder` binary plus the `whisper.framework` dylib it links
+     * unconditionally at process start (issue #34). The shipped helper links
+     * whisper for EVERY subcommand — `start` and `list-devices`, not just
+     * `transcribe` — so without the co-located dylib dyld refuses to launch it
+     * and recording/device enumeration break too, regardless of the chosen
+     * transcription backend. Treating the two as one runtime unit keeps every
+     * spawn path (record, enumerate, transcribe) self-consistent. Returns the
+     * binary path; each ensure is a no-op once the asset is present + verified.
      */
-    private async buildLocalBackend(): Promise<TranscriptionBackend> {
-        const version = this.manifest.version;
+    private async ensureHelperRuntime(): Promise<string> {
         const binaryPath = await this.provisioner.ensure(
             resolveBinaryPath(this),
-            version,
+            this.manifest.version,
             () => new Notice(t().notices.downloadingHelper)
         );
-        // The helper links whisper.cpp's *dynamic* framework: the dylib must sit
-        // at whisper.framework/Versions/Current/whisper next to the binary or
-        // dyld fails before `transcribe` runs. It's byte-identical across our
-        // releases (pinned XCFramework), so a fixed SHA/size + the provisioner's
-        // size fast-path make this a one-time fetch reused thereafter.
-        await this.modelProvisioner.ensure(
+        await this.ensureWhisperDylib();
+        return binaryPath;
+    }
+
+    /**
+     * Fetches the whisper.cpp dylib to `whisper.framework/Versions/Current/whisper`
+     * next to the helper (where its `@rpath/.../Versions/Current/whisper` load
+     * command resolves via SwiftPM's `@loader_path` rpath). It's byte-identical
+     * across our releases (pinned XCFramework), so the fixed SHA/size + the
+     * provisioner's size fast-path make this a one-time fetch reused thereafter.
+     */
+    private ensureWhisperDylib(): Promise<string> {
+        return this.modelProvisioner.ensure(
             resolveWhisperDylibPath(this),
-            whisperDylibUrl(version),
+            whisperDylibUrl(this.manifest.version),
             EXPECTED_WHISPER_SHA256,
             WHISPER_DYLIB_SIZE,
-            { onDownloadStart: () => new Notice(t().notices.downloadingRuntime) }
+            {
+                label: "recorder component",
+                onDownloadStart: () => new Notice(t().notices.downloadingRuntime),
+            }
         );
+    }
+
+    /**
+     * The on-device Whisper backend, provisioning everything it needs on first
+     * use: the recorder helper runtime (binary + linked framework) and the
+     * selected ggml model. Each ensure is a no-op once present, so steady-state
+     * adds no download — only the first local transcription (or a model switch)
+     * pays for it, behind its own progress notice.
+     */
+    private async buildLocalBackend(): Promise<TranscriptionBackend> {
+        const binaryPath = await this.ensureHelperRuntime();
         const spec = localModelSpec(this.settings.localWhisperModel);
         const modelPath = await this.ensureLocalModel(spec);
         return new WhisperCppBackend(
@@ -2268,6 +2290,9 @@ export default class SystemRecordingPlugin extends Plugin {
                     e
                 );
                 new Notice(t().notices.localFallback);
+                // Reset the bar so the remote pass ramps 0→100 instead of jumping
+                // backward from wherever the failed local attempt left it.
+                onProgress(0);
                 const remote = new OpenAICompatibleBackend(
                     this.app,
                     this.buildTranscribeConfig()
@@ -2545,16 +2570,16 @@ export default class SystemRecordingPlugin extends Plugin {
         if (!Platform.isMacOS) return [];
         const binaryPath = resolveBinaryPath(this);
         if (opts?.allowDownload === false) {
-            // Best-effort: only list if the binary is already on disk; never
-            // trigger a download just to populate the dropdown on open.
-            if (!fs.existsSync(binaryPath)) return [];
+            // Best-effort: only list if the helper is already launchable on disk
+            // (binary AND its linked dylib), never trigger a download just to
+            // populate the dropdown on open. Spawning the binary without the
+            // dylib would fail in dyld, so require both.
+            if (!fs.existsSync(binaryPath) || !fs.existsSync(resolveWhisperDylibPath(this))) {
+                return [];
+            }
         } else {
             try {
-                await this.provisioner.ensure(
-                    binaryPath,
-                    this.manifest.version,
-                    () => new Notice(t().notices.downloadingHelper)
-                );
+                await this.ensureHelperRuntime();
             } catch (e) {
                 new Notice(e instanceof Error ? e.message : String(e));
                 return [];
