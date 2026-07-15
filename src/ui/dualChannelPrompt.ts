@@ -1,129 +1,82 @@
 /**
- * Coordinates a native OS notification with an in-app Obsidian `Notice` so the
- * user sees **exactly one** prompt.
+ * Coordinates a meeting prompt across two channels so it's **never silently
+ * lost**:
  *
- * The caller decides the channel by window focus: when Obsidian is frontmost it
- * calls {@link DualChannelController.forceInApp} (the in-app notice is the
- * reliable, visible channel and a native banner would just duplicate it) and
- * skips the OS notification. When Obsidian isn't frontmost it posts the OS
- * notification and lets this machine coordinate the fallback:
+ *  - The in-app Obsidian `Notice` is **always** shown. It's the reliable
+ *    channel and it stays in Obsidian until dismissed, so even if the user is
+ *    away when it fires, the prompt is waiting when they come back.
+ *  - A native OS notification is shown **additionally, only when Obsidian isn't
+ *    frontmost** — an in-app notice can't be seen there. When Obsidian is
+ *    frontmost the native banner would just duplicate the in-app notice, so it's
+ *    skipped.
  *
- *  - The in-app notice is a *fallback*: it's shown only after `fallbackDelayMs`
- *    unless the OS notification is confirmed on screen first — in which case
- *    it's skipped (or hidden, if it had already slipped in) to avoid a duplicate.
- *  - It's skipped **only when we're sure** the OS one was shown (the caller
- *    wires {@link DualChannelController.osShown} to the native `show` / web
- *    `onshow` event). If the OS notification fails, it's shown right away.
+ * (This deliberately replaced an earlier design that posted the OS notification
+ * first and used its `show` event to suppress the in-app notice. That event is
+ * an unreliable "was it seen?" signal — macOS fires it even when it routes the
+ * notification silently to Notification Center under Focus/DND — which could
+ * leave the prompt invisible on every channel.)
  *
- * (Note the native `show` event is a best-effort signal — macOS can route a
- * notification silently to Notification Center yet still fire it — which is why
- * the caller prefers the focus check over relying on `show` alone.)
- *
- * Timers are injected so the state machine is unit-testable with fakes.
+ * `dispose()` tears the prompt down. It closes the OS notification by default
+ * (supersede / user action), but callers doing housekeeping sweeps can pass
+ * `{ keepOs: true }` to leave the OS notification in Notification Center so a
+ * missed prompt stays recoverable there.
  */
-
-export interface DualChannelTimers {
-	setTimeout: (handler: () => void, ms: number) => number;
-	clearTimeout: (id: number) => void;
-}
 
 /** Minimal handle to an in-app notice — Obsidian's `Notice` satisfies this. */
 export interface InAppHandle {
 	hide(): void;
 }
 
+/** Minimal handle to a native OS notification. */
+export interface OsHandle {
+	close(): void;
+}
+
 export interface DualChannelController {
-	/** Call once the OS notification is confirmed on screen (native `show` / web `onshow`). */
-	osShown(): void;
-	/** Call when the OS notification could not be shown at all. */
-	osFailed(): void;
 	/**
-	 * Show the in-app notice now, tracked so it's hidden on {@link dispose}. Used
-	 * when the user clicks the OS notification body (it can't carry every action)
-	 * so they always land on an actionable in-app prompt. Idempotent.
+	 * Tear down: hide the in-app notice and, unless `keepOs` is set, close the OS
+	 * notification too. Housekeeping sweeps pass `{ keepOs: true }` so the OS
+	 * notification survives in Notification Center.
 	 */
-	forceInApp(): void;
-	/** Tear everything down: cancel a pending fallback timer and hide the in-app notice if shown. */
-	dispose(): void;
+	dispose(opts?: { keepOs?: boolean }): void;
 }
 
 export interface DualChannelOptions {
-	/** How long to wait for the OS notification to confirm before showing the in-app fallback. */
-	fallbackDelayMs: number;
-	timers: DualChannelTimers;
+	/** Whether Obsidian's window is frontmost (so the in-app notice is visible). */
+	focused: boolean;
 	/** Creates and shows the in-app notice, returning a handle to hide it. */
 	showInApp: () => InAppHandle;
+	/** Posts the native OS notification (called only when unfocused), returning a handle to close it. */
+	showOs: () => OsHandle;
 }
 
 /**
- * Starts the coordination and returns a controller the caller feeds with the OS
- * notification's fate. See the module doc for the dedupe policy.
+ * Starts the coordination and returns a controller. See the module doc for the
+ * policy: in-app always, native OS additive when unfocused.
  */
 export function startDualChannelPrompt(
 	opts: DualChannelOptions
 ): DualChannelController {
-	let inApp: InAppHandle | null = null;
-	let timer: number | null = null;
-	// Once the OS notification's fate is known we stop reacting to the timer.
-	let settled = false;
-	// The user explicitly asked for the in-app prompt (clicked the OS body), so a
-	// later OS `show` confirmation must not silently hide it.
-	let forced = false;
+	// The in-app notice always goes up — it's reliable and waits in Obsidian.
+	let inApp: InAppHandle | null = opts.showInApp();
+	// The native OS notification is additive, only when Obsidian isn't frontmost.
+	let os: OsHandle | null = opts.focused ? null : opts.showOs();
 	let disposed = false;
 
-	const cancelTimer = (): void => {
-		if (timer !== null) {
-			opts.timers.clearTimeout(timer);
-			timer = null;
-		}
-	};
-
-	const showInAppOnce = (): void => {
-		if (inApp) return;
-		inApp = opts.showInApp();
-	};
-
-	const hideInApp = (): void => {
-		if (inApp) {
-			inApp.hide();
-			inApp = null;
-		}
-	};
-
-	timer = opts.timers.setTimeout(() => {
-		timer = null;
-		// The OS notification hasn't confirmed within the grace window; surface
-		// the in-app notice so the user isn't left without a prompt.
-		if (!settled) showInAppOnce();
-	}, opts.fallbackDelayMs);
-
 	return {
-		osShown(): void {
-			if (settled) return;
-			settled = true;
-			cancelTimer();
-			// If the fallback already slipped in (OS confirmed late), hide it so
-			// only the system notification remains — no duplicate. But never hide
-			// a notice the user explicitly asked for via `forceInApp`.
-			if (!forced) hideInApp();
-		},
-		osFailed(): void {
-			if (settled) return;
-			settled = true;
-			cancelTimer();
-			showInAppOnce();
-		},
-		forceInApp(): void {
-			// A late click on a superseded/handled prompt must not resurrect it.
+		dispose(o?: { keepOs?: boolean }): void {
 			if (disposed) return;
-			forced = true;
-			showInAppOnce();
-		},
-		dispose(): void {
 			disposed = true;
-			settled = true;
-			cancelTimer();
-			hideInApp();
+			if (inApp) {
+				inApp.hide();
+				inApp = null;
+			}
+			// keepOs: intentionally leave the OS notification in Notification
+			// Center so a missed prompt stays recoverable there.
+			if (!o?.keepOs && os) {
+				os.close();
+				os = null;
+			}
 		},
 	};
 }

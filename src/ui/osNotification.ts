@@ -14,9 +14,12 @@
  * the in-app prompt.
  *
  * Both paths report back through {@link NotifyOsOptions.onShown} /
- * {@link NotifyOsOptions.onFailed} so a caller can skip a redundant in-app
- * notice **only when it's sure** a system notification is actually on screen
- * (the native `show` event / web `onshow`), never on a fire-and-forget guess.
+ * {@link NotifyOsOptions.onFailed} (native `show` / web `onshow`, or an
+ * unrecoverable failure). These are best-effort signals — macOS can fire `show`
+ * even when it routes a notification silently to Notification Center — so a
+ * caller must not treat `onShown` as proof the user saw a banner. Each
+ * {@link notifyOs} call is independent: it never supersedes a previous
+ * notification, so coexisting prompts can't close one another.
  */
 
 import { notifLog } from "../util/notifLog";
@@ -42,8 +45,10 @@ export interface NotifyOsOptions {
 	/** Native action buttons (first = default; the rest live under the dropdown). */
 	actions?: OsNotificationAction[];
 	/**
-	 * Fired **at most once** when we are sure a system notification is on screen
-	 * (native `show`, or web `onshow`). Lets callers dedupe an in-app fallback.
+	 * Fired **at most once** when a system notification was delivered (native
+	 * `show`, or web `onshow`). Best-effort — delivery isn't proof it appeared as
+	 * a banner (macOS may route it to Notification Center) — so use it for
+	 * signals like a one-time hint, not to suppress the in-app notice.
 	 */
 	onShown?: () => void;
 	/** Fired **at most once** when no system notification could be shown at all. */
@@ -93,10 +98,6 @@ export function requestNotificationPermission(): void {
 		// Notifications unavailable (e.g. mobile); silently ignore.
 	}
 }
-
-/** The last notification we showed (native or web), so a newer one supersedes it instead of stacking. */
-let lastNative: RemoteNotificationInstance | null = null;
-let lastWeb: Notification | null = null;
 
 function focusObsidian(): void {
 	try {
@@ -174,14 +175,8 @@ function createWeb(opts: NotifyOsOptions, settle: Settler): Notification | null 
 			settle.failed();
 			return null;
 		}
-		try {
-			lastWeb?.close();
-		} catch {
-			// ignore
-		}
 		const body = opts.webHint ? `${opts.body} · ${opts.webHint}` : opts.body;
 		const notification = new N(opts.title, { body });
-		lastWeb = notification;
 		notifLog("createWeb: created web notification");
 		// `onshow` is the "sure it's on screen" signal for the web path.
 		notification.onshow = (): void => {
@@ -199,7 +194,6 @@ function createWeb(opts: NotifyOsOptions, settle: Settler): Notification | null 
 			} catch {
 				// ignore
 			}
-			if (lastWeb === notification) lastWeb = null;
 			opts.onClick?.();
 		};
 		return notification;
@@ -223,18 +217,12 @@ function createNative(
 	const Ctor = getRemoteNotificationCtor();
 	if (!Ctor) return null;
 	try {
-		try {
-			lastNative?.close();
-		} catch {
-			// ignore
-		}
 		const actions = opts.actions ?? [];
 		const notification = new Ctor({
 			title: opts.title,
 			body: opts.body,
 			actions: actions.map((a) => ({ type: "button", text: a.text })),
 		});
-		lastNative = notification;
 		notifLog("createNative: created", {
 			title: opts.title,
 			actions: actions.length,
@@ -247,7 +235,6 @@ function createNative(
 		});
 		notification.on("failed", (...args: unknown[]) => {
 			notifLog("createNative: 'failed' event", { args: args.map(String) });
-			if (lastNative === notification) lastNative = null;
 			// A `show` already won the race (a late/spurious `failed`): don't stack
 			// a second, web banner on top of the native one that's on screen.
 			if (settle.isSettled()) {
@@ -261,7 +248,6 @@ function createNative(
 		notification.on("click", () => {
 			notifLog("createNative: 'click' event");
 			focusObsidian();
-			if (lastNative === notification) lastNative = null;
 			opts.onClick?.();
 		});
 		notification.on("action", (...args: unknown[]) => {
@@ -269,12 +255,10 @@ function createNative(
 			focusObsidian();
 			// Electron passes (event, index); the index maps into `actions`.
 			const index = typeof args[1] === "number" ? args[1] : 0;
-			if (lastNative === notification) lastNative = null;
 			actions[index]?.run();
 		});
 		notification.on("close", () => {
 			notifLog("createNative: 'close' event");
-			if (lastNative === notification) lastNative = null;
 		});
 		notification.show();
 		notifLog("createNative: show() called");

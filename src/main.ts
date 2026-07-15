@@ -121,7 +121,6 @@ import {
 import {
 	startDualChannelPrompt,
 	DualChannelController,
-	DualChannelTimers,
 	InAppHandle,
 } from "./ui/dualChannelPrompt";
 import { MeetingPromptModal } from "./ui/meetingPromptModal";
@@ -930,7 +929,9 @@ export default class SystemRecordingPlugin extends Plugin {
 		if (this.authExpired) return;
 		this.authExpired = true;
 		this.scheduler?.stop();
-		this.dismissMeetingNotices(SystemRecordingPlugin.CAL_NOTICE_PREFIX);
+		this.dismissMeetingNotices(SystemRecordingPlugin.CAL_NOTICE_PREFIX, {
+			keepOs: true,
+		});
 		this.agendaEvents.emit("changed", undefined);
 		actionNotice(
 			t().notices.calendarReconnect,
@@ -974,10 +975,13 @@ export default class SystemRecordingPlugin extends Plugin {
 			if (!this.scheduler.isRunning) this.scheduler.start();
 		} else {
 			this.scheduler?.stop();
-			// No more boundary callbacks will fire, so sweep any calendar prompts
-			// still on screen rather than leaving them stale (detection prompts,
-			// driven separately, are left alone).
-			this.dismissMeetingNotices(SystemRecordingPlugin.CAL_NOTICE_PREFIX);
+			// No more boundary callbacks will fire, so sweep any calendar prompts'
+			// in-app notices rather than leaving them stale (detection prompts,
+			// driven separately, are left alone). Keep the OS notifications in
+			// Notification Center so a missed prompt stays recoverable there.
+			this.dismissMeetingNotices(SystemRecordingPlugin.CAL_NOTICE_PREFIX, {
+				keepOs: true,
+			});
 		}
 	}
 
@@ -1005,9 +1009,10 @@ export default class SystemRecordingPlugin extends Plugin {
 			!Platform.isMacOS
 		) {
 			this.detector = null;
-			// No probe will fire onEnd now, so sweep any detection prompts still
-			// on screen (mirrors the calendar sweep when the scheduler stops).
-			this.dismissMeetingNotices("detect:");
+			// No probe will fire onEnd now, so sweep any detection prompts'
+			// in-app notices (mirrors the calendar sweep when the scheduler stops),
+			// keeping their OS notifications in Notification Center.
+			this.dismissMeetingNotices("detect:", { keepOs: true });
 			return;
 		}
 		if (!this.detector) {
@@ -1089,8 +1094,9 @@ export default class SystemRecordingPlugin extends Plugin {
 	 */
 	private onMeetingEnded(app: string): void {
 		// The detected meeting is over, so a pending "record?" prompt for it is
-		// moot — drop it whether or not we go on to offer a stop below.
-		this.dismissMeetingNotice(`detect:${app}`);
+		// moot — drop its in-app notice whether or not we go on to offer a stop
+		// below, but keep the OS notification recoverable in Notification Center.
+		this.dismissMeetingNotice(`detect:${app}`, { keepOs: true });
 		// Ignore if detection was disabled meanwhile (an in-flight poll's onEnd
 		// must not prompt after the user opted out), and only act once *all*
 		// detected meetings have ended so one of several concurrent calls ending
@@ -1101,38 +1107,17 @@ export default class SystemRecordingPlugin extends Plugin {
 	}
 
 	/**
-	 * How long to wait for a native OS notification to confirm it's on screen
-	 * before showing the in-app fallback notice. Native `show` typically fires
-	 * within tens of ms, so this is imperceptible when the system path works and
-	 * short enough to feel instant when it doesn't.
-	 */
-	private static readonly OS_NOTICE_FALLBACK_MS = 500;
-
-	/** Timer seam for the dual-channel prompt (real `window` timers in production). */
-	private notifTimers(): DualChannelTimers {
-		return {
-			setTimeout: (handler, ms) => window.setTimeout(handler, ms),
-			clearTimeout: (id) => window.clearTimeout(id),
-		};
-	}
-
-	/**
-	 * Posts a meeting prompt, picking the channel by window focus so the user
-	 * sees exactly one, wherever their attention is:
+	 * Posts a meeting prompt across two channels so it's never silently lost:
 	 *
-	 *  - **Obsidian frontmost** → an in-app notice. The user is already looking
-	 *    at Obsidian, so it's the reliable channel, and a native banner would
-	 *    just duplicate it. This also sidesteps the native `show` event, which is
-	 *    an unreliable "was it seen?" signal — macOS fires it even when it routes
-	 *    the notification silently to Notification Center (Focus/DND/mirroring),
-	 *    which used to leave the prompt invisible on screen.
-	 *  - **Obsidian not frontmost** (minimized / another app / another Space) →
-	 *    a native OS notification, since an in-app notice can't be seen there;
-	 *    the in-app notice stays a fallback for when the OS one can't show at all.
+	 *  - The in-app notice is **always** shown — it's reliable and it waits in
+	 *    Obsidian, so the prompt is there when the user comes back.
+	 *  - A native OS notification is added **only when Obsidian isn't frontmost**
+	 *    (an in-app notice can't be seen there); when frontmost it would just
+	 *    duplicate the in-app notice, so it's skipped.
 	 *
-	 * The returned controller's `dispose()` also closes the OS notification, so a
-	 * superseded / handled prompt can't leave a stale action button lingering in
-	 * Notification Center.
+	 * The returned controller's `dispose()` closes the OS notification by default
+	 * (supersede / user action); housekeeping sweeps pass `{ keepOs: true }` to
+	 * leave it in Notification Center so a missed prompt stays recoverable.
 	 */
 	private startOsPrompt(opts: {
 		title: string;
@@ -1142,7 +1127,7 @@ export default class SystemRecordingPlugin extends Plugin {
 		onClick: () => void;
 		/** Native action buttons (first = default). */
 		actions: OsNotificationAction[];
-		/** Builds the in-app fallback notice. */
+		/** Builds the (always-shown) in-app notice. */
 		showInApp: () => InAppHandle;
 	}): DualChannelController {
 		const focused = this.isWindowFocused();
@@ -1151,81 +1136,95 @@ export default class SystemRecordingPlugin extends Plugin {
 			focused,
 			actions: opts.actions.length,
 		});
-		const showInApp = (): InAppHandle => {
-			notifLog("startOsPrompt: showInApp -> creating in-app notice", {
-				title: opts.title,
-			});
-			try {
+		return startDualChannelPrompt({
+			focused,
+			showInApp: () => {
+				notifLog("startOsPrompt: showInApp -> creating in-app notice", {
+					title: opts.title,
+				});
 				return opts.showInApp();
-			} catch (err) {
-				notifLog("startOsPrompt: showInApp threw", { err: String(err) });
-				throw err;
-			}
-		};
-		const inner = startDualChannelPrompt({
-			fallbackDelayMs: SystemRecordingPlugin.OS_NOTICE_FALLBACK_MS,
-			timers: this.notifTimers(),
-			showInApp,
-		});
-		// Obsidian is in front — show the in-app notice directly and don't post a
-		// (duplicate) native banner.
-		if (focused) {
-			notifLog("startOsPrompt: focused -> forcing in-app (no OS notification)");
-			inner.forceInApp();
-			return {
-				osShown: () => inner.osShown(),
-				osFailed: () => inner.osFailed(),
-				forceInApp: () => inner.forceInApp(),
-				dispose: () => {
-					notifLog("startOsPrompt: dispose (focused path)", {
-						title: opts.title,
-					});
-					inner.dispose();
-				},
-			};
-		}
-		notifLog("startOsPrompt: not focused -> posting OS notification");
-		const handle = notifyOs({
-			title: opts.title,
-			body: opts.body,
-			webHint: opts.webHint,
-			onClick: opts.onClick,
-			actions: opts.actions,
-			onShown: () => {
-				notifLog("startOsPrompt: onShown (OS delivered)", {
+			},
+			showOs: () => {
+				notifLog("startOsPrompt: unfocused -> posting OS notification", {
 					title: opts.title,
 				});
-				inner.osShown();
-				// A system notification actually reached the screen — a good moment
-				// to teach (once) how to make them show/persist reliably.
-				this.maybeShowNotificationStyleHint();
-			},
-			onFailed: () => {
-				notifLog("startOsPrompt: onFailed (OS could not show)", {
+				return notifyOs({
 					title: opts.title,
+					body: opts.body,
+					webHint: opts.webHint,
+					onClick: opts.onClick,
+					actions: opts.actions,
+					onShown: () => {
+						notifLog("startOsPrompt: onShown (OS delivered)", {
+							title: opts.title,
+						});
+						// A system notification reached the screen — a good moment
+						// to teach (once) how to make them show/persist reliably.
+						this.maybeShowNotificationStyleHint();
+					},
+					onFailed: () =>
+						notifLog("startOsPrompt: onFailed (OS could not show)", {
+							title: opts.title,
+						}),
 				});
-				inner.osFailed();
 			},
 		});
-		return {
-			osShown: () => inner.osShown(),
-			osFailed: () => inner.osFailed(),
-			forceInApp: () => inner.forceInApp(),
-			dispose: () => {
-				notifLog("startOsPrompt: dispose (OS path)", { title: opts.title });
-				inner.dispose();
-				handle.close();
-			},
-		};
 	}
 
-	/** True when Obsidian's window is frontmost (so an in-app notice is visible). */
+	/**
+	 * True when Obsidian's window is actually frontmost and visible — so an
+	 * in-app notice would be seen. Prefers Electron's `BrowserWindow` state
+	 * (reliable), falling back to the document's focus/visibility when `remote`
+	 * isn't reachable. Logs the raw signals so a focus-detection regression is
+	 * visible in traces.
+	 */
 	private isWindowFocused(): boolean {
+		const doc = typeof document !== "undefined" ? document : null;
+		const hasFocus = !!doc && doc.hasFocus();
+		const visibilityState = doc ? doc.visibilityState : "n/a";
+		let isFocused: boolean | null = null;
+		let isMinimized: boolean | null = null;
+		let isVisible: boolean | null = null;
+		let result: boolean;
 		try {
-			return typeof document !== "undefined" && document.hasFocus();
-		} catch {
-			return false;
+			const req = (window as unknown as { require?: (id: string) => unknown })
+				.require;
+			const electron =
+				typeof req === "function"
+					? (req("electron") as
+							| {
+									remote?: {
+										getCurrentWindow?: () => {
+											isFocused: () => boolean;
+											isMinimized: () => boolean;
+											isVisible: () => boolean;
+										};
+									};
+							  }
+							| undefined)
+					: undefined;
+			const win = electron?.remote?.getCurrentWindow?.();
+			if (win) {
+				isFocused = win.isFocused();
+				isMinimized = win.isMinimized();
+				isVisible = win.isVisible();
+				result = isFocused && !isMinimized && isVisible;
+			} else {
+				result = visibilityState === "visible" && hasFocus;
+			}
+		} catch (err) {
+			notifLog("isWindowFocused: remote threw", { err: String(err) });
+			result = visibilityState === "visible" && hasFocus;
 		}
+		notifLog("isWindowFocused", {
+			hasFocus,
+			visibilityState,
+			isFocused,
+			isMinimized,
+			isVisible,
+			result,
+		});
+		return result;
 	}
 
 	/**
@@ -1269,33 +1268,32 @@ export default class SystemRecordingPlugin extends Plugin {
 
 	/**
 	 * Offers to stop the current recording (a recording never stops on its own)
-	 * on both channels: a native OS notification with a "Stop recording" action
-	 * plus an in-app notice fallback. Supersedes any prior stop prompt so
-	 * end-of-meeting triggers that overlap (detected-meeting end + calendar event
-	 * end) don't stack two prompts.
+	 * on both channels: an always-shown in-app notice, plus — when Obsidian isn't
+	 * frontmost — a native OS notification with a "Stop recording" action.
+	 * Supersedes any prior stop prompt so end-of-meeting triggers that overlap
+	 * (detected-meeting end + calendar event end) don't stack two prompts.
 	 */
 	private promptStopRecording(title: string, body: string): void {
 		notifLog("promptStopRecording", { title, body });
 		this.stopPromptNotice?.dispose();
 		const stop = (): void => {
-			// Tear down our own prompt first (cancels the fallback timer and
-			// closes the OS notification) so nothing stale survives the stop.
+			// Tear down our own prompt first (hides the in-app notice and closes
+			// the OS notification) so nothing stale survives the stop.
 			this.stopPromptNotice?.dispose();
 			this.stopPromptNotice = null;
 			this.stopRecording();
 		};
-		const controller = this.startOsPrompt({
+		this.stopPromptNotice = this.startOsPrompt({
 			title,
 			body,
 			webHint: t().event.notificationWebHint,
-			// The body click can't be the destructive stop — surface an
-			// actionable in-app prompt (tracked, so dispose still hides it).
-			onClick: () => controller.forceInApp(),
+			// The body click can't be the destructive stop; `notifyOs` already
+			// brings Obsidian forward, surfacing the always-shown in-app prompt.
+			onClick: () => {},
 			actions: [{ text: t().event.stopRecordingAction, run: stop }],
 			showInApp: () =>
 				actionNotice(`${title} — ${body}`, t().event.stopRecordingAction, stop),
 		});
-		this.stopPromptNotice = controller;
 	}
 
 	/**
@@ -1304,11 +1302,12 @@ export default class SystemRecordingPlugin extends Plugin {
 	 * other Space/monitor, Obsidian behind other windows — would otherwise miss
 	 * it):
 	 *
-	 *  - a **native OS notification** (title = meeting name, body = timing) whose
-	 *    action buttons render as real macOS buttons (default first, rest under
-	 *    the dropdown) and whose body click opens the rich prompt modal, and
-	 *  - an in-app **multi-action Notice** *fallback*, shown only when the OS
-	 *    notification isn't confirmed on screen — so the two don't duplicate.
+	 *  - an in-app **multi-action Notice** — always shown, so the prompt is
+	 *    waiting in Obsidian even if the user is away when it fires, and
+	 *  - a **native OS notification** (title = meeting name, body = timing) added
+	 *    only when Obsidian isn't frontmost — its action buttons render as real
+	 *    macOS buttons (default first, rest under the dropdown) and its body click
+	 *    opens the rich prompt modal.
 	 *
 	 * `onRecord` is the record action; a valid https `meetLink` adds the Join
 	 * affordances, and an `onOpenNote` adds an "Open note" action (Granola-style).
@@ -1443,17 +1442,31 @@ export default class SystemRecordingPlugin extends Plugin {
 	 * decision has been made for the meeting (auto-start fired, we're already
 	 * recording it, or it just ended) so a now-stale prompt doesn't linger or
 	 * stack under a new one.
+	 *
+	 * Housekeeping callers (a meeting that just ended, not a user action) pass
+	 * `{ keepOs: true }` so the OS notification stays in Notification Center and a
+	 * missed prompt remains recoverable there.
 	 */
-	private dismissMeetingNotice(key: string): void {
-		this.meetingNotices.get(key)?.dispose();
+	private dismissMeetingNotice(
+		key: string,
+		opts?: { keepOs?: boolean }
+	): void {
+		this.meetingNotices.get(key)?.dispose(opts);
 		this.meetingNotices.delete(key);
 	}
 
-	/** Dismisses every live prompt whose key starts with `prefix`. */
-	private dismissMeetingNotices(prefix: string): void {
+	/**
+	 * Dismisses every live prompt whose key starts with `prefix`. Housekeeping
+	 * sweeps (scheduler/detector turned off, auth expired) pass `{ keepOs: true }`
+	 * so the OS notifications survive in Notification Center.
+	 */
+	private dismissMeetingNotices(
+		prefix: string,
+		opts?: { keepOs?: boolean }
+	): void {
 		for (const [key, controller] of this.meetingNotices) {
 			if (!key.startsWith(prefix)) continue;
-			controller.dispose();
+			controller.dispose(opts);
 			this.meetingNotices.delete(key);
 		}
 	}
@@ -1682,10 +1695,14 @@ export default class SystemRecordingPlugin extends Plugin {
 
 	private handleEventEnd(event: ScheduledEvent): void {
 		// The meeting is over: forget its auto-open state so a later recurrence
-		// (same id, re-added by a poll) can open its link afresh, and drop any
-		// lingering upcoming/start prompt for it (whether or not we recorded).
+		// (same id, re-added by a poll) can open its link afresh, and drop the
+		// lingering upcoming/start prompt's in-app notice (whether or not we
+		// recorded), keeping its OS notification recoverable in Notification
+		// Center.
 		this.openedLinkEventIds.delete(event.id);
-		this.dismissMeetingNotice(SystemRecordingPlugin.CAL_NOTICE_PREFIX + event.id);
+		this.dismissMeetingNotice(SystemRecordingPlugin.CAL_NOTICE_PREFIX + event.id, {
+			keepOs: true,
+		});
 
 		// Only act when *this* meeting's recording is the active one, so
 		// overlapping meetings can't stop the wrong recording (or prompt when
