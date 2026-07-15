@@ -43,6 +43,7 @@ import {
     scanMeetingNotes,
     stripTranscript,
     templateStaticRoot,
+    TRANSCRIPT_SEGMENT_SEPARATOR,
     transcriptAtBottom,
     upsertSection,
 } from "./notes/meetingNote";
@@ -134,6 +135,19 @@ import { execFile } from "child_process";
  *   - "mixed":    always transcribe the single joint track
  */
 type TranscribeMode = "auto" | "diarized" | "mixed";
+
+/**
+ * The outcome of transcribing one recording (take) to text, before any note
+ * write. "text" carries the ready-to-insert transcript; the rest are the
+ * no-transcript outcomes each caller handles differently (a fresh single take
+ * may discard an "empty" as silence; a multi-take rebuild just skips it). User
+ * cancellation is not modelled here — it throws so the queue rejects.
+ */
+type TranscribeTakeResult =
+    | { kind: "text"; text: string }
+    | { kind: "empty" }
+    | { kind: "partial" }
+    | { kind: "error"; message: string };
 
 export default class SystemRecordingPlugin extends Plugin {
     settings: SystemRecordingSettings;
@@ -1878,17 +1892,12 @@ export default class SystemRecordingPlugin extends Plugin {
         }
         // A manual re-transcribe REPLACES the transcript. With several takes,
         // transcribing only the latest and replacing would drop the earlier
-        // ones' text, so rebuild the whole transcript from every take in order
-        // (first replaces, the rest append). Enrichment runs once, after the
-        // last take. A single take falls through to the simple replace path.
+        // ones' text, so rebuild the whole transcript from every take in one
+        // atomic write (see rebuildTranscriptFromTakes). A single take falls
+        // through to the plain replace path.
         const takes = m.note ? this.resolveRecordingTakes(m.note) : [];
-        if (takes.length > 1) {
-            for (const [i, take] of takes.entries()) {
-                await this.launchTranscriber(take, mode, {
-                    append: i > 0,
-                    skipEnrich: i < takes.length - 1,
-                });
-            }
+        if (m.note && takes.length > 1) {
+            await this.rebuildTranscriptFromTakes(m.note, takes, mode);
             return;
         }
         await this.launchTranscriber(m.recording, mode);
@@ -2075,15 +2084,14 @@ export default class SystemRecordingPlugin extends Plugin {
     private async launchTranscriber(
         recording: TFile,
         mode: TranscribeMode = "auto",
-        opts?: { fresh?: boolean; append?: boolean; skipEnrich?: boolean }
+        opts?: { fresh?: boolean }
     ): Promise<void> {
         // "fresh" = the auto-transcribe fired right after a stop (vs. a manual
-        // re-transcribe). Only the fresh path may auto-discard an empty result
-        // as silence. `append` controls whether the transcript extends an
-        // existing one or replaces it; it defaults to `fresh` (a new take
-        // extends the meeting) but a multi-take manual rebuild sets it per take.
+        // re-transcribe). The fresh path appends its transcript to any existing
+        // one (so a new take extends the meeting) and may auto-discard an empty
+        // result as silence; a manual re-transcribe replaces. A multi-take
+        // manual rebuild has its own path (rebuildTranscriptFromTakes).
         const fresh = opts?.fresh ?? false;
-        const append = opts?.append ?? fresh;
         if (!this.settings.apiBaseUrl || !this.settings.apiKey) {
             new Notice(t().notices.transcribeNoEndpoint);
             return;
@@ -2115,8 +2123,7 @@ export default class SystemRecordingPlugin extends Plugin {
                         label,
                         mode,
                         signal,
-                        fresh,
-                        append
+                        fresh
                     );
                 },
             });
@@ -2132,32 +2139,30 @@ export default class SystemRecordingPlugin extends Plugin {
         const pending = enrichAfter.value;
         if (
             pending &&
-            !opts?.skipEnrich &&
             this.settings.enableEnrichment &&
             this.settings.enrichOnTranscribe
         ) {
             // Pass the fresh transcript so enrichment works even when
             // insertTranscript is off and the note has no transcript yet.
-            // `skipEnrich` lets a multi-take rebuild enrich only once, after the
-            // last take, instead of once per take.
             await this.enrichMeetingNote(pending.note, pending.transcript);
         }
     }
 
     /**
-     * The single transcription pass run by the queue. Returns the note + fresh
-     * transcript to enrich afterward, or null when there's nothing to enrich
-     * (empty/partial result, or no owning note). Throws only on cancellation, so
-     * the queue rejects and the caller skips enrichment.
+     * Transcribes one recording (take) to ready-to-insert text, without writing
+     * to any note — the shared core of the single-take writer
+     * ({@link transcribeToNote}) and the multi-take rebuild
+     * ({@link rebuildTranscriptFromTakes}). Drives the shared progress bar and
+     * classifies the outcome (see {@link TranscribeTakeResult}). User
+     * cancellation throws {@link TranscriptionCancelledError} so the queue
+     * rejects; every other failure returns an "error"/"partial" result.
      */
-    private async transcribeToNote(
+    private async transcribeTakeToText(
         recording: TFile,
         label: string,
         mode: TranscribeMode,
-        signal: AbortSignal,
-        fresh = false,
-        append = false
-    ): Promise<{ note: TFile; transcript: string } | null> {
+        signal: AbortSignal
+    ): Promise<TranscribeTakeResult> {
         // Single-owner progress: only the running job writes to the shared bar,
         // labelled with the meeting name (and any queued-behind count).
         const onProgress = (pct: number): void => {
@@ -2234,60 +2239,19 @@ export default class SystemRecordingPlugin extends Plugin {
                 console.warn(
                     `[Meeting Copilot][transcribe] "${recording.name}" produced an empty transcript after filtering; note left unchanged`
                 );
-                // A fresh recording with no speech is the "started before anyone
-                // joined" throwaway — discard it (audio + link) so the meeting
-                // re-offers record. Only on the fresh post-stop path: a manual
-                // re-transcribe that comes back empty must never delete audio.
-                // Safety net: if the recorder's own speech detection (split-mode
-                // speech.json) found speech, an empty transcript is a transcription
-                // miss, not silence — keep the audio rather than discard it.
-                if (
-                    fresh &&
-                    this.settings.discardSilentRecordings &&
-                    !(await this.recordingHasSpeech(recording))
-                ) {
-                    await this.discardSilentRecording(recording);
-                } else {
-                    new Notice(t().notices.transcribeEmpty);
-                }
-                if (!this.recorder.isRecording) this.clearActionStatus();
-                return null;
+                return { kind: "empty" };
             }
             // A partial/failed run comes back as a marker-prefixed string
             // (not clean transcript text), so don't insert it as the transcript.
             if (isPartialTranscript(trimmed)) {
-                new Notice(t().notices.transcribePartial);
-                this.setActionStatus(t().statusBar.transcribeFailed, "error");
-                return null;
+                return { kind: "partial" };
             }
             // Tell the reader (and the enrichment model) who "Me"/"Them" are,
             // so owner attribution of action items has something to go on.
             const finalText = diarized
                 ? `${t().transcript.speakerBanner}\n\n${text}`
                 : text;
-            const result = await this.handleTranscriptionCompleted(
-                {
-                    audioFile: recording,
-                    transcription: finalText,
-                    file: null,
-                },
-                append
-            );
-            console.warn(
-                `[Meeting Copilot][transcribe] "${recording.name}" completed: note ${
-                    result.note
-                        ? "found and updated"
-                        : "NOT found (no note matched this recording)"
-                }`
-            );
-            if (!result.note) {
-                new Notice(t().notices.transcribeNoNote(recording.basename));
-                return null;
-            }
-            // The .me/.them/.speech sidecars are left in place: a later manual
-            // re-transcribe reuses them, and the retention sweep ages them out
-            // on the same rule as the audio.
-            return { note: result.note, transcript: result.transcript ?? finalText };
+            return { kind: "text", text: finalText };
         } catch (e) {
             // A user cancellation must propagate so the queue rejects (and the
             // caller skips enrichment); everything else is a recoverable failure
@@ -2304,27 +2268,183 @@ export default class SystemRecordingPlugin extends Plugin {
             // The engine throws the partial text (marker-prefixed) for a
             // partial/failed run rather than returning it, so classify it.
             if (isPartialTranscript(msg)) {
-                new Notice(t().notices.transcribePartial);
-            } else {
-                new Notice(t().notices.transcribeError(msg));
+                return { kind: "partial" };
             }
+            return { kind: "error", message: msg };
+        }
+    }
+
+    /**
+     * The single-take transcription pass run by the queue: transcribes one
+     * recording and writes the result into its meeting note. Returns the note +
+     * fresh transcript to enrich afterward, or null when there's nothing to
+     * enrich (empty/partial/error result, or no owning note). A `fresh` take
+     * (auto-transcribe right after a stop) APPENDS to any existing transcript so
+     * a new take extends the meeting, and may auto-discard an empty result as
+     * silence; a manual re-transcribe REPLACES. Throws only on cancellation, so
+     * the queue rejects and the caller skips enrichment.
+     */
+    private async transcribeToNote(
+        recording: TFile,
+        label: string,
+        mode: TranscribeMode,
+        signal: AbortSignal,
+        fresh = false
+    ): Promise<{ note: TFile; transcript: string } | null> {
+        const res = await this.transcribeTakeToText(recording, label, mode, signal);
+        if (res.kind === "empty") {
+            // A fresh recording with no speech is the "started before anyone
+            // joined" throwaway — discard it (audio + link) so the meeting
+            // re-offers record. Only on the fresh post-stop path: a manual
+            // re-transcribe that comes back empty must never delete audio.
+            // Safety net: if the recorder's own speech detection (split-mode
+            // speech.json) found speech, an empty transcript is a transcription
+            // miss, not silence — keep the audio rather than discard it.
+            if (
+                fresh &&
+                this.settings.discardSilentRecordings &&
+                !(await this.recordingHasSpeech(recording))
+            ) {
+                await this.discardSilentRecording(recording);
+            } else {
+                new Notice(t().notices.transcribeEmpty);
+            }
+            if (!this.recorder.isRecording) this.clearActionStatus();
+            return null;
+        }
+        if (res.kind === "partial") {
+            new Notice(t().notices.transcribePartial);
             this.setActionStatus(t().statusBar.transcribeFailed, "error");
             return null;
+        }
+        if (res.kind === "error") {
+            new Notice(t().notices.transcribeError(res.message));
+            this.setActionStatus(t().statusBar.transcribeFailed, "error");
+            return null;
+        }
+        const finalText = res.text;
+        const result = await this.handleTranscriptionCompleted(
+            {
+                audioFile: recording,
+                transcription: finalText,
+                file: null,
+            },
+            fresh
+        );
+        console.warn(
+            `[Meeting Copilot][transcribe] "${recording.name}" completed: note ${
+                result.note
+                    ? "found and updated"
+                    : "NOT found (no note matched this recording)"
+            }`
+        );
+        if (!result.note) {
+            new Notice(t().notices.transcribeNoNote(recording.basename));
+            return null;
+        }
+        // The .me/.them/.speech sidecars are left in place: a later manual
+        // re-transcribe reuses them, and the retention sweep ages them out
+        // on the same rule as the audio.
+        return { note: result.note, transcript: result.transcript ?? finalText };
+    }
+
+    /**
+     * Manual re-transcribe for a note that owns several takes: transcribes every
+     * take to text (through the queue, one at a time), then does a SINGLE atomic
+     * replace of the note's transcript with all takes joined chronologically and
+     * enriches once. The note is written only after every take has been
+     * attempted, so a mid-run failure or cancellation leaves the existing
+     * transcript intact instead of half-rebuilt. Empty (silent) takes are simply
+     * skipped; a run where no take produced text leaves the note untouched.
+     */
+    private async rebuildTranscriptFromTakes(
+        note: TFile,
+        takes: TFile[],
+        mode: TranscribeMode
+    ): Promise<void> {
+        if (!this.settings.apiBaseUrl || !this.settings.apiKey) {
+            new Notice(t().notices.transcribeNoEndpoint);
+            return;
+        }
+        // Bail if any take is already queued/running (a fresh auto-transcribe,
+        // or a double trigger) — rebuilding while one is in flight would
+        // interleave writes.
+        if (takes.some((take) => this.transcriptionQueue.has(take.path))) {
+            new Notice(t().notices.transcribeInProgress);
+            return;
+        }
+        const label = this.meetingNoteLabel(note);
+        const segments: string[] = [];
+        try {
+            for (const take of takes) {
+                if (this.transcriptionQueue.snapshot().running) {
+                    new Notice(t().notices.transcribeQueued(label));
+                }
+                const outcome: { value: TranscribeTakeResult | null } = {
+                    value: null,
+                };
+                await this.transcriptionQueue.enqueue({
+                    id: take.path,
+                    label,
+                    run: async (signal) => {
+                        outcome.value = await this.transcribeTakeToText(
+                            take,
+                            label,
+                            mode,
+                            signal
+                        );
+                    },
+                });
+                const res = outcome.value;
+                if (res?.kind === "text") segments.push(res.text);
+                else if (res?.kind === "partial")
+                    new Notice(t().notices.transcribePartial);
+                else if (res?.kind === "error")
+                    new Notice(t().notices.transcribeError(res.message));
+                // "empty" takes contribute nothing (a silent take) — skip quietly.
+            }
+        } catch (e) {
+            // Cancellation (or an unexpected queue failure) mid-rebuild: leave
+            // the existing transcript untouched rather than write a partial one.
+            if (!(e instanceof TranscriptionCancelledError)) {
+                console.warn("[Meeting Copilot] transcript rebuild failed", e);
+            }
+            return;
+        }
+        if (segments.length === 0) {
+            new Notice(t().notices.transcribeEmpty);
+            if (!this.recorder.isRecording) this.clearActionStatus();
+            return;
+        }
+        const combined = segments.join(TRANSCRIPT_SEGMENT_SEPARATOR);
+        if (this.settings.insertTranscript) {
+            await insertTranscript(this.app, note, combined, { append: false });
+            new Notice(t().notices.transcriptAdded(note.basename));
+            this.setActionStatus(t().statusBar.transcriptAdded, "success");
+        } else if (!this.recorder.isRecording) {
+            this.hideStatusBar();
+        }
+        this.agendaEvents.emit("changed", undefined);
+        if (this.settings.enableEnrichment && this.settings.enrichOnTranscribe) {
+            await this.enrichMeetingNote(note, combined);
         }
     }
 
     /** A friendly name for a recording in the queue UI: its meeting note's title, else the file basename. */
     private transcribeLabelFor(recording: TFile): string {
         const note = findMeetingNoteForAudio(this.app, recording);
-        if (note) {
-            const fm = this.app.metadataCache.getFileCache(note)?.frontmatter as
-                | Record<string, unknown>
-                | undefined;
-            const title = fm?.["title"];
-            if (typeof title === "string" && title.trim()) return title.trim();
-            return note.basename;
-        }
+        if (note) return this.meetingNoteLabel(note);
         return recording.basename;
+    }
+
+    /** A meeting note's display label for the queue UI: its `title` frontmatter, else its basename. */
+    private meetingNoteLabel(note: TFile): string {
+        const fm = this.app.metadataCache.getFileCache(note)?.frontmatter as
+            | Record<string, unknown>
+            | undefined;
+        const title = fm?.["title"];
+        if (typeof title === "string" && title.trim()) return title.trim();
+        return note.basename;
     }
 
     /** Reflects the queue's running/waiting state in the status bar (single-owner). */
