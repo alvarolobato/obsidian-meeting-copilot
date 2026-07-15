@@ -14,10 +14,14 @@
  * request carries only the per-call work (which files, progress, cancellation).
  */
 import type { TFile } from "obsidian";
-import type { DiarSegment } from "./diarize";
+import type { DiarSegment, PregateSource } from "./diarize";
 
-/** How a job's speech windows were derived, so a backend can pick padding. */
-export type SpeechWindowSource = "vad" | "rms";
+/**
+ * How a job's speech windows were derived, so a backend can pick padding.
+ * Tied to {@link PregateSource} minus its "no windows" case ("none"), so the
+ * two never drift: a job either carries usable windows ("vad" | "rms") or none.
+ */
+export type SpeechWindowSource = Exclude<PregateSource, "none">;
 
 /** One audio file to transcribe within a request. */
 export interface TranscribeJob {
@@ -36,7 +40,12 @@ export interface TranscribeJob {
 	windowSource?: SpeechWindowSource;
 }
 
-/** Typed partial marker — replaces the localized-prose string sniffing. */
+/**
+ * Typed partial marker for a job that only partially transcribed. Reserved for
+ * backends that surface partials as data (the local backend will); the
+ * OpenAI-compatible backend still propagates partials through the vendored
+ * engine's marker-in-text / thrown-error contract, so it does not set this yet.
+ */
 export interface PartialInfo {
 	processedChunks: number;
 	totalChunks: number;
@@ -49,6 +58,7 @@ export interface JobResult {
 	text: string;
 	/** Present when `wantSegments` was set and the backend produced segments. */
 	segments?: DiarSegment[];
+	/** See {@link PartialInfo}; unset by the OpenAI-compatible backend today. */
 	partial?: PartialInfo;
 }
 
@@ -82,4 +92,57 @@ export interface TranscriptionBackend {
 	 * request. Throws on cancellation and on unrecoverable failure.
 	 */
 	transcribe(req: TranscribeRequest): Promise<JobResult[]>;
+}
+
+/** Runs one job; `onProgress` is job-local 0–100 (the runner slices the bar). */
+export type JobRunner = (
+	job: TranscribeJob,
+	ctx: { signal?: AbortSignal; onProgress?: (jobPercent: number) => void }
+) => Promise<JobResult>;
+
+/**
+ * The canonical sequential job loop every backend shares, so the ordering
+ * contract can't drift between implementations (and is unit-tested once).
+ *
+ * Guarantees:
+ *   - jobs run in order; job `i` owns the `[i/n, (i+1)/n]` slice of the 0–100
+ *     bar (one job fills it end to end; two line up on 0–50 / 50–100);
+ *   - a cancellation is checked before each job starts AND after each job
+ *     completes (before `continueAfterJob`) — so a cancel between passes
+ *     propagates as an AbortError rather than being reclassified by the hook;
+ *   - `continueAfterJob` returning false stops early and returns the results
+ *     gathered so far (used to skip a doomed second diarized pass).
+ */
+export async function runJobsSequentially(
+	req: TranscribeRequest,
+	runJob: JobRunner
+): Promise<JobResult[]> {
+	const n = req.jobs.length;
+	const results: JobResult[] = [];
+	for (let i = 0; i < n; i++) {
+		const job = req.jobs[i];
+		if (!job) continue;
+		if (req.signal?.aborted) {
+			throw new DOMException("Transcription aborted", "AbortError");
+		}
+		const base = (i * 100) / n;
+		const span = 100 / n;
+		const onProgress = req.onProgress
+			? (jobPercent: number) => req.onProgress?.(base + (jobPercent * span) / 100)
+			: undefined;
+		const result = await runJob(job, { signal: req.signal, onProgress });
+		results.push(result);
+		if (i < n - 1) {
+			// Abort BEFORE the early-bail hook, matching the pre-refactor order:
+			// a cancellation between passes must propagate, not be reclassified
+			// (e.g. as a capability miss, which would also invalidate the probe).
+			if (req.signal?.aborted) {
+				throw new DOMException("Transcription aborted", "AbortError");
+			}
+			if (req.continueAfterJob && !req.continueAfterJob(result)) {
+				break;
+			}
+		}
+	}
+	return results;
 }

@@ -41,6 +41,16 @@ describe("OpenAICompatibleBackend.validateConfig", () => {
 		expect(r.message).toMatch(/api key/i);
 	});
 
+	it("fails without a model", async () => {
+		const backend = new OpenAICompatibleBackend(
+			app,
+			config({ model: "" as unknown as TranscribeConfig["model"] })
+		);
+		const r = await backend.validateConfig();
+		expect(r.ok).toBe(false);
+		expect(r.message).toMatch(/model/i);
+	});
+
 	it("reports its id", () => {
 		expect(new OpenAICompatibleBackend(app, config()).id).toBe("openai-compatible");
 	});

@@ -77,11 +77,16 @@ function throwingBackend(error: unknown): TranscriptionBackend {
 describe("transcribeAudio", () => {
 	it("runs one non-diarized job over the whole file and returns its text", async () => {
 		const backend = sequentialBackend({ single: { id: "single", text: "hello world" } });
-		const out = await transcribeAudio(fakeFile("a.wav"), backend);
+		const file = fakeFile("a.wav");
+		const out = await transcribeAudio(file, backend);
 		expect(out).toBe("hello world");
-		expect(backend.lastRequest?.jobs).toEqual([
-			{ id: "single", file: fakeFile("a.wav"), wantSegments: false },
-		]);
+		const jobs = backend.lastRequest!.jobs;
+		expect(jobs).toHaveLength(1);
+		expect(jobs[0]!.id).toBe("single");
+		expect(jobs[0]!.wantSegments).toBe(false);
+		expect(jobs[0]!.speechWindows).toBeUndefined();
+		// The exact file instance passed in is forwarded to the job.
+		expect(jobs[0]!.file).toBe(file);
 	});
 
 	it("returns empty string when the backend yields no result", async () => {
@@ -115,6 +120,19 @@ describe("transcribeDiarized", () => {
 		const result = await transcribeDiarized(fakeFile("x.me.wav"), fakeFile("x.them.wav"), backend);
 		expect(result).toEqual({ text: "", diarized: false, reason: "capability" });
 		expect(backend.ranJobs).toEqual(["me"]);
+	});
+
+	it("does NOT early-bail when the me pass is silent-with-hallucination text", async () => {
+		// No segments + only a stock hallucination phrase is a SILENT stream,
+		// not a capability miss (issue #61): both passes must still run.
+		const backend = sequentialBackend({
+			me: { id: "me", text: "Thanks for watching!", segments: [] },
+			them: { id: "them", text: "yo", segments: [seg("hello back", 2, 3)] },
+		});
+		const result = await transcribeDiarized(fakeFile("x.me.wav"), fakeFile("x.them.wav"), backend);
+		expect(backend.ranJobs).toEqual(["me", "them"]);
+		expect(result.diarized).toBe(true);
+		expect(result.text).toContain("Them: hello back");
 	});
 
 	it("classifies a them-pass capability miss (both passes ran)", async () => {
@@ -179,5 +197,24 @@ describe("transcribeDiarized", () => {
 		// them's detector heard nothing ("none") -> full pass, no pre-gate.
 		expect(them.speechWindows).toBeUndefined();
 		expect(them.windowSource).toBeUndefined();
+	});
+
+	it("pre-gates with the rms source when only the RMS gate had windows", async () => {
+		const backend = sequentialBackend({
+			me: { id: "me", text: "", segments: [] },
+			them: { id: "them", text: "", segments: [] },
+		});
+		await transcribeDiarized(
+			fakeFile("x.me.wav"),
+			fakeFile("x.them.wav"),
+			backend,
+			{ me: [[1, 2]], them: [] },
+			undefined,
+			undefined,
+			{ me: "rms", them: "none" }
+		);
+		const me = backend.lastRequest!.jobs.find((j) => j.id === "me")!;
+		expect(me.speechWindows).toEqual([[1, 2]]);
+		expect(me.windowSource).toBe("rms");
 	});
 });

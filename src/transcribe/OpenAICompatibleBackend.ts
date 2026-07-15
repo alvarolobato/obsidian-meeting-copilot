@@ -16,6 +16,7 @@ import { ProgressTracker } from "./vendor/ui/ProgressTracker";
 import { getModelConfig } from "./vendor/config/ModelProcessingConfig";
 import { createSerialQueue } from "../util/serialize";
 import { isDiarizationCancelled } from "./cancellation";
+import { runJobsSequentially } from "./backend";
 import type { DiarSegment } from "./diarize";
 import {
 	encodeWavFromFloat32,
@@ -175,28 +176,12 @@ export class OpenAICompatibleBackend implements TranscriptionBackend {
 				`[Meeting Copilot][transcribe] ${n} serial passes (${req.jobs.map((j) => j.id).join(", ")})`
 			);
 		}
-		const results: JobResult[] = [];
-		for (let i = 0; i < n; i++) {
-			const job = req.jobs[i];
-			if (!job) continue;
-			if (req.signal?.aborted) {
-				throw new DOMException("Transcription aborted", "AbortError");
-			}
-			// Map this job's engine progress onto its slice of the 0–100 bar:
-			// job i owns [i/n, (i+1)/n]. One job fills the bar end to end; two
-			// jobs line up on 0–50 / 50–100 (matching the old diarized split).
-			const base = (i * 100) / n;
-			const span = 100 / n;
-			const onProgress = req.onProgress
-				? (enginePct: number) =>
-						req.onProgress?.(base + (normalizeEngineProgress(enginePct) * span) / 100)
-				: undefined;
-			const result = await this.runJob(job, req.signal, onProgress);
-			results.push(result);
-			if (i < n - 1 && req.continueAfterJob && !req.continueAfterJob(result)) {
-				break;
-			}
-		}
+		// The sequential loop, bar-slicing, abort ordering, and early-bail hook
+		// are the shared backend contract. runJob receives a job-LOCAL 0–100
+		// progress; it maps the engine's 10→90 band onto that local bar.
+		const results = await runJobsSequentially(req, (job, ctx) =>
+			this.runJob(job, ctx.signal, ctx.onProgress)
+		);
 		if (n > 1) {
 			console.warn(
 				`[Meeting Copilot][transcribe] ${results.length} pass(es) done in ${elapsedSecs(tAll)}s`
@@ -208,8 +193,14 @@ export class OpenAICompatibleBackend implements TranscriptionBackend {
 	private async runJob(
 		job: TranscribeJob,
 		signal: AbortSignal | undefined,
-		onProgress: ((percent: number) => void) | undefined
+		onJobProgress: ((jobPercent: number) => void) | undefined
 	): Promise<JobResult> {
+		// The vendored engine emits its unified 10→90 percentage; rescale it onto
+		// this job's local 0–100 bar. The shared runner then slices that into the
+		// job's lane of the whole-request bar.
+		const onProgress = onJobProgress
+			? (enginePct: number) => onJobProgress(normalizeEngineProgress(enginePct))
+			: undefined;
 		// Diarized passes must run with VAD off: server/local silence-trimming
 		// would trim each stream by a different amount and shear the shared
 		// timeline the merge relies on. The mixed pass wants server VAD.

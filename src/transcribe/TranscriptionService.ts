@@ -15,7 +15,6 @@ import { stripHallucinatedLines } from "./hallucination";
 import { isDiarizationCancelled } from "./cancellation";
 import type {
 	JobResult,
-	SpeechWindowSource,
 	TranscribeJob,
 	TranscriptionBackend,
 } from "./backend";
@@ -122,14 +121,13 @@ function streamJob(
 	streamWindows: Array<[number, number]> | undefined,
 	source: PregateSource
 ): TranscribeJob {
-	const pregate = source !== "none" && streamWindows && streamWindows.length > 0;
-	return {
-		id,
-		file,
-		wantSegments: true,
-		speechWindows: pregate ? streamWindows : undefined,
-		windowSource: pregate ? (source as SpeechWindowSource) : undefined,
-	};
+	// A stream the good detector heard nothing on ("none"), or one with no
+	// windows, runs a full pass so a quiet-but-real speaker is never skipped.
+	if (source === "none" || !streamWindows || streamWindows.length === 0) {
+		return { id, file, wantSegments: true };
+	}
+	// `source` is now narrowed to "vad" | "rms" (= SpeechWindowSource), no cast.
+	return { id, file, wantSegments: true, speechWindows: streamWindows, windowSource: source };
 }
 
 function segmentsOf(result: JobResult | undefined): DiarSegment[] {
