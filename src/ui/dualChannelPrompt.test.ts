@@ -158,4 +158,56 @@ describe("startDualChannelPrompt", () => {
 
 		expect(inApp.shows()).toBe(0);
 	});
+
+	it("does not show a second in-app notice when osFailed lands after the timer already showed one", () => {
+		const timers = fakeTimers();
+		const inApp = trackedInApp();
+		const ctrl = startDualChannelPrompt({
+			fallbackDelayMs: 500,
+			timers,
+			showInApp: inApp.make,
+		});
+
+		timers.fire(); // fallback shows the in-app notice
+		expect(inApp.shows()).toBe(1);
+		ctrl.osFailed(); // late failure — must not create a duplicate
+		expect(inApp.shows()).toBe(1);
+	});
+
+	it("ignores osShown / osFailed that arrive after dispose", () => {
+		const timers = fakeTimers();
+		const inApp = trackedInApp();
+		const ctrl = startDualChannelPrompt({
+			fallbackDelayMs: 500,
+			timers,
+			showInApp: inApp.make,
+		});
+
+		ctrl.dispose();
+		ctrl.osFailed(); // no-op — already torn down
+		ctrl.osShown();
+		expect(inApp.shows()).toBe(0);
+	});
+
+	it("forceInApp shows the notice on demand and dispose still hides it", () => {
+		const timers = fakeTimers();
+		const inApp = trackedInApp();
+		const ctrl = startDualChannelPrompt({
+			fallbackDelayMs: 500,
+			timers,
+			showInApp: inApp.make,
+		});
+
+		// OS confirmed shown (in-app skipped), then the user clicks the body.
+		ctrl.osShown();
+		expect(inApp.shows()).toBe(0);
+		ctrl.forceInApp();
+		expect(inApp.shows()).toBe(1);
+		// A second body click doesn't stack another notice.
+		ctrl.forceInApp();
+		expect(inApp.shows()).toBe(1);
+
+		ctrl.dispose();
+		expect(inApp.hides()).toBe(1);
+	});
 });

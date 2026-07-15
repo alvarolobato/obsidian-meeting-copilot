@@ -113,11 +113,16 @@ import {
     RowHandlers,
 } from "./ui/agenda/components/meetingRow";
 import { registerIcons, RECORD_ICON } from "./ui/icons";
-import { notifyOs, requestNotificationPermission } from "./ui/osNotification";
+import {
+	notifyOs,
+	requestNotificationPermission,
+	OsNotificationAction,
+} from "./ui/osNotification";
 import {
 	startDualChannelPrompt,
 	DualChannelController,
 	DualChannelTimers,
+	InAppHandle,
 } from "./ui/dualChannelPrompt";
 import { MeetingPromptModal } from "./ui/meetingPromptModal";
 import {
@@ -1058,38 +1063,77 @@ export default class SystemRecordingPlugin extends Plugin {
 	}
 
 	/**
+	 * Posts a dual-channel prompt: a native OS notification (visible while
+	 * Obsidian is minimized / on another Space) plus an in-app notice fallback
+	 * shown only when the OS one isn't confirmed on screen — never both. The
+	 * returned controller's `dispose()` also closes the OS notification, so a
+	 * superseded / handled prompt can't leave a stale action button lingering in
+	 * Notification Center.
+	 */
+	private startOsPrompt(opts: {
+		title: string;
+		body: string;
+		webHint: string;
+		/** Native/web body click (Obsidian is already brought to the front). */
+		onClick: () => void;
+		/** Native action buttons (first = default). */
+		actions: OsNotificationAction[];
+		/** Builds the in-app fallback notice. */
+		showInApp: () => InAppHandle;
+	}): DualChannelController {
+		const inner = startDualChannelPrompt({
+			fallbackDelayMs: SystemRecordingPlugin.OS_NOTICE_FALLBACK_MS,
+			timers: this.notifTimers(),
+			showInApp: opts.showInApp,
+		});
+		const handle = notifyOs({
+			title: opts.title,
+			body: opts.body,
+			webHint: opts.webHint,
+			onClick: opts.onClick,
+			actions: opts.actions,
+			onShown: () => inner.osShown(),
+			onFailed: () => inner.osFailed(),
+		});
+		return {
+			osShown: () => inner.osShown(),
+			osFailed: () => inner.osFailed(),
+			forceInApp: () => inner.forceInApp(),
+			dispose: () => {
+				inner.dispose();
+				handle.close();
+			},
+		};
+	}
+
+	/**
 	 * Offers to stop the current recording (a recording never stops on its own)
 	 * on both channels: a native OS notification with a "Stop recording" action
-	 * (visible while Obsidian is minimized / on another Space) plus an in-app
-	 * notice fallback shown only when the OS one isn't confirmed on screen.
-	 * Supersedes any prior stop prompt so end-of-meeting triggers that overlap
-	 * (detected-meeting end + calendar event end) don't stack two prompts.
+	 * plus an in-app notice fallback. Supersedes any prior stop prompt so
+	 * end-of-meeting triggers that overlap (detected-meeting end + calendar event
+	 * end) don't stack two prompts.
 	 */
 	private promptStopRecording(title: string, body: string): void {
 		this.stopPromptNotice?.dispose();
 		const stop = (): void => {
+			// Tear down our own prompt first (cancels the fallback timer and
+			// closes the OS notification) so nothing stale survives the stop.
+			this.stopPromptNotice?.dispose();
 			this.stopPromptNotice = null;
 			this.stopRecording();
 		};
-		const showInApp = (): Notice =>
-			actionNotice(`${title} — ${body}`, t().event.stopRecordingAction, stop);
-		const controller = startDualChannelPrompt({
-			fallbackDelayMs: SystemRecordingPlugin.OS_NOTICE_FALLBACK_MS,
-			timers: this.notifTimers(),
-			showInApp,
-		});
-		this.stopPromptNotice = controller;
-		notifyOs({
+		const controller = this.startOsPrompt({
 			title,
 			body,
 			webHint: t().event.notificationWebHint,
-			// The body click can't be the destructive stop — bring Obsidian
-			// forward and surface an actionable in-app prompt instead.
-			onClick: () => void showInApp(),
+			// The body click can't be the destructive stop — surface an
+			// actionable in-app prompt (tracked, so dispose still hides it).
+			onClick: () => controller.forceInApp(),
 			actions: [{ text: t().event.stopRecordingAction, run: stop }],
-			onShown: () => controller.osShown(),
-			onFailed: () => controller.osFailed(),
+			showInApp: () =>
+				actionNotice(`${title} — ${body}`, t().event.stopRecordingAction, stop),
 		});
+		this.stopPromptNotice = controller;
 	}
 
 	/**
@@ -1193,34 +1237,27 @@ export default class SystemRecordingPlugin extends Plugin {
 		// prompt — but leave other meetings' prompts alone so overlapping
 		// meetings each keep theirs.
 		this.meetingNotices.get(opts.key)?.dispose();
-		const controller = startDualChannelPrompt({
-			fallbackDelayMs: SystemRecordingPlugin.OS_NOTICE_FALLBACK_MS,
-			timers: this.notifTimers(),
-			// The in-app multi-action notice is the fallback for when the OS
-			// notification isn't confirmed on screen.
-			showInApp: () =>
-				multiActionNotice(
-					`${opts.title} — ${opts.subtitle}`,
-					actions,
-					// Once the user picks an action the notice is gone — drop our
-					// bookkeeping entry so the map only ever holds live prompts.
-					() => this.meetingNotices.delete(opts.key)
-				),
-		});
-		this.meetingNotices.set(opts.key, controller);
-
-		// Native OS notification (visible while minimized / on another Space).
-		// Its `onShown`/`onFailed` drive the in-app dedupe above: the in-app
-		// notice appears only if the OS one isn't confirmed shown.
-		notifyOs({
-			title: opts.title,
-			body: opts.subtitle,
-			webHint: e.notificationWebHint,
-			onClick: openModal,
-			actions: actions.map((a) => ({ text: a.label, run: a.onClick })),
-			onShown: () => controller.osShown(),
-			onFailed: () => controller.osFailed(),
-		});
+		this.meetingNotices.set(
+			opts.key,
+			this.startOsPrompt({
+				title: opts.title,
+				body: opts.subtitle,
+				webHint: e.notificationWebHint,
+				onClick: openModal,
+				actions: actions.map((a) => ({ text: a.label, run: a.onClick })),
+				// The in-app multi-action notice is the fallback for when the OS
+				// notification isn't confirmed on screen.
+				showInApp: () =>
+					multiActionNotice(
+						`${opts.title} — ${opts.subtitle}`,
+						actions,
+						// Once the user picks an action the notice is gone — drop
+						// our bookkeeping entry so the map only ever holds live
+						// prompts.
+						() => this.meetingNotices.delete(opts.key)
+					),
+			})
+		);
 	}
 
 	/** Prefix for calendar-event prompt keys (vs. `detect:` for detected meetings). */

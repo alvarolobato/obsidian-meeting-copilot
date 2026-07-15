@@ -124,11 +124,14 @@ function getRemoteNotificationCtor(): RemoteNotificationCtor | null {
 	}
 }
 
-/** Ensures `onShown`/`onFailed` each resolve the notification's fate exactly once. */
-function makeSettler(opts: NotifyOsOptions): {
+interface Settler {
 	shown: () => void;
 	failed: () => void;
-} {
+	isSettled: () => boolean;
+}
+
+/** Ensures `onShown`/`onFailed` each resolve the notification's fate exactly once. */
+function makeSettler(opts: NotifyOsOptions): Settler {
 	let settled = false;
 	return {
 		shown: () => {
@@ -141,14 +144,12 @@ function makeSettler(opts: NotifyOsOptions): {
 			settled = true;
 			opts.onFailed?.();
 		},
+		isSettled: () => settled,
 	};
 }
 
 /** Shows a plain web-API banner (no action buttons); its click opens the in-app prompt. */
-function createWeb(
-	opts: NotifyOsOptions,
-	settle: { shown: () => void; failed: () => void }
-): Notification | null {
+function createWeb(opts: NotifyOsOptions, settle: Settler): Notification | null {
 	try {
 		const N = window.Notification;
 		if (!N || N.permission !== "granted") {
@@ -191,7 +192,7 @@ function createWeb(
  */
 function createNative(
 	opts: NotifyOsOptions,
-	settle: { shown: () => void; failed: () => void },
+	settle: Settler,
 	onFallback: () => void
 ): RemoteNotificationInstance | null {
 	const Ctor = getRemoteNotificationCtor();
@@ -214,6 +215,9 @@ function createNative(
 		notification.on("show", () => settle.shown());
 		notification.on("failed", () => {
 			if (lastNative === notification) lastNative = null;
+			// A `show` already won the race (a late/spurious `failed`): don't stack
+			// a second, web banner on top of the native one that's on screen.
+			if (settle.isSettled()) return;
 			// Native couldn't render (e.g. unsigned build): degrade to a web banner.
 			onFallback();
 		});

@@ -31,6 +31,12 @@ export interface DualChannelController {
 	osShown(): void;
 	/** Call when the OS notification could not be shown at all. */
 	osFailed(): void;
+	/**
+	 * Show the in-app notice now, tracked so it's hidden on {@link dispose}. Used
+	 * when the user clicks the OS notification body (it can't carry every action)
+	 * so they always land on an actionable in-app prompt. Idempotent.
+	 */
+	forceInApp(): void;
 	/** Tear everything down: cancel a pending fallback timer and hide the in-app notice if shown. */
 	dispose(): void;
 }
@@ -94,6 +100,9 @@ export function startDualChannelPrompt(
 			if (settled) return;
 			settled = true;
 			cancelTimer();
+			showInAppOnce();
+		},
+		forceInApp(): void {
 			showInAppOnce();
 		},
 		dispose(): void {
