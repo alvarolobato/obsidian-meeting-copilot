@@ -1582,7 +1582,8 @@ export default class SystemRecordingPlugin extends Plugin {
         // folders we're configured to write to — surfacing Transcribe/Enrich
         // buttons for a note the plugin doesn't own would rewrite it.
         for (const entry of scanMeetingNotes(this.app)) {
-            const hasRecording = recordingLinkTarget(entry.recording) !== "";
+            const recLink = recordingLinkTarget(entry.recording);
+            const hasRecording = recLink !== "";
             const pluginOwned = entry.eventId !== null;
             const legacyMatch =
                 (hasRecording || entry.hasMeetingUrl) &&
@@ -1597,6 +1598,21 @@ export default class SystemRecordingPlugin extends Plugin {
                 typeof titleRaw === "string" && titleRaw
                     ? titleRaw
                     : entry.file.basename;
+
+            // "Processing" = the plugin is already advancing this note on its
+            // own — the recording is transcribing/queued, or it's being
+            // enriched — so there's nothing for the user to do; skip it below.
+            const recDest = hasRecording
+                ? this.app.metadataCache.getFirstLinkpathDest(
+                      recLink,
+                      entry.file.path
+                  )
+                : null;
+            const processing =
+                this.enrichingPaths.has(entry.file.path) ||
+                (recDest instanceof TFile &&
+                    this.transcriptionQueue.has(recDest.path));
+
             byPath.set(entry.file.path, entry.file);
             inputs.push({
                 path: entry.file.path,
@@ -1604,10 +1620,11 @@ export default class SystemRecordingPlugin extends Plugin {
                 start: entry.stamp ? parseStampDate(entry.stamp) : null,
                 status: entry.status,
                 hasRecording,
+                processing,
             });
         }
 
-        const rows = computeAttention(inputs, new Date());
+        const rows = computeAttention(inputs);
 
         const header = el.createDiv({ cls: "mc-attention-header" });
         header.createSpan({ text: d.count(rows.length) });

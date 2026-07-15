@@ -206,7 +206,6 @@ export const en = {
 			colActions: "Actions",
 			missing: {
 				date: "date",
-				recording: "recording",
 				transcript: "transcript",
 				summary: "summary",
 			},

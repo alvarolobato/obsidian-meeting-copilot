@@ -265,11 +265,6 @@ table.mc-attention td {
     color: var(--text-on-accent);
 }
 
-.mc-badge-recording {
-    background: rgba(var(--color-red-rgb), 0.2);
-    color: var(--text-normal);
-}
-
 .mc-badge-transcript {
     background: rgba(var(--color-yellow-rgb), 0.2);
     color: var(--text-normal);
