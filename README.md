@@ -1,13 +1,14 @@
 # Meeting Copilot
 
-A Granola-style meeting workflow for Obsidian on macOS. Meeting Copilot reads your Google Calendar, creates a note from the meeting invite, records **dual-channel** audio (system audio from Zoom / Google Meet / Teams **plus** your microphone) via ScreenCaptureKit, then transcribes and enriches the note with an AI summary and action items — no extra audio driver and no sidecar app.
+A Granola-style meeting workflow for Obsidian on macOS. Meeting Copilot reads your Google Calendar, creates a note from the meeting invite, records **dual-channel** audio (system audio from Zoom / Google Meet / Teams **plus** your microphone) via ScreenCaptureKit, then transcribes and enriches the note with an AI summary and action items — no extra audio driver and no sidecar app. Transcription runs either through an OpenAI-compatible endpoint or **fully on-device** with a local Whisper model (no audio leaves your Mac).
 
 ## Requirements
 
 - macOS 13.0+ (Apple Silicon)
 - Obsidian Desktop
 - A Google account (for calendar integration)
-- One OpenAI-compatible endpoint (configured as a single base URL in settings) used for both transcription and enrichment. OpenAI and LiteLLM work for both. **Ollama** has no `/audio/transcriptions` endpoint, so it works for enrichment only. **Azure** requires the `/openai/v1` OpenAI-compatible surface — the classic deployment-path format won't work.
+- An OpenAI-compatible endpoint (configured as a single base URL in settings). It's used for **enrichment**, and for transcription **unless** you switch to the local on-device backend. OpenAI and LiteLLM work for both transcription and enrichment. **Ollama** has no `/audio/transcriptions` endpoint, so it works for enrichment only. **Azure** requires the `/openai/v1` OpenAI-compatible surface — the classic deployment-path format won't work.
+  - Prefer to keep audio local? Set **Transcription → Backend** to **Local** and no endpoint is needed for transcription (enrichment still uses one). See [Local (on-device) transcription](#local-on-device-transcription).
 
 ## Features
 
@@ -16,6 +17,7 @@ A Granola-style meeting workflow for Obsidian on macOS. Meeting Copilot reads yo
 - **Meeting agenda sidebar** — a "coming up / recent" list with per-row actions: create note + record, open note, transcribe, enrich, open recording, join link.
 - **Automatic notes** — creates a meeting note from the invite, colocates the recording with it, and files recurring meetings into a per-series folder.
 - **Transcript → note automation** — when a recording stops it can transcribe automatically and drop a collapsible transcript at the bottom of the note.
+- **Local on-device transcription** — optionally transcribe with a bundled Whisper model that runs on Apple-Silicon GPUs (Metal); audio never leaves your Mac and there's no per-minute API cost. Falls back to your remote endpoint on failure if you enable it.
 - **Granola-style AI enrichment** — generates a summary, key points, decisions, and action items into a gray, collapsible AI-notes callout you can toggle on/off; your manual notes stay untouched.
 - **Action items → tasks** — enrichment lifts action items into `## Action items` checkboxes the [Tasks](https://github.com/obsidian-tasks-group/obsidian-tasks) plugin can track.
 - **Recording retention** — recordings older than a configurable number of days are moved to the trash automatically; the transcript stays in the note.
@@ -70,11 +72,37 @@ In *Settings → Meeting Copilot → AI endpoint (shared)*, set the **API base U
 
 ### Transcription
 
-In *Settings → Meeting Copilot → Transcription*, pick a **Transcription model** (`gpt-4o-transcribe` is most accurate; `whisper-1-ts` adds word timestamps), a language, and optionally enable **AI post-processing** and a **custom dictionary** (one `misheard => correct` rule per line). Transcription runs headlessly — no dialog — when you transcribe a recording or when *Auto-transcribe when recording stops* is on.
+In *Settings → Meeting Copilot → Transcription*, choose a **Backend**:
+
+- **Remote (default)** — pick a **Transcription model** (`gpt-4o-transcribe` is most accurate; `whisper-1-ts` adds word timestamps) served by your shared endpoint, a language, and optionally enable **AI post-processing** and a **custom dictionary** (one `misheard => correct` rule per line).
+- **Local (on-device)** — pick a **Whisper model** (see the table below); it downloads once and is verified by SHA-256. See [Local (on-device) transcription](#local-on-device-transcription).
+
+Either way, transcription runs headlessly — no dialog — when you transcribe a recording or when *Auto-transcribe when recording stops* is on.
 
 ### AI enrichment
 
 In *Settings → Meeting Copilot → AI enrichment*, enable enrichment, then click **Test connection** (under the model row) to load the available chat models from the shared endpoint and pick one from the dropdown.
+
+### Local (on-device) transcription
+
+Set **Transcription → Backend** to **Local** to transcribe entirely on your Mac with a bundled [whisper.cpp](https://github.com/ggerganov/whisper.cpp) model running on the Apple-Silicon GPU (Metal). Audio never leaves the device and there's no per-minute API cost — enrichment still uses your shared endpoint.
+
+First use downloads two things and verifies each by pinned SHA-256: a small **recorder runtime component** (`whisper` framework) alongside the `system-recorder` helper, and the **model** you selected (into the plugin's `models/` folder). After that, transcription is fully offline. Only **multilingual** models are offered, so the **Language** setting (`auto` to detect) works as expected.
+
+| Model | Download | Peak RAM (approx.) | Notes |
+| --- | --- | --- | --- |
+| `small-q5_1` | ~190 MB | ~0.6 GB | Fastest / smallest; best for older or RAM-constrained Macs. |
+| `medium-q5_0` | ~539 MB | ~1.6 GB | Middle ground. |
+| `large-v3-turbo-q5_0` *(default)* | ~574 MB | ~1.6 GB | Near large-v3 accuracy at a fraction of the compute; recommended on Max-tier chips. |
+
+Other options in this mode:
+
+- **Speaker separation (diarization)** — because recording is dual-channel (you vs. everyone else), enabling it labels the two sides without any timestamp-capability probe.
+- **Fall back to remote** — if a local run fails and a remote endpoint is configured, retry the audio there (non-diarized). Off by default; when it triggers you'll see a "falling back to the remote service" notice.
+
+Switching models or backends is locked while a model is downloading so an in-flight fetch can't be stranded.
+
+**Performance.** On-device transcription runs on the GPU and is typically **much faster than real time**. On an Apple M5 Max (64 GB) the default `large-v3-turbo-q5_0` model transcribed at **~56× real time** (363 s of audio in 6.4 s; a dual-channel pass reuses the loaded model, so it's ~2× that wall time). In practice a **1-hour dual-channel meeting transcribes in roughly 2 minutes**, entirely offline, at ~0.8 GB peak RAM. Slower/lower-RAM Macs will be proportionally slower — pick `small-q5_1` or `medium-q5_0` there. Wall-clock varies by chip, model, and meeting length.
 
 ## Usage
 
@@ -92,7 +120,7 @@ In *Settings → Meeting Copilot → AI enrichment*, enable enrichment, then cli
 - **Ad-hoc meetings folder**: where unplanned (ad-hoc or detected) meeting notes land.
 - **Recording retention (days)**: recordings older than this are trashed on startup and via *Clean up old recordings*; `0` keeps them forever. A recording is pruned only when the plugin has durably saved the transcript into its owning meeting note — so notes without the transcript captured (e.g. enriched with *Insert transcript* off), orphan/ad-hoc recordings, and unrelated audio are never deleted.
 - **AI endpoint (shared)**: OpenAI-compatible base URL + API key used for both transcription and enrichment.
-- **Transcription**: model, language, voice-activity detection, AI post-processing, custom dictionary, and **Auto-transcribe when recording stops** (headless — no dialog).
+- **Transcription**: **backend** (remote endpoint or local on-device Whisper), model / local Whisper model, language, speaker separation, voice-activity detection, AI post-processing, custom dictionary, **fall back to remote** (local backend), and **Auto-transcribe when recording stops** (headless — no dialog).
 - **AI enrichment**: enable it, pick a chat model (via **Test connection** + dropdown); optionally enrich automatically after transcription.
 - **Action items as tasks**: lift enriched action items into `## Action items` checkboxes (preserving existing/completed tasks).
 
@@ -113,6 +141,8 @@ npm test && npm run lint
 
 Obsidian's community store distributes only `main.js` / `manifest.json` / `styles.css`, not native binaries. The plugin downloads the `system-recorder` helper on first use from the GitHub release whose tag matches `manifest.json`'s `version`, and verifies it against `EXPECTED_SHA256` in [`src/binary.ts`](src/binary.ts). If you publish your own release, point `REPO` / `EXPECTED_SHA256` in `src/binary.ts` at it, or simply ship a prebuilt `system-recorder` next to `main.js`.
 
+The helper links whisper.cpp's **dynamic** framework, so the `whisper` dylib is a second provisioned asset (pinned by `EXPECTED_WHISPER_SHA256` / `WHISPER_DYLIB_SIZE` in `src/binary.ts`). It's downloaded alongside the helper — even for remote-only users — because the helper won't launch without it, and placed at `whisper.framework/Versions/Current/whisper` next to `main.js`. Local Whisper **models** are separate, on-demand downloads pinned in [`src/transcribe/localModels.ts`](src/transcribe/localModels.ts). For local end-to-end testing, `npm run deploy:local -- --swift` builds the helper + dylib and stages that exact layout into your dev vault.
+
 ### Releasing
 
 Releases are automated by [`.github/workflows/release.yml`](.github/workflows/release.yml). To cut a release, push a version tag (no `v` prefix, matching the target `manifest.json` version):
@@ -121,7 +151,7 @@ Releases are automated by [`.github/workflows/release.yml`](.github/workflows/re
 git tag 1.0.5 && git push origin 1.0.5
 ```
 
-On an Apple-Silicon runner the workflow lints/tests, syncs `manifest.json` / `versions.json` to the tag, builds the Swift helper, pins its SHA-256 into the build, builds the plugin, and publishes a GitHub release with `main.js`, `manifest.json`, `styles.css`, and `system-recorder` attached. (You can also trigger it manually via *Actions → Release → Run workflow*.)
+On an Apple-Silicon runner the workflow lints/tests, syncs `manifest.json` / `versions.json` to the tag, builds the Swift helper (and its `whisper` dylib), verifies both against the SHA-256 (and, for the dylib, the byte size) pinned in `src/binary.ts`, pins the helper's SHA into the build, builds the plugin, and publishes a GitHub release with `main.js`, `manifest.json`, `styles.css`, `system-recorder`, and `whisper` attached. (You can also trigger it manually via *Actions → Release → Run workflow*.)
 
 ## Attribution
 
