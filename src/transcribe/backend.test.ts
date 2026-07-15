@@ -76,6 +76,25 @@ describe("runJobsSequentially", () => {
 		expect(seen).toEqual([]);
 	});
 
+	it("abort wins over an early-bail request (the exact regression)", async () => {
+		// The regression: cancel during me + a would-be early-bail (e.g. a
+		// capability miss) must throw, NOT return early with the me result — the
+		// latter would let the diarized path reclassify a cancel as a capability
+		// miss and invalidate the probe.
+		const controller = new AbortController();
+		const req: TranscribeRequest = {
+			jobs: [job("me"), job("them")],
+			signal: controller.signal,
+			continueAfterJob: () => false, // wants to stop after me
+		};
+		await expect(
+			runJobsSequentially(req, async (j) => {
+				if (j.id === "me") controller.abort();
+				return { id: j.id, text: "" };
+			})
+		).rejects.toThrow(/aborted/i);
+	});
+
 	it("throws before starting a job when already aborted", async () => {
 		const controller = new AbortController();
 		controller.abort();

@@ -1,10 +1,11 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { TFile } from "obsidian";
 import { transcribeAudio, transcribeDiarized } from "./TranscriptionService";
-import type {
-	JobResult,
-	TranscribeRequest,
-	TranscriptionBackend,
+import {
+	runJobsSequentially,
+	type JobResult,
+	type TranscribeRequest,
+	type TranscriptionBackend,
 } from "./backend";
 import { initializeTranslations } from "./vendor/i18n/index";
 import en from "./vendor/i18n/translations/en";
@@ -30,9 +31,10 @@ function fakeFile(path: string): TFile {
 }
 
 /**
- * A backend that runs jobs sequentially exactly like the real one: it produces
- * a canned result per job id and honors `continueAfterJob`, so the early-bail
- * contract is exercised end to end. `ranJobs` records what actually ran.
+ * A backend that produces a canned result per job id. It delegates to the real
+ * `runJobsSequentially` so the orchestrator tests exercise the production loop
+ * (early-bail + abort ordering) rather than a re-implementation that could
+ * drift. `ranJobs` records what actually ran.
  */
 function sequentialBackend(
 	resultsById: Record<string, JobResult>
@@ -46,17 +48,10 @@ function sequentialBackend(
 		},
 		async transcribe(req: TranscribeRequest): Promise<JobResult[]> {
 			backend.lastRequest = req;
-			const out: JobResult[] = [];
-			for (let i = 0; i < req.jobs.length; i++) {
-				const job = req.jobs[i]!;
+			return runJobsSequentially(req, async (job) => {
 				backend.ranJobs.push(job.id);
-				const r = resultsById[job.id] ?? { id: job.id, text: "" };
-				out.push(r);
-				if (i < req.jobs.length - 1 && req.continueAfterJob && !req.continueAfterJob(r)) {
-					break;
-				}
-			}
-			return out;
+				return resultsById[job.id] ?? { id: job.id, text: "" };
+			});
 		},
 	};
 	return backend;
