@@ -242,6 +242,7 @@ export const en = {
 			empty: "No open action items.",
 			loading: "Scanning notes…",
 			taskMoved: "That task has changed in its note; refreshing.",
+			taskError: (msg: string) => `Couldn't complete the task: ${msg}`,
 		},
 	},
 	settings: {

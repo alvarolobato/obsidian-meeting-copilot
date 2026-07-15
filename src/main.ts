@@ -73,6 +73,7 @@ import {
 } from "./notes/dashboardMeetings";
 import {
     countTasks,
+    parseNoteTasks,
     sortActionNoteGroups,
     type ActionNoteGroup,
     type ActionTask,
@@ -300,7 +301,10 @@ export default class SystemRecordingPlugin extends Plugin {
         // the pipeline, rendered with per-row action buttons.
         this.registerMarkdownCodeBlockProcessor(
             ATTENTION_BLOCK_LANG,
-            (_src, el) => this.renderAttention(el)
+            (_src, el) => {
+                this.trackDashboardBlock(el, () => this.renderAttention(el));
+                this.renderAttention(el);
+            }
         );
 
         // "Upcoming"/"Past meetings" dashboard sections: paginated tables that
@@ -308,19 +312,50 @@ export default class SystemRecordingPlugin extends Plugin {
         // already loads (Dataview can't do that, nor interactive pagination).
         this.registerMarkdownCodeBlockProcessor(
             UPCOMING_BLOCK_LANG,
-            (_src, el) => void this.renderMeetingsSection(el, "upcoming")
+            (_src, el) => {
+                this.trackDashboardBlock(el, () =>
+                    void this.renderMeetingsSection(
+                        el,
+                        "upcoming",
+                        this.blockPage(el)
+                    )
+                );
+                void this.renderMeetingsSection(el, "upcoming");
+            }
         );
         this.registerMarkdownCodeBlockProcessor(
             PAST_BLOCK_LANG,
-            (_src, el) => void this.renderMeetingsSection(el, "past")
+            (_src, el) => {
+                this.trackDashboardBlock(el, () =>
+                    void this.renderMeetingsSection(
+                        el,
+                        "past",
+                        this.blockPage(el)
+                    )
+                );
+                void this.renderMeetingsSection(el, "past");
+            }
         );
 
         // "Open action items" dashboard section: open tasks from every note in
         // the vault, grouped by note (newest first), dense and paginated.
         this.registerMarkdownCodeBlockProcessor(
             ACTIONS_BLOCK_LANG,
-            (_src, el) => void this.renderActionItems(el)
+            (_src, el) => {
+                this.trackDashboardBlock(el, () =>
+                    void this.renderActionItems(el, this.blockPage(el), true)
+                );
+                void this.renderActionItems(el);
+            }
         );
+
+        // Keep the plugin-rendered dashboard sections live: when the vault or
+        // pipeline changes (recording, transcription, enrichment, note
+        // creation) re-render the tracked blocks in place — restoring the
+        // auto-updating the old Dataview tables had. Debounced; each block
+        // keeps the page the user was on (see blockPage), disconnected ones
+        // are pruned on the next pass.
+        this.agendaEvents.on("changed", () => this.scheduleDashboardRefresh());
 
         // Status bar
         this.statusBarEl = this.addStatusBarItem();
@@ -445,11 +480,18 @@ export default class SystemRecordingPlugin extends Plugin {
             window.clearTimeout(this.retentionTimeout);
             this.retentionTimeout = null;
         }
+        if (this.dashboardRefreshTimer !== null) {
+            window.clearTimeout(this.dashboardRefreshTimer);
+            this.dashboardRefreshTimer = null;
+        }
+        this.dashboardBlocks.clear();
 		this.statusHovered = false;
 		this.hideQueuePopover();
 		this.transcriptionQueue.cancelAll();
 		this.scheduler?.stop();
 		this.agendaEvents.clear();
+		for (const renderer of this.liveActionRenderers) renderer.unload();
+		this.liveActionRenderers.clear();
 		for (const notice of this.meetingNotices.values()) notice.hide();
 		this.meetingNotices.clear();
 		this.stopPromptNotice?.hide();
@@ -1775,6 +1817,7 @@ export default class SystemRecordingPlugin extends Plugin {
         force = false
     ): Promise<void> {
         const d = t().dashboard.meetings;
+        const seq = this.nextRenderSeq(el);
         const restoreScroll = this.preserveScroll(el);
         // Only clear up front on the very first paint (nothing to preserve).
         // On a refresh/page change we keep the old rows visible while the
@@ -1791,13 +1834,29 @@ export default class SystemRecordingPlugin extends Plugin {
         } catch {
             calendarError = true;
         }
+        // A newer render started while the calendar loaded — let it win.
+        if (this.renderSeq.get(el) !== seq) return;
 
         // Vault notes: any meeting note we own (`event_id`) or a legacy
-        // `meeting_url` note the dashboard has always listed. Keyed by event id
-        // when known so a calendar event with a note dedups against it below.
+        // `meeting_url` note the dashboard has always listed.
         const notesByPath = new Map<string, TFile>();
         const meetingsByKey = new Map<string, AgendaMeeting>();
         const inputs: DashboardMeetingInput[] = [];
+        // Collapse notes sharing a key (event id, or path for legacy url-only
+        // notes) to the most recently modified one, so a duplicated `event_id`
+        // (e.g. a sync-conflict copy) shows the meeting once, not twice.
+        const notedByKey = new Map<
+            string,
+            { input: DashboardMeetingInput; file: TFile; mtime: number }
+        >();
+        // Normalized meeting URLs of noted meetings, so a calendar event a
+        // legacy `meeting_url` note already covers (but which carries no
+        // matching `event_id`) isn't listed a second time below.
+        const notedUrls = new Set<string>();
+        const normalizeUrl = (v: unknown): string =>
+            typeof v === "string"
+                ? v.trim().replace(/\/+$/, "").toLowerCase()
+                : "";
         // One vault scan feeds both the noted-meeting inputs below and the
         // note index used to dedup calendar events (reused, not re-walked).
         const scanned = scanMeetingNotes(this.app);
@@ -1810,26 +1869,42 @@ export default class SystemRecordingPlugin extends Plugin {
                 typeof titleRaw === "string" && titleRaw
                     ? titleRaw
                     : entry.file.basename;
-            notesByPath.set(entry.file.path, entry.file);
-            inputs.push({
-                key: entry.eventId ?? entry.file.path,
-                title,
-                start: entry.stamp ? parseStampDate(entry.stamp) : null,
-                status: entry.status ?? "",
-                hasRecording: recordingLinkTarget(entry.recording) !== "",
-                notePath: entry.file.path,
+            const url = normalizeUrl(fm?.["meeting_url"]);
+            if (url) notedUrls.add(url);
+            const key = entry.eventId ?? entry.file.path;
+            const mtime = entry.file.stat?.mtime ?? 0;
+            const existing = notedByKey.get(key);
+            if (existing && existing.mtime >= mtime) continue;
+            notedByKey.set(key, {
+                input: {
+                    key,
+                    title,
+                    start: entry.stamp ? parseStampDate(entry.stamp) : null,
+                    status: entry.status ?? "",
+                    hasRecording: recordingLinkTarget(entry.recording) !== "",
+                    notePath: entry.file.path,
+                },
+                file: entry.file,
+                mtime,
             });
+        }
+        for (const { input, file } of notedByKey.values()) {
+            notesByPath.set(file.path, file);
+            inputs.push(input);
         }
 
         // Calendar events without a note yet — the enrichment. A timed event
         // whose note already exists is dropped here (the note row above
-        // represents it, with fresh state). All-day entries (OOO, birthdays)
+        // represents it, with fresh state), whether the match is by `event_id`
+        // or a legacy note's meeting URL. All-day entries (OOO, birthdays)
         // aren't meetings, so they're skipped.
         const index = buildNoteIndex(this.app, scanned);
         for (const ev of events) {
             if (ev.allDay) continue;
             const m = toAgendaMeeting(ev, index);
             if (m.note) continue;
+            const url = normalizeUrl(m.meetingUrl);
+            if (url && notedUrls.has(url)) continue;
             meetingsByKey.set(m.id, m);
             inputs.push({
                 key: m.id,
@@ -1848,6 +1923,8 @@ export default class SystemRecordingPlugin extends Plugin {
                 : this.settings.dashboardUpcomingPageSize
         );
         const view = paginate(rows, pageSize, page);
+        // Remember the page so an auto-refresh re-renders where the user is.
+        el.dataset.mcPage = String(view.page);
 
         el.empty();
 
@@ -2071,6 +2148,56 @@ export default class SystemRecordingPlugin extends Plugin {
     /** Per-action-items-block Component owning the current render's task markdown. */
     private actionRenderers: WeakMap<HTMLElement, Component> = new WeakMap();
 
+    /** Live action-item render Components, so `onunload` can tear them all down. */
+    private liveActionRenderers: Set<Component> = new Set();
+
+    /**
+     * Monotonic render id per dashboard block element. Async renders (calendar
+     * fetch, vault scan) capture the id at start and bail before mutating the
+     * DOM if a newer render superseded them — so fast paging/Refresh can't let
+     * a slow earlier pass overwrite the latest UI.
+     */
+    private renderSeq: WeakMap<HTMLElement, number> = new WeakMap();
+
+    /** Bumps and returns this element's render id. */
+    private nextRenderSeq(el: HTMLElement): number {
+        const seq = (this.renderSeq.get(el) ?? 0) + 1;
+        this.renderSeq.set(el, seq);
+        return seq;
+    }
+
+    /** Live dashboard block elements → their in-place re-render closure. */
+    private dashboardBlocks: Map<HTMLElement, () => void> = new Map();
+    private dashboardRefreshTimer: number | null = null;
+
+    /** Registers a dashboard block for auto-refresh on the next change. */
+    private trackDashboardBlock(el: HTMLElement, rerender: () => void): void {
+        this.dashboardBlocks.set(el, rerender);
+    }
+
+    /** The block's last-rendered (1-based) page, stashed on the element. */
+    private blockPage(el: HTMLElement): number {
+        const n = Number.parseInt(el.dataset.mcPage ?? "", 10);
+        return Number.isFinite(n) && n > 0 ? n : 1;
+    }
+
+    /** Debounced re-render of every connected dashboard block after a change. */
+    private scheduleDashboardRefresh(): void {
+        if (this.dashboardRefreshTimer !== null) {
+            window.clearTimeout(this.dashboardRefreshTimer);
+        }
+        this.dashboardRefreshTimer = window.setTimeout(() => {
+            this.dashboardRefreshTimer = null;
+            for (const [el, rerender] of this.dashboardBlocks) {
+                if (!el.isConnected) {
+                    this.dashboardBlocks.delete(el);
+                    continue;
+                }
+                rerender();
+            }
+        }, 400);
+    }
+
     /**
      * Short-lived cache of the (whole-vault, disk-read) action-items scan so
      * paging/page-size changes reuse it instead of re-reading every task note.
@@ -2107,6 +2234,7 @@ export default class SystemRecordingPlugin extends Plugin {
         force = false
     ): Promise<void> {
         const a = t().dashboard.actions;
+        const seq = this.nextRenderSeq(el);
         const restoreScroll = this.preserveScroll(el);
         // Keep the current list visible while (re)scanning; only show the
         // loading line on first paint. Emptying up front would collapse the
@@ -2116,10 +2244,14 @@ export default class SystemRecordingPlugin extends Plugin {
         }
 
         const groups = await this.scanActionGroups(force);
+        // A newer render started while scanning — let it win.
+        if (this.renderSeq.get(el) !== seq) return;
         const pageSize = normalizePageSize(
             this.settings.dashboardActionsPageSize
         );
         const view = paginate(groups, pageSize, page);
+        // Remember the page so an auto-refresh re-renders where the user is.
+        el.dataset.mcPage = String(view.page);
 
         // A short-lived child owns the tasks' rendered markdown so its
         // sub-views are torn down on the next render (or when the dashboard
@@ -2127,10 +2259,14 @@ export default class SystemRecordingPlugin extends Plugin {
         // Swapped in only now, right before rebuilding, so the previous
         // content stayed put during the scan above.
         const prevRenderer = this.actionRenderers.get(el);
-        if (prevRenderer) prevRenderer.unload();
+        if (prevRenderer) {
+            prevRenderer.unload();
+            this.liveActionRenderers.delete(prevRenderer);
+        }
         const renderer = new Component();
         renderer.load();
         this.actionRenderers.set(el, renderer);
+        this.liveActionRenderers.add(renderer);
 
         el.empty();
 
@@ -2209,9 +2345,23 @@ export default class SystemRecordingPlugin extends Plugin {
             } else {
                 cb.onclick = (): void => {
                     cb.disabled = true;
-                    void this.completeTask(group.path, task).then(() =>
-                        this.renderActionItems(sectionEl, page, true)
-                    );
+                    void (async (): Promise<void> => {
+                        try {
+                            await this.completeTask(group.path, task);
+                        } catch (e) {
+                            // Re-enable so the user can retry; the write failed
+                            // so the item is still open.
+                            cb.disabled = false;
+                            cb.checked = false;
+                            new Notice(
+                                t().dashboard.actions.taskError(
+                                    e instanceof Error ? e.message : String(e)
+                                )
+                            );
+                            return;
+                        }
+                        await this.renderActionItems(sectionEl, page, true);
+                    })();
                 };
             }
             const text = li.createSpan({ cls: "mc-action-task-text" });
@@ -2241,20 +2391,6 @@ export default class SystemRecordingPlugin extends Plugin {
      * of lingering with tasks pointing at a folder that no longer exists.
      */
     private async scanOpenTaskNotes(): Promise<ActionNoteGroup[]> {
-        const openTaskRe = /^\s*[-*+]\s+\[ \]/;
-        const doneTaskRe = /^\s*[-*+]\s+\[[xX]\]/;
-        const doneDateRe = /✅\s*(\d{4}-\d{2}-\d{2})/;
-        // Strip, in order: the list marker + checkbox, a trailing block
-        // reference (`^id`, which Obsidian pins to the very end — after the
-        // completion date), then the `✅ YYYY-MM-DD` completion date now left
-        // at the end. Doing the ref first means a task completed with a block
-        // ref shows neither the date nor the ref in the list.
-        const cleanTaskText = (raw: string): string =>
-            raw
-                .replace(/^\s*[-*+]\s+\[[^\]]\]\s*/, "")
-                .replace(/\s*\^[A-Za-z0-9-]+\s*$/, "")
-                .replace(/\s*✅\s*\d{4}-\d{2}-\d{2}\s*$/, "")
-                .trim();
         const today = this.todayStamp();
         const groups: ActionNoteGroup[] = [];
         for (const file of this.app.vault.getMarkdownFiles()) {
@@ -2273,31 +2409,7 @@ export default class SystemRecordingPlugin extends Plugin {
             } catch {
                 continue;
             }
-            const tasks: ActionTask[] = [];
-            content.split("\n").forEach((raw, line) => {
-                if (openTaskRe.test(raw)) {
-                    tasks.push({
-                        line,
-                        raw,
-                        text: cleanTaskText(raw),
-                        done: false,
-                    });
-                    return;
-                }
-                // A recently-completed task is kept until midnight of the day
-                // it was completed (its `✅ YYYY-MM-DD` date equals today).
-                if (doneTaskRe.test(raw)) {
-                    const m = raw.match(doneDateRe);
-                    if (m && m[1] === today) {
-                        tasks.push({
-                            line,
-                            raw,
-                            text: cleanTaskText(raw),
-                            done: true,
-                        });
-                    }
-                }
-            });
+            const tasks = parseNoteTasks(content, today);
             if (tasks.length === 0) continue;
 
             const fm = cache?.frontmatter as
@@ -4036,12 +4148,12 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /**
-     * Creates or refreshes a Dataview-powered meetings dashboard note. Only the
+     * Creates or refreshes the plugin-rendered meetings dashboard note. Only the
      * plugin-managed block between markers is rewritten, so user edits around it
      * survive re-runs.
      */
     private async createDashboard(): Promise<void> {
-        // Only decides where the dashboard *note* lives; the Dataview block
+        // Only decides where the dashboard *note* lives; the rendered block
         // itself is vault-wide (see buildDashboardBlock).
         const folder = templateStaticRoot(this.settings.oneOffFolderTemplate) || "Meetings";
         if (!(await this.app.vault.adapter.exists(folder))) {

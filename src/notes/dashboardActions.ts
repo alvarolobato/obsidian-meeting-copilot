@@ -55,3 +55,48 @@ export function countTasks(groups: ActionNoteGroup[]): number {
 		0
 	);
 }
+
+const OPEN_TASK_RE = /^\s*[-*+]\s+\[ \]/;
+const DONE_TASK_RE = /^\s*[-*+]\s+\[[xX]\]/;
+const DONE_DATE_RE = /✅\s*(\d{4}-\d{2}-\d{2})/;
+
+/**
+ * The display text for a task line, stripping — in order — the list marker +
+ * checkbox, a trailing block reference (`^id`, which Obsidian pins to the very
+ * end, after the completion date), then the `✅ YYYY-MM-DD` completion date now
+ * left at the end. Ref-first means a task completed with a block ref shows
+ * neither the date nor the ref in the list.
+ */
+export function cleanTaskText(raw: string): string {
+	return raw
+		.replace(/^\s*[-*+]\s+\[[^\]]\]\s*/, "")
+		.replace(/\s*\^[A-Za-z0-9-]+\s*$/, "")
+		.replace(/\s*✅\s*\d{4}-\d{2}-\d{2}\s*$/, "")
+		.trim();
+}
+
+/**
+ * Parses a note's body into action tasks: every open (`- [ ]`) task, plus any
+ * done (`- [x]`) task whose `✅ YYYY-MM-DD` completion date equals `todayStamp`
+ * — kept in its grace period until that day is over so a just-ticked item
+ * doesn't vanish. Pure/testable; the vault read happens in the plugin.
+ */
+export function parseNoteTasks(
+	content: string,
+	todayStamp: string
+): ActionTask[] {
+	const tasks: ActionTask[] = [];
+	content.split("\n").forEach((raw, line) => {
+		if (OPEN_TASK_RE.test(raw)) {
+			tasks.push({ line, raw, text: cleanTaskText(raw), done: false });
+			return;
+		}
+		if (DONE_TASK_RE.test(raw)) {
+			const m = raw.match(DONE_DATE_RE);
+			if (m && m[1] === todayStamp) {
+				tasks.push({ line, raw, text: cleanTaskText(raw), done: true });
+			}
+		}
+	});
+	return tasks;
+}

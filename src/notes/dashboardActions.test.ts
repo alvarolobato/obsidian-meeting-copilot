@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+	cleanTaskText,
 	countTasks,
+	parseNoteTasks,
 	sortActionNoteGroups,
 	type ActionNoteGroup,
 } from "./dashboardActions";
@@ -75,5 +77,69 @@ describe("countTasks", () => {
 				}),
 			])
 		).toBe(3);
+	});
+});
+
+describe("cleanTaskText", () => {
+	it("strips the list marker and checkbox", () => {
+		expect(cleanTaskText("- [ ] call Sam")).toBe("call Sam");
+		expect(cleanTaskText("  * [x] done thing")).toBe("done thing");
+	});
+
+	it("strips a trailing completion date", () => {
+		expect(cleanTaskText("- [x] ship it ✅ 2026-07-15")).toBe("ship it");
+	});
+
+	it("strips a completion date even when a block ref follows it", () => {
+		// appendCompletionDate inserts the date *before* a trailing `^id`.
+		expect(cleanTaskText("- [x] ship it ✅ 2026-07-15 ^abc123")).toBe(
+			"ship it"
+		);
+	});
+
+	it("strips a trailing block ref on an open task", () => {
+		expect(cleanTaskText("- [ ] review PR ^task-1")).toBe("review PR");
+	});
+
+	it("keeps inner text intact (links, emphasis)", () => {
+		expect(cleanTaskText("- [ ] ping **@Sam** re [[Notes]]")).toBe(
+			"ping **@Sam** re [[Notes]]"
+		);
+	});
+});
+
+describe("parseNoteTasks", () => {
+	const today = "2026-07-15";
+
+	it("collects open tasks with their line index and raw line", () => {
+		const body = ["# Title", "- [ ] first", "text", "- [ ] second"].join(
+			"\n"
+		);
+		const tasks = parseNoteTasks(body, today);
+		expect(tasks).toEqual([
+			{ line: 1, raw: "- [ ] first", text: "first", done: false },
+			{ line: 3, raw: "- [ ] second", text: "second", done: false },
+		]);
+	});
+
+	it("keeps a done task completed today, drops one completed earlier", () => {
+		const body = [
+			"- [x] today ✅ 2026-07-15",
+			"- [x] yesterday ✅ 2026-07-14",
+			"- [x] undated",
+		].join("\n");
+		const tasks = parseNoteTasks(body, today);
+		expect(tasks).toEqual([
+			{
+				line: 0,
+				raw: "- [x] today ✅ 2026-07-15",
+				text: "today",
+				done: true,
+			},
+		]);
+	});
+
+	it("returns nothing for a note without checkbox tasks", () => {
+		expect(parseNoteTasks("# just prose\n- a bullet", today)).toEqual([]);
 	});
 });
