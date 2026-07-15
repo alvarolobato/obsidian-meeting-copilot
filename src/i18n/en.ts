@@ -37,6 +37,10 @@ export const en = {
 	notices: {
 		autoRecordEnabled: "Calendar auto-recording enabled",
 		autoRecordDisabled: "Calendar auto-recording disabled",
+		// One-time tip shown the first time a meeting notification fires.
+		notificationStyleHint:
+			"Tip: set Obsidian to “Alerts” in macOS notification settings so meeting notifications stay on screen (with buttons) instead of vanishing after a few seconds.",
+		openNotificationSettings: "Open settings",
 		recordingError: (msg: string) => `Recording error: ${msg}`,
 		screenPermission:
 			"Recording failed: Screen Recording isn't authorized. Opening System Settings → Privacy & Security → Screen Recording — enable Obsidian there, then fully quit and reopen it. (macOS requires this for capturing system audio.)",
@@ -333,6 +337,12 @@ export const en = {
 		agendaLookBack: {
 			name: "Agenda look-back (days)",
 			desc: "How many past days you can navigate back to in the agenda (0–30).",
+		},
+		notificationsHeading: "Notifications (macOS)",
+		notificationStyle: {
+			name: "Keep notifications on screen",
+			desc: "macOS decides whether a notification stays until dismissed (Alerts) or disappears after a few seconds (Banners) — apps can't set this for you. For meeting notifications that stay put and show their action buttons as a default button + dropdown, set Obsidian to “Alerts” in System Settings → Notifications → Obsidian.",
+			button: "Open macOS notification settings",
 		},
 		detectionHeading: "Meeting detection (macOS)",
 		detectMeetings: {

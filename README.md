@@ -87,7 +87,7 @@ In *Settings → Meeting Copilot → AI enrichment*, enable enrichment, then cli
 
 The plugin posts native notifications with action buttons, but macOS controls how they're presented:
 
-- For the **Granola-style default button + dropdown of secondary actions**, set Obsidian to the **Alerts** style: **System Settings → Notifications → Obsidian → "Alerts"**. In the default **Banners** style, macOS collapses the extra actions under a single **"Options"** affordance.
+- For **notifications that stay on screen until you dismiss them** — and show the **Granola-style default button + dropdown of secondary actions** — set Obsidian to the **Alerts** style: **System Settings → Notifications → Obsidian → "Alerts"** (there's a shortcut button in the plugin's **Notifications** settings). In the default **Banners** style macOS auto-dismisses notifications after a few seconds and collapses the extra actions under a single **"Options"** affordance. macOS doesn't let an app choose this for you.
 - Under **Focus / Do Not Disturb**, macOS suppresses banners and routes notifications straight to Notification Center — they'll be waiting there rather than popping up. Allow Obsidian through your Focus filter to see them live.
 
 ## Settings

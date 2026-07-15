@@ -1092,7 +1092,12 @@ export default class SystemRecordingPlugin extends Plugin {
 			webHint: opts.webHint,
 			onClick: opts.onClick,
 			actions: opts.actions,
-			onShown: () => inner.osShown(),
+			onShown: () => {
+				inner.osShown();
+				// A system notification actually reached the screen — a good moment
+				// to teach (once) how to make them persist with buttons.
+				this.maybeShowNotificationStyleHint();
+			},
 			onFailed: () => inner.osFailed(),
 		});
 		return {
@@ -1104,6 +1109,38 @@ export default class SystemRecordingPlugin extends Plugin {
 				handle.close();
 			},
 		};
+	}
+
+	/**
+	 * Opens macOS System Settings at the Notifications pane. macOS won't let an
+	 * app choose Banners vs Alerts, so this is the one-click path to the setting
+	 * users need for notifications that persist (and show their action buttons).
+	 */
+	openMacNotificationSettings(): void {
+		execFile(
+			"open",
+			["x-apple.systempreferences:com.apple.Notifications-Settings.extension"],
+			() => undefined
+		);
+	}
+
+	/**
+	 * One-time onboarding tip: the first time a meeting notification is shown,
+	 * point the user at the macOS "Alerts" style so notifications stay on screen
+	 * (with their buttons) instead of auto-dismissing. Never nags again.
+	 */
+	private maybeShowNotificationStyleHint(): void {
+		if (this.settings.notificationStyleHintShown) return;
+		this.settings.notificationStyleHintShown = true;
+		void this.saveSettings();
+		multiActionNotice(t().notices.notificationStyleHint, [
+			{
+				label: t().notices.openNotificationSettings,
+				onClick: () => this.openMacNotificationSettings(),
+				cta: true,
+			},
+			{ label: t().event.dismiss, onClick: () => undefined },
+		]);
 	}
 
 	/**
