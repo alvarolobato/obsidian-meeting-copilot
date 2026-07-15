@@ -537,6 +537,10 @@ export default class SystemRecordingPlugin extends Plugin {
 
 	/** One-shot startup dump so "no notifications" reports have concrete context. */
 	private logNotificationEnvironment(): void {
+		// Skip the probing entirely when tracing is off — `notifLog` would drop it
+		// anyway, so there's no reason to compute focus state or poke the (flaky)
+		// Electron seam on every startup.
+		if (!notifDebugEnabled()) return;
 		let remoteAvailable = false;
 		try {
 			const req = (window as unknown as { require?: (id: string) => unknown })
