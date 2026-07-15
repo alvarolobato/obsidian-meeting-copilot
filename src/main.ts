@@ -55,9 +55,20 @@ import { normalizeManualNotes } from "./notes/manualNotes";
 import {
     ATTENTION_BLOCK_LANG,
     buildDashboardBlock,
+    PAST_BLOCK_LANG,
+    UPCOMING_BLOCK_LANG,
     withDashboardBlock,
 } from "./notes/dashboard";
 import { computeAttention, type AttentionInput } from "./notes/attention";
+import {
+    meetingRows,
+    type MeetingDirection,
+    normalizePageSize,
+    PAGE_SIZE_OPTIONS,
+    paginate,
+    type DashboardMeetingInput,
+} from "./notes/dashboardMeetings";
+import type { GCalEvent } from "./calendar/googleCalendar";
 import { findExpiredRecordings, underFolder } from "./recordings/retention";
 
 /** Note section that holds action-item checkboxes (obsidian-tasks compatible). */
@@ -281,6 +292,18 @@ export default class SystemRecordingPlugin extends Plugin {
         this.registerMarkdownCodeBlockProcessor(
             ATTENTION_BLOCK_LANG,
             (_src, el) => this.renderAttention(el)
+        );
+
+        // "Upcoming"/"Past meetings" dashboard sections: paginated tables that
+        // merge the vault's meeting notes with the calendar events the agenda
+        // already loads (Dataview can't do that, nor interactive pagination).
+        this.registerMarkdownCodeBlockProcessor(
+            UPCOMING_BLOCK_LANG,
+            (_src, el) => void this.renderMeetingsSection(el, "upcoming")
+        );
+        this.registerMarkdownCodeBlockProcessor(
+            PAST_BLOCK_LANG,
+            (_src, el) => void this.renderMeetingsSection(el, "past")
         );
 
         // Status bar
@@ -1639,6 +1662,274 @@ export default class SystemRecordingPlugin extends Plugin {
             }
             const enBtn = actTd.createEl("button", { text: acts.enrich });
             enBtn.onclick = (): void => void this.enrichMeetingNote(file);
+        }
+    }
+
+    /**
+     * Fetches the calendar events for the dashboard's Upcoming/Past tables,
+     * over the *same* window the agenda sidebar uses (look-back/look-ahead
+     * days), and caches the raw events briefly so the two blocks — and repeated
+     * re-renders from paging/refresh — share a single request. Note/recording
+     * state is intentionally *not* cached: each render re-derives it from the
+     * vault, so creating a note updates both tables without a refetch. Returns
+     * `[]` (no throw) when the calendar isn't connected, so the tables still
+     * show vault notes. `force` bypasses the TTL (the Refresh button).
+     */
+    private dashboardEventsCache: { at: number; events: GCalEvent[] } | null =
+        null;
+    private dashboardEventsInFlight: Promise<GCalEvent[]> | null = null;
+    private async loadDashboardEvents(force = false): Promise<GCalEvent[]> {
+        if (!this.isCalendarAuthenticated()) return [];
+        const TTL_MS = 60_000;
+        const now = Date.now();
+        if (
+            !force &&
+            this.dashboardEventsCache &&
+            now - this.dashboardEventsCache.at < TTL_MS
+        ) {
+            return this.dashboardEventsCache.events;
+        }
+        if (!force && this.dashboardEventsInFlight) {
+            return this.dashboardEventsInFlight;
+        }
+        const dayMs = 24 * 60 * 60 * 1000;
+        const lookAhead = Math.max(1, this.settings.agendaLookAheadDays);
+        const lookBack = Math.max(
+            0,
+            Math.min(30, this.settings.agendaLookBackDays)
+        );
+        const startOfToday = new Date();
+        startOfToday.setHours(0, 0, 0, 0);
+        const from = new Date(startOfToday.getTime() - lookBack * dayMs);
+        const to = new Date(startOfToday.getTime() + lookAhead * dayMs);
+        const p = listEvents(
+            this.oauth,
+            this.settings.calendarId,
+            from,
+            to,
+            250,
+            parseKeywords(this.settings.exclusionKeywords)
+        )
+            .then((events) => {
+                this.dashboardEventsCache = { at: Date.now(), events };
+                return events;
+            })
+            .finally(() => {
+                this.dashboardEventsInFlight = null;
+            });
+        this.dashboardEventsInFlight = p;
+        return p;
+    }
+
+    /**
+     * Renders one of the dashboard's paginated meeting tables. It merges the
+     * vault's meeting notes with the calendar events the agenda already loads
+     * ({@link loadDashboardEvents}), so a scheduled meeting shows up before its
+     * note exists: those rows aren't links and carry a "create note" action,
+     * while noted rows link to the note. `direction` picks the bucket (upcoming
+     * = `start >= now`, soonest first; past = newest first) and its persisted
+     * per-page size (10/20/50/100). `page` is 1-based; the controls re-render
+     * this same element. `force` re-fetches the calendar (the Refresh button).
+     */
+    private async renderMeetingsSection(
+        el: HTMLElement,
+        direction: MeetingDirection,
+        page = 1,
+        force = false
+    ): Promise<void> {
+        const d = t().dashboard.meetings;
+        el.empty();
+        if (this.isCalendarAuthenticated()) {
+            el.createEl("p", { text: d.loading, cls: "mc-meetings-loading" });
+        }
+
+        let events: GCalEvent[] = [];
+        let calendarError = false;
+        try {
+            events = await this.loadDashboardEvents(force);
+        } catch {
+            calendarError = true;
+        }
+
+        // Vault notes: any meeting note we own (`event_id`) or a legacy
+        // `meeting_url` note the dashboard has always listed. Keyed by event id
+        // when known so a calendar event with a note dedups against it below.
+        const notesByPath = new Map<string, TFile>();
+        const meetingsByKey = new Map<string, AgendaMeeting>();
+        const inputs: DashboardMeetingInput[] = [];
+        for (const entry of scanMeetingNotes(this.app)) {
+            if (entry.eventId === null && !entry.hasMeetingUrl) continue;
+            const fm = this.app.metadataCache.getFileCache(entry.file)
+                ?.frontmatter as Record<string, unknown> | undefined;
+            const titleRaw = fm?.["title"];
+            const title =
+                typeof titleRaw === "string" && titleRaw
+                    ? titleRaw
+                    : entry.file.basename;
+            notesByPath.set(entry.file.path, entry.file);
+            inputs.push({
+                key: entry.eventId ?? entry.file.path,
+                title,
+                start: entry.stamp ? parseStampDate(entry.stamp) : null,
+                status: entry.status ?? "",
+                hasRecording: recordingLinkTarget(entry.recording) !== "",
+                notePath: entry.file.path,
+            });
+        }
+
+        // Calendar events without a note yet — the enrichment. A timed event
+        // whose note already exists is dropped here (the note row above
+        // represents it, with fresh state). All-day entries (OOO, birthdays)
+        // aren't meetings, so they're skipped.
+        const index = buildNoteIndex(this.app);
+        for (const ev of events) {
+            if (ev.allDay) continue;
+            const m = toAgendaMeeting(ev, index);
+            if (m.note) continue;
+            meetingsByKey.set(m.id, m);
+            inputs.push({
+                key: m.id,
+                title: m.title,
+                start: m.start,
+                status: "",
+                hasRecording: false,
+                notePath: null,
+            });
+        }
+
+        const rows = meetingRows(inputs, new Date(), direction);
+        const pageSize = normalizePageSize(
+            direction === "past"
+                ? this.settings.dashboardPastPageSize
+                : this.settings.dashboardUpcomingPageSize
+        );
+        const view = paginate(rows, pageSize, page);
+
+        el.empty();
+
+        const header = el.createDiv({ cls: "mc-meetings-header" });
+        header.createSpan({
+            text:
+                direction === "past"
+                    ? d.pastCount(view.total)
+                    : d.upcomingCount(view.total),
+        });
+        const controls = header.createDiv({ cls: "mc-meetings-controls" });
+        controls.createSpan({ text: d.perPage });
+        const select = controls.createEl("select", { cls: "dropdown" });
+        for (const opt of PAGE_SIZE_OPTIONS) {
+            select.createEl("option", {
+                text: String(opt),
+                value: String(opt),
+            });
+        }
+        select.value = String(pageSize);
+        select.onchange = (): void => {
+            const chosen = normalizePageSize(Number(select.value));
+            if (direction === "past") {
+                this.settings.dashboardPastPageSize = chosen;
+            } else {
+                this.settings.dashboardUpcomingPageSize = chosen;
+            }
+            void this.saveSettings();
+            // A different page size shifts every boundary; start over at page 1.
+            void this.renderMeetingsSection(el, direction, 1);
+        };
+        const refresh = controls.createEl("button", { text: d.refresh });
+        refresh.onclick = (): void =>
+            void this.renderMeetingsSection(el, direction, view.page, true);
+
+        if (calendarError) {
+            el.createEl("p", {
+                text: d.calendarError,
+                cls: "mc-meetings-error",
+            });
+        }
+
+        if (view.total === 0) {
+            el.createEl("p", {
+                text: direction === "past" ? d.pastEmpty : d.upcomingEmpty,
+                cls: "mc-meetings-empty",
+            });
+            return;
+        }
+
+        const table = el.createEl("table", { cls: "mc-meetings" });
+        const head = table.createEl("thead").createEl("tr");
+        for (const h of [
+            d.colMeeting,
+            d.colDate,
+            d.colStatus,
+            d.colRec,
+            d.colActions,
+        ]) {
+            head.createEl("th", { text: h });
+        }
+        const body = table.createEl("tbody");
+        const pad = (n: number): string => String(n).padStart(2, "0");
+        const fmtDate = (dt: Date): string =>
+            `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(
+                dt.getDate()
+            )} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+
+        for (const row of view.rows) {
+            const tr = body.createEl("tr");
+            const nameTd = tr.createEl("td");
+            const file = row.notePath ? notesByPath.get(row.notePath) : null;
+            if (file) {
+                const link = nameTd.createEl("a", {
+                    text: row.title,
+                    cls: "internal-link",
+                });
+                link.onclick = (e): void => {
+                    e.preventDefault();
+                    this.openFileInTab(file);
+                };
+            } else {
+                // No note yet: plain (non-link) title, explicitly marked, so
+                // it's clear this row isn't backed by a note.
+                nameTd.createSpan({
+                    text: row.title,
+                    cls: "mc-meeting-nonote",
+                });
+            }
+
+            tr.createEl("td", { text: fmtDate(row.start) });
+            tr.createEl("td", {
+                text: row.notePath ? row.status : d.noNote,
+            });
+            tr.createEl("td", { text: row.hasRecording ? "🎙️" : "" });
+
+            const actTd = tr.createEl("td", { cls: "mc-meetings-actions" });
+            const meeting = meetingsByKey.get(row.key);
+            if (!row.notePath && meeting) {
+                const create = actTd.createEl("a", {
+                    text: d.createNote,
+                    cls: "mc-create-note",
+                });
+                create.onclick = (e): void => {
+                    e.preventDefault();
+                    void this.createNoteOnly(meeting).then(() =>
+                        this.renderMeetingsSection(el, direction, view.page)
+                    );
+                };
+            }
+        }
+
+        if (view.pageCount > 1) {
+            const nav = el.createDiv({ cls: "mc-pagination" });
+            const prev = nav.createEl("button", { text: d.prev });
+            prev.disabled = view.page <= 1;
+            prev.onclick = (): void =>
+                void this.renderMeetingsSection(el, direction, view.page - 1);
+            nav.createSpan({
+                cls: "mc-pagination-status",
+                text: d.pageOf(view.page, view.pageCount),
+            });
+            const next = nav.createEl("button", { text: d.next });
+            next.disabled = view.page >= view.pageCount;
+            next.onclick = (): void =>
+                void this.renderMeetingsSection(el, direction, view.page + 1);
         }
     }
 

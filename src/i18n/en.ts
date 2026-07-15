@@ -211,6 +211,29 @@ export const en = {
 				summary: "summary",
 			},
 		},
+		meetings: {
+			upcomingCount: (n: number) =>
+				`${n} upcoming meeting${n === 1 ? "" : "s"}`,
+			pastCount: (n: number) =>
+				`${n} past meeting${n === 1 ? "" : "s"}`,
+			upcomingEmpty: "No upcoming meetings.",
+			pastEmpty: "No past meetings yet.",
+			loading: "Loading calendar…",
+			calendarError: "Couldn't load calendar meetings; showing notes only.",
+			refresh: "Refresh",
+			perPage: "Per page",
+			colMeeting: "Meeting",
+			colDate: "Date",
+			colStatus: "Status",
+			colRec: "Rec",
+			colActions: "Actions",
+			noNote: "No note",
+			createNote: "Create note",
+			prev: "Previous",
+			next: "Next",
+			pageOf: (current: number, total: number) =>
+				`Page ${current} of ${total}`,
+		},
 	},
 	settings: {
 		compressedRecordings: {

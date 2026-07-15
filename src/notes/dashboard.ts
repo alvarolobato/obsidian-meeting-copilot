@@ -5,51 +5,37 @@ export const DASHBOARD_END = "%% /meeting-copilot:dashboard %%";
 /** Fenced code-block language rendered by the plugin's "Needs attention" processor. */
 export const ATTENTION_BLOCK_LANG = "meeting-copilot-attention";
 
+/** Fenced code-block language rendered by the plugin's paginated "Upcoming meetings" processor. */
+export const UPCOMING_BLOCK_LANG = "meeting-copilot-upcoming";
+
+/** Fenced code-block language rendered by the plugin's paginated "Past meetings" processor. */
+export const PAST_BLOCK_LANG = "meeting-copilot-past";
+
 /**
- * Builds the managed Dataview block (upcoming / past meetings + open action
- * items). Deliberately vault-wide — no `FROM` — since meeting notes can live
- * under any of several folders (per-series, per-1:1, ad-hoc, or wherever the
- * user moved them); scoping to one folder would miss most of them. Queries
- * match `event_id` (plugin-owned) or `meeting_url` (legacy/manual meeting
- * notes the pre-template dashboard also listed). The task query reads the
- * fields via `file.frontmatter` because tasks stopped inheriting page fields
- * in newer Dataview releases. Pure so it can be tested without a vault.
+ * Builds the managed dashboard block. "Upcoming meetings" and "Past meetings"
+ * are plugin-rendered blocks (not Dataview): each merges the vault's meeting
+ * notes with the calendar events the agenda already loads, so meetings without
+ * a note yet still appear (with a "create note" action), and each offers a
+ * per-page dropdown + pagination — none of which a Dataview `TABLE` can do.
+ * "Open action items" stays on Dataview (a vault-wide task query, gated to
+ * meeting notes by `event_id`/`meeting_url`; it reads the fields via
+ * `file.frontmatter` because tasks stopped inheriting page fields in newer
+ * Dataview releases). "Needs attention" is likewise plugin-rendered. Pure so it
+ * can be tested without a vault.
  */
 export function buildDashboardBlock(): string {
-	// Two Dataview gotchas govern the upcoming/past split:
-	//
-	// 1. The current instant is the literal `date(now)` — a bare `now` is NOT a
-	//    keyword, so Dataview reads it as the (missing) field `now` = null.
-	//    `date(start) >= null` is true for *every* row under Dataview's
-	//    cross-type/null ordering, so a bare `now` dumped all past meetings into
-	//    "Upcoming" and left "Past" empty. `date(now)` includes the time (unlike
-	//    `date(today)`, which is midnight), so same-day meetings that already
-	//    ended correctly fall under Past.
-	// 2. `start` is wrapped in `date()` everywhere it's compared, sorted, or
-	//    rendered. The frontmatter value is a local ISO stamp (e.g.
-	//    "2026-07-14T05:00:15"); `date()` forces the parse so the comparison is
-	//    chronological, and is a no-op when Dataview already coerced it. The
-	//    leading `date(start)` truthiness check drops meeting notes that have no
-	//    `start` at all (some legacy `meeting_url` notes) so a null start can't
-	//    be miscategorised into either bucket.
-	const cols =
-		"TABLE WITHOUT ID file.link AS Meeting, " +
-		'dateformat(date(start), "yyyy-MM-dd HH:mm") AS Date, status AS Status, ' +
-		'choice(recording, "🎙️", "") AS Rec';
 	return [
 		DASHBOARD_START,
 		"## Upcoming meetings",
-		"```dataview",
-		cols,
-		"WHERE (event_id OR meeting_url) AND date(start) AND date(start) >= date(now)",
-		"SORT date(start) ASC",
+		// Rendered by the plugin: calendar events + noted meetings, soonest
+		// first, with a per-page dropdown and pagination.
+		"```" + UPCOMING_BLOCK_LANG,
 		"```",
 		"",
 		"## Past meetings",
-		"```dataview",
-		cols,
-		"WHERE (event_id OR meeting_url) AND date(start) AND date(start) < date(now)",
-		"SORT date(start) DESC",
+		// Rendered by the plugin: calendar events + noted meetings, newest
+		// first, with a per-page dropdown and pagination.
+		"```" + PAST_BLOCK_LANG,
 		"```",
 		"",
 		"## Open action items",

@@ -281,6 +281,79 @@ table.mc-attention td {
 }
 
 /* =========================================================================
+ * "Upcoming"/"Past meetings" dashboard sections (rendered by the plugin,
+ * calendar-enriched and paginated).
+ * ====================================================================== */
+.mc-meetings-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--size-4-2);
+    margin-bottom: var(--size-4-2);
+}
+
+.mc-meetings-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--size-2-3);
+}
+
+.mc-meetings-empty,
+.mc-meetings-loading {
+    color: var(--text-muted);
+}
+
+.mc-meetings-error {
+    color: var(--text-error);
+}
+
+table.mc-meetings {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+table.mc-meetings th,
+table.mc-meetings td {
+    text-align: left;
+    padding: var(--size-2-2) var(--size-4-2);
+    border-bottom: 1px solid var(--background-modifier-border);
+    vertical-align: middle;
+}
+
+/* No-note rows: muted, non-link title with a "create note" action. */
+.mc-meeting-nonote {
+    color: var(--text-muted);
+}
+
+.mc-meetings-actions {
+    white-space: nowrap;
+}
+
+.mc-create-note {
+    cursor: pointer;
+    color: var(--text-accent);
+    font-size: var(--font-ui-smaller);
+}
+
+.mc-create-note:hover {
+    text-decoration: underline;
+}
+
+.mc-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--size-4-2);
+    margin-top: var(--size-4-2);
+}
+
+.mc-pagination-status {
+    color: var(--text-muted);
+    font-size: var(--font-ui-smaller);
+}
+
+/* =========================================================================
  * Meeting agenda sidebar view.
  * Portions adapted from obsidian-meetings-plus (0BSD):
  * https://github.com/jabaho9523/obsidian-meetings-plus — see THIRD_PARTY_NOTICES.md.
