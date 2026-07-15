@@ -1112,22 +1112,18 @@ export default class SystemRecordingPlugin extends Plugin {
 	}
 
 	/**
-	 * Opens macOS System Settings at Obsidian's Notifications row. macOS won't let
-	 * an app choose Banners vs Alerts, so this is the one-click path to the
-	 * setting users need for notifications that persist (and show their action
-	 * buttons). The `?id=` deep-links to Obsidian's row where supported and
-	 * harmlessly falls back to the Notifications pane otherwise.
+	 * Opens macOS System Settings at the Notifications pane. macOS won't let an
+	 * app change these for you, so this is the one-click path to the two settings
+	 * meeting prompts need: the global "Allow notifications when mirroring or
+	 * sharing the display" toggle (so they appear *while recording* instead of
+	 * landing silently in Notification Center) and Obsidian's row set to "Alerts"
+	 * (so they persist on screen with a button). Both live on this pane.
 	 */
 	openMacNotificationSettings(): void {
 		if (!Platform.isMacOS) return;
 		execFile(
 			"open",
-			[
-				// `md.obsidian` is Obsidian's macOS bundle identifier (deep-links to
-				// its Notifications row), not the vault config folder.
-				// eslint-disable-next-line obsidianmd/hardcoded-config-path
-				"x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=md.obsidian",
-			],
+			["x-apple.systempreferences:com.apple.Notifications-Settings.extension"],
 			(err) => {
 				if (err)
 					console.warn("Failed to open Notification settings", err);
@@ -1248,9 +1244,10 @@ export default class SystemRecordingPlugin extends Plugin {
 
 		// Action order mirrors the modal / Granola: a combined primary (Join &
 		// record) when there's a link — else Record — then Join, then Open note.
-		// The first action is the OS notification's default button; the rest live
-		// under its dropdown. The combined action is the record path when a link
-		// exists, so no separate Record button is needed there.
+		// Only the first becomes the OS notification's button (see below); the
+		// full set stays in the in-app notice and the modal. The combined action
+		// is the record path when a link exists, so no separate Record button is
+		// needed there.
 		const e = t().event;
 		const actions: NoticeAction[] = [];
 		if (onJoinAndRecord) {
@@ -1292,7 +1289,14 @@ export default class SystemRecordingPlugin extends Plugin {
 				body: opts.subtitle,
 				webHint: e.notificationWebHint,
 				onClick: openModal,
-				actions: actions.map((a) => ({ text: a.label, run: a.onClick })),
+				// macOS/Electron renders a *single* action as a named inline
+				// button but collapses two-or-more into a generic "Options ▾"
+				// dropdown. Users want the named default button, so the OS
+				// notification carries only the primary action; the rest stay one
+				// tap away via the body click (modal) and the in-app fallback.
+				actions: actions
+					.slice(0, 1)
+					.map((a) => ({ text: a.label, run: a.onClick })),
 				// The in-app multi-action notice is the fallback for when the OS
 				// notification isn't confirmed on screen.
 				showInApp: () =>

@@ -39,7 +39,7 @@ export const en = {
 		autoRecordDisabled: "Calendar auto-recording disabled",
 		// One-time tip shown the first time a meeting notification fires.
 		notificationStyleHint:
-			"Tip: set Obsidian to “Alerts” in macOS notification settings so meeting notifications stay on screen (with buttons) instead of vanishing after a few seconds.",
+			"Tip: macOS hides notifications while you record. In notification settings, turn on “Allow notifications when mirroring or sharing the display” and set Obsidian to “Alerts”, so meeting prompts appear on screen (with a button) instead of only in Notification Center.",
 		openNotificationSettings: "Open settings",
 		recordingError: (msg: string) => `Recording error: ${msg}`,
 		screenPermission:
@@ -340,8 +340,8 @@ export const en = {
 		},
 		notificationsHeading: "Notifications (macOS)",
 		notificationStyle: {
-			name: "Keep notifications on screen",
-			desc: "macOS decides whether a notification stays until dismissed (Alerts) or disappears after a few seconds (Banners) — apps can't set this for you. For meeting notifications that stay put and show their action buttons as a default button + dropdown, set Obsidian to “Alerts” in System Settings → Notifications → Obsidian.",
+			name: "Notifications while recording",
+			desc: "macOS hides notification banners while the screen is being captured, so meeting prompts can land silently in Notification Center while you're recording. Apps can't override this. In System Settings → Notifications, turn on “Allow notifications when mirroring or sharing the display”, and set Obsidian to “Alerts” so prompts stay on screen with their action button.",
 			button: "Open macOS notification settings",
 		},
 		detectionHeading: "Meeting detection (macOS)",

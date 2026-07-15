@@ -3,9 +3,11 @@
  * invisible when Obsidian is minimized or on another Space.
  *
  * We prefer Electron's **main-process** `Notification` (reached from the
- * renderer via `electron.remote`), because it's the only path that can render
- * macOS **action buttons** — the first is the default (inline in the *Alerts*
- * notification style), the rest under the notification's dropdown ("Options").
+ * renderer via `electron.remote`), because it's the only path that can render a
+ * macOS **action button**. macOS/Electron shows a *single* action as a named
+ * inline button (in the *Alerts* notification style) but collapses two-or-more
+ * into a generic "Options ▾" dropdown, so callers that want the named default
+ * button pass just the primary action.
  * When `remote` isn't exposed (older/newer Obsidian) or a notification can't be
  * shown that way, we fall back to the renderer's **web Notifications API**,
  * which shows a plain banner (title + body, no buttons) whose click still opens

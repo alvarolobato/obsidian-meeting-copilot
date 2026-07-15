@@ -80,15 +80,16 @@ In *Settings → Meeting Copilot → AI enrichment*, enable enrichment, then cli
 
 - Click the microphone icon in the left ribbon to start/stop an ad-hoc recording.
 - Open the **meeting agenda** sidebar to create a note + record, transcribe, enrich, or join a meeting for any calendar event.
-- When a calendar meeting starts (or ends while recording), you get a **native macOS notification** — visible even when Obsidian is minimized or on another Space — with action buttons (*Join & record* / *Record* / *Open note* / *Stop recording*). Clicking the notification body opens the in-app prompt. When Obsidian is in the foreground and the system notification isn't shown, the same choices appear as an in-app notice instead (never both).
+- When a calendar meeting starts (or ends while recording), you get a **native macOS notification** — visible even when Obsidian is minimized or on another Space — with a primary action button (*Join & record* / *Record* / *Stop recording*). Clicking the notification body opens the in-app prompt with the full set of choices (*Join*, *Open note*, …). When Obsidian is in the foreground and the system notification isn't shown, those choices appear as an in-app notice instead (never both).
 - Right-click a meeting note (or use the editor menu) to run the same actions — transcribe, enrich, open recording, join link.
 
 ### Getting the best notifications on macOS
 
-The plugin posts native notifications with action buttons, but macOS controls how they're presented:
+The plugin posts native notifications with an action button, but macOS controls how they're presented. There's a shortcut button in the plugin's **Notifications** settings that opens the right pane. macOS doesn't let an app change any of these for you:
 
-- For **notifications that stay on screen until you dismiss them** — and show the **Granola-style default button + dropdown of secondary actions** — set Obsidian to the **Alerts** style: **System Settings → Notifications → Obsidian → "Alerts"** (there's a shortcut button in the plugin's **Notifications** settings). In the default **Banners** style macOS auto-dismisses notifications after a few seconds and collapses the extra actions under a single **"Options"** affordance. macOS doesn't let an app choose this for you.
-- Under **Focus / Do Not Disturb**, macOS suppresses banners and routes notifications straight to Notification Center — they'll be waiting there rather than popping up. Allow Obsidian through your Focus filter to see them live.
+- **See notifications while recording.** macOS hides banners whenever the screen is being captured — and this plugin records the screen, so prompts (especially *Stop recording*) can land silently in Notification Center. Turn on **System Settings → Notifications → "Allow notifications when mirroring or sharing the display"** (off by default) so they appear live while you record.
+- **Make them stay on screen with a button.** Set Obsidian to the **Alerts** style (**System Settings → Notifications → Obsidian → "Alerts"**). In the default **Banners** style macOS auto-dismisses notifications after a few seconds and collapses actions under an **"Options"** affordance. Note: macOS/Electron can only show **one** notification action as a named button (the primary — e.g. *Join & record*); the remaining choices open when you click the notification body.
+- **Focus / Do Not Disturb** also suppresses banners and routes notifications straight to Notification Center — allow Obsidian through your Focus filter to see them live.
 
 ## Settings
 
