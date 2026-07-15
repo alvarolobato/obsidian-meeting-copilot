@@ -60,6 +60,10 @@ export function startDualChannelPrompt(
 	let timer: number | null = null;
 	// Once the OS notification's fate is known we stop reacting to the timer.
 	let settled = false;
+	// The user explicitly asked for the in-app prompt (clicked the OS body), so a
+	// later OS `show` confirmation must not silently hide it.
+	let forced = false;
+	let disposed = false;
 
 	const cancelTimer = (): void => {
 		if (timer !== null) {
@@ -93,8 +97,9 @@ export function startDualChannelPrompt(
 			settled = true;
 			cancelTimer();
 			// If the fallback already slipped in (OS confirmed late), hide it so
-			// only the system notification remains — no duplicate.
-			hideInApp();
+			// only the system notification remains — no duplicate. But never hide
+			// a notice the user explicitly asked for via `forceInApp`.
+			if (!forced) hideInApp();
 		},
 		osFailed(): void {
 			if (settled) return;
@@ -103,9 +108,13 @@ export function startDualChannelPrompt(
 			showInAppOnce();
 		},
 		forceInApp(): void {
+			// A late click on a superseded/handled prompt must not resurrect it.
+			if (disposed) return;
+			forced = true;
 			showInAppOnce();
 		},
 		dispose(): void {
+			disposed = true;
 			settled = true;
 			cancelTimer();
 			hideInApp();

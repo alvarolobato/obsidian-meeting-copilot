@@ -210,4 +210,34 @@ describe("startDualChannelPrompt", () => {
 		ctrl.dispose();
 		expect(inApp.hides()).toBe(1);
 	});
+
+	it("keeps a user-forced in-app notice even when osShown confirms afterwards", () => {
+		const timers = fakeTimers();
+		const inApp = trackedInApp();
+		const ctrl = startDualChannelPrompt({
+			fallbackDelayMs: 500,
+			timers,
+			showInApp: inApp.make,
+		});
+
+		// User clicks the OS body before the async `show` confirmation arrives.
+		ctrl.forceInApp();
+		expect(inApp.shows()).toBe(1);
+		ctrl.osShown(); // late confirmation must NOT hide what the user asked for
+		expect(inApp.hides()).toBe(0);
+	});
+
+	it("forceInApp after dispose is a no-op (no orphaned notice)", () => {
+		const timers = fakeTimers();
+		const inApp = trackedInApp();
+		const ctrl = startDualChannelPrompt({
+			fallbackDelayMs: 500,
+			timers,
+			showInApp: inApp.make,
+		});
+
+		ctrl.dispose();
+		ctrl.forceInApp(); // late click on a superseded/handled prompt
+		expect(inApp.shows()).toBe(0);
+	});
 });
