@@ -15,14 +15,26 @@ import {
     listInputDevices,
     type InputDevice,
 } from "./recorder";
-import { AssetProvisioner, BinaryProvisioner } from "./binary";
+import {
+    AssetProvisioner,
+    BinaryProvisioner,
+    EXPECTED_WHISPER_SHA256,
+    WHISPER_DYLIB_SIZE,
+    whisperDylibUrl,
+} from "./binary";
 import {
     assetNodeDeps,
     nodeDeps,
     resolveBinaryPath,
     resolveModelPath,
+    resolveWhisperDylibPath,
+    whisperCppNodeDeps,
 } from "./binary-runtime";
-import { LOCAL_MODELS, type LocalModelSpec } from "./transcribe/localModels";
+import {
+    LOCAL_MODELS,
+    localModelSpec,
+    type LocalModelSpec,
+} from "./transcribe/localModels";
 import * as path from "path";
 import * as fs from "fs";
 import { GoogleOAuth, type StoredTokens } from "./auth/googleOAuth";
@@ -80,6 +92,7 @@ import {
     type TranscribeConfig,
 } from "./transcribe/TranscriptionService";
 import { OpenAICompatibleBackend } from "./transcribe/OpenAICompatibleBackend";
+import { WhisperCppBackend } from "./transcribe/WhisperCppBackend";
 import type { TranscriptionBackend } from "./transcribe/backend";
 import { canSeparateSpeakers } from "./transcribe/sttModel";
 import { probeKey } from "./transcribe/probe";
@@ -1818,13 +1831,16 @@ export default class SystemRecordingPlugin extends Plugin {
      * timestamps. Gates both the split at record time and the diarized pass at
      * transcribe time.
      *
-     * Note: the local Whisper engine always emits segment timestamps, so it will
-     * bypass this remote timestamp probe — but that bypass lands together with
-     * the local transcription wiring (the WhisperCppBackend phase of #34). While
-     * transcription is still remote-only, keeping the probe gate here avoids
-     * running doomed diarized passes against the remote endpoint.
+     * The local Whisper engine always emits segment timestamps, so it bypasses
+     * the remote timestamp probe entirely and honors the user's toggle directly
+     * — the probe only describes the remote endpoint's behavior, which is moot
+     * on-device. For the remote backend the probe gate still applies, so a
+     * doomed diarized pass never runs against an endpoint that ignores it.
      */
     private shouldSeparateSpeakers(): boolean {
+        if (this.settings.transcriptionBackend === "local") {
+            return this.settings.diarizationEnabled;
+        }
         return canSeparateSpeakers(
             this.settings,
             probeKey(this.settings.apiBaseUrl, this.settings.sttModel)
@@ -1924,14 +1940,75 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /**
-     * The transcription backend for this run, built from current settings.
-     * Today always the OpenAI-compatible engine; the pluggable seam (issue #34)
-     * is where a local on-device backend will drop in behind a settings toggle.
-     * A fresh instance per call is fine — the serial queue guarding the
-     * process-global endpoint seam is shared at module scope.
+     * The transcription backend for this run, built from current settings —
+     * the OpenAI-compatible engine, or the on-device Whisper backend when the
+     * user selected "local" (issue #34). A fresh instance per call is fine: the
+     * serial queue guarding the remote engine's process-global endpoint seam is
+     * shared at module scope, and the local backend holds no shared state.
+     *
+     * Async because the local path provisions its assets (helper, framework,
+     * model) on first use before it can transcribe.
      */
-    private buildBackend(): TranscriptionBackend {
+    private async buildBackend(): Promise<TranscriptionBackend> {
+        if (this.settings.transcriptionBackend === "local") {
+            return this.buildLocalBackend();
+        }
         return new OpenAICompatibleBackend(this.app, this.buildTranscribeConfig());
+    }
+
+    /**
+     * The on-device Whisper backend, provisioning everything it needs on first
+     * use: the recorder helper (which also hosts the `transcribe` subcommand),
+     * the `whisper.framework` dylib the helper links at launch, and the selected
+     * ggml model. Each ensure is a no-op once the asset is present and verified,
+     * so steady-state adds no download — only the first local transcription (or
+     * a model switch) pays for it, each behind its own progress notice.
+     */
+    private async buildLocalBackend(): Promise<TranscriptionBackend> {
+        const version = this.manifest.version;
+        const binaryPath = await this.provisioner.ensure(
+            resolveBinaryPath(this),
+            version,
+            () => new Notice(t().notices.downloadingHelper)
+        );
+        // The helper links whisper.cpp's *dynamic* framework: the dylib must sit
+        // at whisper.framework/Versions/Current/whisper next to the binary or
+        // dyld fails before `transcribe` runs. It's byte-identical across our
+        // releases (pinned XCFramework), so a fixed SHA/size + the provisioner's
+        // size fast-path make this a one-time fetch reused thereafter.
+        await this.modelProvisioner.ensure(
+            resolveWhisperDylibPath(this),
+            whisperDylibUrl(version),
+            EXPECTED_WHISPER_SHA256,
+            WHISPER_DYLIB_SIZE,
+            { onDownloadStart: () => new Notice(t().notices.downloadingRuntime) }
+        );
+        const spec = localModelSpec(this.settings.localWhisperModel);
+        const modelPath = await this.ensureLocalModel(spec);
+        return new WhisperCppBackend(
+            {
+                binaryPath,
+                modelPath,
+                language: this.settings.sttLanguage || "auto",
+            },
+            whisperCppNodeDeps(this)
+        );
+    }
+
+    /**
+     * Whether a failed local transcription should retry against the remote
+     * service: only when the user enabled the fallback, an endpoint is
+     * configured, and the failure wasn't a user cancellation (which must
+     * propagate as a cancel, not be masked by a fallback pass). The caller also
+     * gates on the intended backend actually being local.
+     */
+    private canFallbackToRemote(error: unknown, signal: AbortSignal): boolean {
+        return (
+            this.settings.localFallbackToRemote &&
+            !isDiarizationCancelled(error, signal) &&
+            !!this.settings.apiBaseUrl &&
+            !!this.settings.apiKey
+        );
     }
 
     /**
@@ -1949,6 +2026,7 @@ export default class SystemRecordingPlugin extends Plugin {
     private async tryDiarizedTranscribe(
         recording: TFile,
         forced: boolean,
+        backend: TranscriptionBackend,
         onProgress?: (percent: number) => void,
         signal?: AbortSignal
     ): Promise<string | null> {
@@ -1987,7 +2065,7 @@ export default class SystemRecordingPlugin extends Plugin {
         const result = await transcribeDiarized(
             meFile,
             themFile,
-            this.buildBackend(),
+            backend,
             windows,
             signal,
             onProgress,
@@ -2050,7 +2128,12 @@ export default class SystemRecordingPlugin extends Plugin {
         recording: TFile,
         mode: TranscribeMode = "auto"
     ): Promise<void> {
-        if (!this.settings.apiBaseUrl || !this.settings.apiKey) {
+        // The remote backend needs an endpoint; the local one provisions its own
+        // model/helper, so it can transcribe with no endpoint configured.
+        if (
+            this.settings.transcriptionBackend !== "local" &&
+            (!this.settings.apiBaseUrl || !this.settings.apiKey)
+        ) {
             new Notice(t().notices.transcribeNoEndpoint);
             return;
         }
@@ -2152,23 +2235,46 @@ export default class SystemRecordingPlugin extends Plugin {
             const wantDiarized =
                 mode === "diarized" ||
                 (mode === "auto" && this.shouldSeparateSpeakers());
-            const diarizedText = wantDiarized
-                ? await this.tryDiarizedTranscribe(
-                      recording,
-                      mode === "diarized",
-                      onProgress,
-                      signal
-                  )
-                : null;
-            const diarized = diarizedText !== null;
-            const rawText =
-                diarizedText ??
-                (await transcribeAudio(
-                    recording,
-                    this.buildBackend(),
-                    signal,
-                    onProgress
-                ));
+            // Whether the *intended* backend is local, sampled before building it
+            // so a provisioning failure (model/helper download) can fall back too.
+            const useLocal = this.settings.transcriptionBackend === "local";
+            let diarized: boolean;
+            let rawText: string;
+            try {
+                const backend = await this.buildBackend();
+                const diarizedText = wantDiarized
+                    ? await this.tryDiarizedTranscribe(
+                          recording,
+                          mode === "diarized",
+                          backend,
+                          onProgress,
+                          signal
+                      )
+                    : null;
+                diarized = diarizedText !== null;
+                rawText =
+                    diarizedText ??
+                    (await transcribeAudio(recording, backend, signal, onProgress));
+            } catch (e) {
+                // On-device transcription can fail hard (model/helper missing, a
+                // decode error, an OOM). When the user opted into "fall back to
+                // remote" and an endpoint is configured, retry a plain mixed pass
+                // against it — a degraded but working transcript beats none.
+                // Diarization isn't retried remotely: its timestamp support isn't
+                // probed on this path, and a mixed transcript is the safe floor.
+                if (!(useLocal && this.canFallbackToRemote(e, signal))) throw e;
+                console.warn(
+                    "[Meeting Copilot] local transcription failed; falling back to the remote service",
+                    e
+                );
+                new Notice(t().notices.localFallback);
+                const remote = new OpenAICompatibleBackend(
+                    this.app,
+                    this.buildTranscribeConfig()
+                );
+                diarized = false;
+                rawText = await transcribeAudio(recording, remote, signal, onProgress);
+            }
             const totalSecs = ((Date.now() - transcribeStart) / 1000).toFixed(1);
             console.warn(
                 `[Meeting Copilot][transcribe] "${recording.name}" transcription finished in ${totalSecs}s (diarized=${diarized}${

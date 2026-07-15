@@ -9,6 +9,29 @@ export function releaseUrl(version: string): string {
 	return `https://github.com/${REPO}/releases/download/${version}/system-recorder`;
 }
 
+/**
+ * SHA-256 (hex) and byte size of the `whisper.framework` dylib the recorder
+ * helper links for on-device transcription (issue #34). Unlike the recorder
+ * binary's per-release hash, this is a CONSTANT: the dylib comes from the
+ * whisper.cpp XCFramework pinned in `swift-helper/Package.swift`, so every
+ * release ships the exact same bytes. The universal (x86_64+arm64) slice from
+ * v1.7.5. `release.yml` asserts the shipped dylib matches this before upload —
+ * if the pinned XCFramework version changes, both values must be refreshed.
+ */
+export const EXPECTED_WHISPER_SHA256 =
+	"e6c2b3c065d06ed04ee70f3dbe7479b62ff69d71a20311b07397df8c282aeb03";
+export const WHISPER_DYLIB_SIZE = 4059456;
+
+/**
+ * GitHub release asset URL for the whisper dylib of the given plugin version.
+ * The plugin writes it to `whisper.framework/Versions/Current/whisper` next to
+ * the helper, where the helper's `@rpath/whisper.framework/Versions/Current/whisper`
+ * load command resolves it at launch.
+ */
+export function whisperDylibUrl(version: string): string {
+	return `https://github.com/${REPO}/releases/download/${version}/whisper`;
+}
+
 /** Injected I/O so the provisioner is unit-testable with no real fs/network. */
 export interface ProvisionerDeps {
 	arch: () => string;
