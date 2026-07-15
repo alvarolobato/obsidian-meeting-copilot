@@ -3,7 +3,7 @@ import AVFoundation
 
 // MARK: - Argument parsing
 
-let usage = "Usage: system-recorder start --output <path> --stop-file <path> [--split] [--format \(RecordingFormat.usageList)] [--input-device <uid>]\n       system-recorder list-devices"
+let usage = "Usage: system-recorder start --output <path> --stop-file <path> [--split] [--format \(RecordingFormat.usageList)] [--input-device <uid>]\n       system-recorder list-devices\n       system-recorder transcribe --manifest <path>"
 
 // MARK: - JSON output helper
 
@@ -30,6 +30,14 @@ if args.count >= 2, args[1] == "list-devices" {
     let devices = AudioDevices.inputDevices().map { ["uid": $0.uid, "name": $0.name] }
     emitJSON(["devices": devices])
     exit(0)
+}
+
+// `transcribe`: on-device Whisper transcription (issue #34). Reads a JSON
+// manifest (model path + audio jobs), streams NDJSON progress/result/done, then
+// exits. Placed before the `start` guard so it never falls through into
+// recording. runTranscribe(...) never returns.
+if args.count >= 2, args[1] == "transcribe" {
+    runTranscribe(Array(args.dropFirst(2)))
 }
 
 guard args.count >= 6,
