@@ -275,6 +275,20 @@ describe("dropRecordingLink", () => {
 	it("leaves the value untouched when nothing matches", () => {
 		expect(dropRecordingLink("[[a.wav]]", "z.wav")).toBe("[[a.wav]]");
 	});
+	it("prefers an exact path match over same-basename siblings", () => {
+		expect(
+			dropRecordingLink(
+				["[[Rec/a.wav]]", "[[Other/a.wav]]"],
+				"Rec/a.wav"
+			)
+		).toBe("[[Other/a.wav]]");
+	});
+	it("falls back to basename when no link matches the full path exactly", () => {
+		// Bare links + a full-path target: no exact match, so basename wins.
+		expect(dropRecordingLink(["[[a.wav]]", "[[b.wav]]"], "Rec/a.wav")).toBe(
+			"[[b.wav]]"
+		);
+	});
 });
 
 describe("upsertSection", () => {

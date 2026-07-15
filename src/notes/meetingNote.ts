@@ -91,19 +91,25 @@ export function appendRecordingLink(
 }
 
 /**
- * Removes every entry whose file basename matches `basename` from a `recording`
- * frontmatter value. Returns the reduced value — a bare string when one
- * remains, a list when several do, or `undefined` when none remain (so the
- * caller can delete the key). Matching by basename tolerates folder-qualified
- * links. Pure/testable.
+ * Removes the entry matching `target` (a vault-relative path, or a bare
+ * basename) from a `recording` frontmatter value. Prefers an exact link-target
+ * match — so two takes that happen to share a basename in different folders
+ * don't both get dropped — and only falls back to basename matching when no
+ * link matches exactly (so a bare `[[file]]` link is still found from a full
+ * path). Returns the reduced value — a bare string when one remains, a list
+ * when several do, or `undefined` when none remain (so the caller can delete
+ * the key). Pure/testable.
  */
 export function dropRecordingLink(
 	existing: unknown,
-	basename: string
+	target: string
 ): string | string[] | undefined {
-	const kept = recordingLinkValues(existing).filter(
-		(v) => linkBasename(linkTargetOf(v)) !== basename
-	);
+	const values = recordingLinkValues(existing);
+	const hasExact = values.some((v) => linkTargetOf(v) === target);
+	const targetBase = linkBasename(target);
+	const kept = hasExact
+		? values.filter((v) => linkTargetOf(v) !== target)
+		: values.filter((v) => linkBasename(linkTargetOf(v)) !== targetBase);
 	if (kept.length === 0) return undefined;
 	return kept.length === 1 ? (kept[0] as string) : kept;
 }

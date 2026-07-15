@@ -2897,7 +2897,7 @@ export default class SystemRecordingPlugin extends Plugin {
      */
     private async discardSilentRecording(recording: TFile): Promise<void> {
         const note = findMeetingNoteForAudio(this.app, recording);
-        const prunedName = recording.name;
+        const prunedPath = recording.path;
         const sc = sidecarPathsFor(recording.path);
         await this.trashIfExists(recording.path);
         await this.trashIfExists(sc.me);
@@ -2906,7 +2906,7 @@ export default class SystemRecordingPlugin extends Plugin {
         if (note) {
             await this.app.fileManager.processFrontMatter(note, (fm) => {
                 const f = fm as Record<string, unknown>;
-                const next = dropRecordingLink(f.recording, prunedName);
+                const next = dropRecordingLink(f.recording, prunedPath);
                 const hasTranscript = f.transcript_saved === true;
                 if (next === undefined) {
                     // No recordings left: back to "scheduled" unless an earlier
@@ -3381,10 +3381,9 @@ export default class SystemRecordingPlugin extends Plugin {
                     // Drop just this recording's now-dangling link (a meeting
                     // may have several); the transcript stays in the note. Only
                     // stamp `recording_pruned` once the last one is gone.
-                    const prunedName = path.basename(info.path);
                     await this.app.fileManager.processFrontMatter(note, (fm) => {
                         const f = fm as Record<string, unknown>;
-                        const next = dropRecordingLink(f.recording, prunedName);
+                        const next = dropRecordingLink(f.recording, info.path);
                         if (next === undefined) {
                             delete f.recording;
                             f.recording_pruned = new Date()
