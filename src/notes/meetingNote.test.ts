@@ -9,6 +9,7 @@ import {
 	DEFAULT_TITLE_PATTERN,
 	dropRecordingLink,
 	extractTranscriptText,
+	findMeetingNoteForAudio,
 	findNoteByEventId,
 	formatTranscriptCallout,
 	insertTranscript,
@@ -138,6 +139,9 @@ function makeApp(vault: FakeVault): App {
 					? undefined
 					: vault.frontmatterFor(file),
 			}),
+			// Minimal resolver: our tests use exact vault paths as link targets.
+			getFirstLinkpathDest: (link: string) =>
+				vault.getAbstractFileByPath(link),
 		},
 		fileManager: {
 			processFrontMatter: async (
@@ -398,6 +402,25 @@ describe("stripTranscript", () => {
 	it("returns content unchanged when there is no transcript", () => {
 		const input = "# T\n\n## Notes\n\nfoo";
 		expect(stripTranscript(input)).toBe(input);
+	});
+});
+
+describe("findMeetingNoteForAudio", () => {
+	it("matches a note linking the audio as a non-latest list entry", () => {
+		const vault = new FakeVault();
+		vault.addNote("Meetings/m.md", {
+			recording: ["[[Meetings/Rec/a.wav]]", "[[Meetings/Rec/b.wav]]"],
+		});
+		const audioA = vault.addNote("Meetings/Rec/a.wav", {});
+		expect(findMeetingNoteForAudio(makeApp(vault), audioA)?.path).toBe(
+			"Meetings/m.md"
+		);
+	});
+	it("returns null when no note links the audio", () => {
+		const vault = new FakeVault();
+		vault.addNote("Meetings/m.md", { recording: "[[Meetings/Rec/a.wav]]" });
+		const orphan = vault.addNote("Meetings/Rec/z.wav", {});
+		expect(findMeetingNoteForAudio(makeApp(vault), orphan)).toBeNull();
 	});
 });
 
