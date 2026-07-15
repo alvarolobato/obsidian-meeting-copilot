@@ -8,29 +8,35 @@ import AudioToolbox
 /// This is the modern replacement for the ScreenCaptureKit system-audio source
 /// (`AudioCaptureManager.startSystemStream`). A `CATapDescription` for a global
 /// mono mixdown is turned into a tap object with `AudioHardwareCreateProcessTap`,
-/// wrapped in a **private aggregate device**, and driven by an IO proc that
-/// streams the tapped output back as `AVAudioPCMBuffer`s.
+/// wrapped in a **private, auto-starting aggregate device**, and driven by an IO
+/// proc that streams the tapped output back as `AVAudioPCMBuffer`s.
 ///
 /// Why this over ScreenCaptureKit:
 ///   * **No Screen Recording permission** and no screen-capture classification —
 ///     so macOS doesn't show the screen-recording indicator or suppress the
-///     user's notifications for the duration of a meeting (the whole point of
-///     issue: taps are audio-only).
+///     user's notifications for the duration of a meeting (taps are audio-only).
+///     It does need the **System Audio Recording** grant (see below).
 ///   * **Device-independent.** A global tap observes every process's output
 ///     stream regardless of the current output *hardware* device, so the classic
-///     "Zoom launches after we start, switches the default device, and system
-///     audio goes silent" failure the SCK path has to actively recover from
-///     simply doesn't arise here.
+///     "Zoom launched after we started, switched the default device, and system
+///     audio went silent" failure the SCK path must actively recover from
+///     doesn't arise.
+///
+/// Permission: creating/running a tap requires the **System Audio Recording**
+/// TCC grant (`Privacy & Security → Screen & System Audio Recording`), attributed
+/// to the responsible app (Obsidian). If it's missing the OS may let the tap
+/// start but deliver no IO cycles; `AudioCaptureManager` treats "started but no
+/// callbacks" as a failure and falls back to ScreenCaptureKit.
 ///
 /// The tap is `muteBehavior = .unmuted`, so the user keeps hearing the meeting
 /// while we observe it. Everything is torn down in `stop()` (idempotent), and a
-/// failure at any construction step cleans up what was already created and
-/// throws, so `AudioCaptureManager` can fall back to ScreenCaptureKit.
+/// failure at any construction step unwinds what was already created and throws.
 @available(macOS 14.2, *)
 final class SystemAudioProcessTap: @unchecked Sendable {
     enum TapError: LocalizedError {
         case createTap(OSStatus)
         case readFormat(OSStatus)
+        case invalidFormat
         case createAggregate(OSStatus)
         case createIOProc(OSStatus)
         case start(OSStatus)
@@ -39,6 +45,7 @@ final class SystemAudioProcessTap: @unchecked Sendable {
             switch self {
             case .createTap(let s): return "AudioHardwareCreateProcessTap failed (\(s))"
             case .readFormat(let s): return "reading the tap's stream format failed (\(s))"
+            case .invalidFormat: return "the tap reported an unusable stream format"
             case .createAggregate(let s): return "AudioHardwareCreateAggregateDevice failed (\(s))"
             case .createIOProc(let s): return "AudioDeviceCreateIOProcIDWithBlock failed (\(s))"
             case .start(let s): return "AudioDeviceStart failed (\(s))"
@@ -46,8 +53,18 @@ final class SystemAudioProcessTap: @unchecked Sendable {
         }
     }
 
+    /// A point-in-time view of IO-proc liveness, used by `AudioCaptureManager`
+    /// to detect a tap that started but never delivers (permission denied) or
+    /// one that stalls mid-recording (HAL glitch).
+    struct Liveness {
+        let callbackCount: Int
+        let secondsSinceLastCallback: TimeInterval
+    }
+
     /// Captured system audio, already in the tap's native format (a global
-    /// mono mixdown). The mixer resamples/downmixes to the 24 kHz target.
+    /// mono mixdown). The mixer resamples/downmixes to the 24 kHz target. Set
+    /// before `start()`; only mutated afterwards under the ioQueue barrier in
+    /// `teardown()`, so reads on the IO queue are race-free.
     var onAudioBuffer: ((AVAudioPCMBuffer) -> Void)?
 
     private var tapID = AudioObjectID(kAudioObjectUnknown)
@@ -57,8 +74,15 @@ final class SystemAudioProcessTap: @unchecked Sendable {
     // The IO block is invoked on this serial queue (not a realtime thread), so
     // the per-buffer copy + downstream temp-file write in the mixer can't glitch
     // the audio HAL — matching the SCK path, which runs its handler on a global
-    // queue.
+    // queue. Teardown drains it with a barrier so no block runs after destroy.
     private let ioQueue = DispatchQueue(label: "com.meetingcopilot.audio-tap-io")
+
+    // IO-proc liveness, updated on ioQueue and read from other threads under the
+    // lock. `lastCallback` starts at "now" at start() so the stall check has a
+    // sane baseline before the first buffer arrives.
+    private let livenessLock = NSLock()
+    private var callbackCount = 0
+    private var lastCallback = Date()
 
     func start() throws {
         // Exclude our own process from the global tap, mirroring SCK's
@@ -80,7 +104,11 @@ final class SystemAudioProcessTap: @unchecked Sendable {
 
         do {
             tapFormat = try Self.readTapFormat(tapID)
-            aggregateID = try Self.createAggregateDevice(tappingUID: description.uuid.uuidString)
+            // Prefer the HAL-assigned tap UID over the description's UUID for the
+            // aggregate's sub-tap list (Apple's sample reads it back), falling
+            // back to the UUID we set if the property read fails.
+            let tapUID = Self.readTapUID(tapID) ?? description.uuid.uuidString
+            aggregateID = try Self.createAggregateDevice(tappingUID: tapUID)
             try startIOProc()
         } catch {
             // Unwind whatever succeeded so a failed start leaves no orphaned
@@ -97,24 +125,37 @@ final class SystemAudioProcessTap: @unchecked Sendable {
         teardown()
     }
 
+    /// IO-proc liveness snapshot for the health checks in `AudioCaptureManager`.
+    func liveness() -> Liveness {
+        livenessLock.lock(); defer { livenessLock.unlock() }
+        return Liveness(
+            callbackCount: callbackCount,
+            secondsSinceLastCallback: Date().timeIntervalSince(lastCallback)
+        )
+    }
+
     // MARK: - IO proc
 
     private func startIOProc() throws {
-        guard let format = tapFormat else { throw TapError.readFormat(noErr) }
+        guard let format = tapFormat else { throw TapError.invalidFormat }
         let bytesPerFrame = format.streamDescription.pointee.mBytesPerFrame
         // Guard against a degenerate ASBD so the IO block's frame math is sound.
-        guard bytesPerFrame > 0 else { throw TapError.readFormat(noErr) }
-        // Capture immutable locals (not self) so the escaping IO block is
-        // race-free: `format`/`handler` never change after start.
-        let handler = onAudioBuffer
+        guard bytesPerFrame > 0 else { throw TapError.invalidFormat }
 
         var newProcID: AudioDeviceIOProcID?
         let procStatus = AudioDeviceCreateIOProcIDWithBlock(
             &newProcID, aggregateID, ioQueue
-        ) { _, inInputData, _, _, _ in
-            SystemAudioProcessTap.deliver(
-                inInputData, format: format, bytesPerFrame: bytesPerFrame, to: handler
-            )
+        ) { [weak self] _, inInputData, _, _, _ in
+            guard let self else { return }
+            self.noteCallback()
+            // Read the handler on the ioQueue; teardown nils it under the same
+            // queue's barrier, so this can't race a stop.
+            guard let handler = self.onAudioBuffer,
+                  let pcm = SystemAudioProcessTap.makeBuffer(
+                      inInputData, format: format, bytesPerFrame: bytesPerFrame
+                  )
+            else { return }
+            handler(pcm)
         }
         guard procStatus == noErr, let procID = newProcID else {
             throw TapError.createIOProc(procStatus)
@@ -125,24 +166,35 @@ final class SystemAudioProcessTap: @unchecked Sendable {
         guard startStatus == noErr else { throw TapError.start(startStatus) }
     }
 
-    /// Copy one IO cycle's tapped audio into an owned `AVAudioPCMBuffer` and hand
-    /// it to the mixer. A copy (rather than a no-copy wrap of the transient IO
-    /// buffer) keeps the buffer valid regardless of when the mixer consumes it.
-    private static func deliver(
+    private func noteCallback() {
+        livenessLock.lock(); defer { livenessLock.unlock() }
+        callbackCount += 1
+        lastCallback = Date()
+    }
+
+    /// Copy one IO cycle's tapped audio into an owned `AVAudioPCMBuffer`. A copy
+    /// (rather than a no-copy wrap of the transient IO buffer) keeps the buffer
+    /// valid regardless of when the mixer consumes it.
+    private static func makeBuffer(
         _ inInputData: UnsafePointer<AudioBufferList>,
         format: AVAudioFormat,
-        bytesPerFrame: UInt32,
-        to handler: ((AVAudioPCMBuffer) -> Void)?
-    ) {
-        guard let handler else { return }
+        bytesPerFrame: UInt32
+    ) -> AVAudioPCMBuffer? {
         let srcABL = UnsafeMutableAudioBufferListPointer(
             UnsafeMutablePointer(mutating: inInputData)
         )
-        guard let first = srcABL.first, first.mDataByteSize > 0 else { return }
-        let frames = AVAudioFrameCount(first.mDataByteSize / bytesPerFrame)
+        // Derive the frame count from the largest channel buffer, not just the
+        // first: a planar layout whose first buffer is momentarily empty must
+        // not truncate the cycle to zero frames.
+        var maxBytes: UInt32 = 0
+        for buffer in srcABL {
+            maxBytes = max(maxBytes, buffer.mDataByteSize)
+        }
+        guard maxBytes > 0 else { return nil }
+        let frames = AVAudioFrameCount(maxBytes / bytesPerFrame)
         guard frames > 0,
               let pcm = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)
-        else { return }
+        else { return nil }
         pcm.frameLength = frames
 
         let dstABL = UnsafeMutableAudioBufferListPointer(pcm.mutableAudioBufferList)
@@ -151,16 +203,22 @@ final class SystemAudioProcessTap: @unchecked Sendable {
                 memcpy(dst, src, min(Int(srcABL[i].mDataByteSize), Int(dstABL[i].mDataByteSize)))
             }
         }
-        handler(pcm)
+        return pcm
     }
 
     // MARK: - Teardown
 
     private func teardown() {
         if let procID = ioProcID {
+            // Stop the device, then drain the IO queue so any block already
+            // dispatched has finished before we destroy the proc/aggregate/tap —
+            // otherwise a late block could memcpy from a freed IO buffer.
             AudioDeviceStop(aggregateID, procID)
+            ioQueue.sync { self.onAudioBuffer = nil }
             AudioDeviceDestroyIOProcID(aggregateID, procID)
             ioProcID = nil
+        } else {
+            onAudioBuffer = nil
         }
         if aggregateID != AudioObjectID(kAudioObjectUnknown) {
             AudioHardwareDestroyAggregateDevice(aggregateID)
@@ -186,10 +244,26 @@ final class SystemAudioProcessTap: @unchecked Sendable {
         var asbd = AudioStreamBasicDescription()
         var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
         let status = AudioObjectGetPropertyData(tapID, &address, 0, nil, &size, &asbd)
-        guard status == noErr, let format = AVAudioFormat(streamDescription: &asbd) else {
-            throw TapError.readFormat(status)
+        guard status == noErr else { throw TapError.readFormat(status) }
+        guard let format = AVAudioFormat(streamDescription: &asbd) else {
+            throw TapError.invalidFormat
         }
         return format
+    }
+
+    /// The tap object's HAL-assigned UID (`kAudioTapPropertyUID`), or nil if the
+    /// property can't be read.
+    private static func readTapUID(_ tapID: AudioObjectID) -> String? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioTapPropertyUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size = UInt32(MemoryLayout<CFString?>.size)
+        var value: Unmanaged<CFString>?
+        let status = AudioObjectGetPropertyData(tapID, &address, 0, nil, &size, &value)
+        guard status == noErr, let cf = value else { return nil }
+        return cf.takeRetainedValue() as String
     }
 
     /// A private, auto-starting aggregate device whose only member is the given

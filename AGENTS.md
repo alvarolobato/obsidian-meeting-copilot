@@ -191,11 +191,20 @@ current (e.g. `actions/checkout@v5`, `actions/setup-node@v5`).
   *private, auto-starting aggregate device* wrapping a `CATapDescription`
   (global mono mixdown, `.unmuted` so the user still hears the meeting). It's
   device-independent, so the SCK path's "an app switched the default device and
-  audio went silent" recovery isn't needed here; any tap-creation failure
-  transparently falls back to SCK (which keeps its restart logic). Force the
-  legacy path with `MC_DISABLE_PROCESS_TAP=1` for A/B testing. The tap needs no
-  Screen Recording grant, so the `notifyRecordingError` screen-capture
-  classification in `main.ts` now only fires on the SCK fallback.
+  audio went silent" recovery isn't needed here. Force the legacy path with
+  `MC_DISABLE_PROCESS_TAP=1` for A/B testing.
+  - **Permission:** the tap needs the **System Audio Recording** TCC grant
+    (`Screen & System Audio Recording`), *not* Screen Recording. That grant is
+    attributed to the responsible app (Obsidian), which macOS prompts for on
+    first tap use; the CLI helper has no bundle of its own. So the
+    `notifyRecordingError` screen-capture classification in `main.ts` now only
+    fires on the SCK fallback.
+  - **Silent-start / stall handling:** creating a tap can return `noErr` yet
+    deliver no IO cycles when the grant is missing. `AudioCaptureManager` runs a
+    liveness timer: no callbacks within ~3s → tear down and fall back to SCK; a
+    stall after delivering (HAL glitch) → rebuild the tap in place (bounded by
+    the shared `systemRestarts` cap). A tap-creation *throw* also falls back to
+    SCK immediately.
 - **i18n:** English is the base. Add UI strings to `src/i18n/en.ts` and use
   `t()`; don't hardcode user-facing strings.
 - **Retention safety:** audio is pruned only when the owning note has the

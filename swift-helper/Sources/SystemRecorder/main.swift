@@ -163,14 +163,20 @@ if #available(macOS 13.0, *) {
     let watchdog = DispatchWorkItem {
         let frames = mixer.capturedFrames
         if frames.system == 0 && frames.mic == 0 {
-            // The tap path needs only Microphone; the SCK fallback also needs
-            // Screen Recording. Name the permissions that actually apply.
-            let permissions = captureManager.usingProcessTap
-                ? "Microphone"
-                : "both Screen Recording and Microphone"
-            fail(
-                "No audio captured after \(Int(watchdogSeconds))s. If a meeting app (e.g. Zoom) started after recording, stop and start recording again once it's running. Otherwise grant Obsidian \(permissions) access in System Settings → Privacy & Security and restart Obsidian."
-            )
+            // Name the permissions and recovery that actually apply to the
+            // source that came up: the tap path needs Microphone + System Audio
+            // Recording (no Screen Recording, no device-change dance); the SCK
+            // fallback needs Screen Recording + Microphone and is the one
+            // susceptible to an app switching the default device after start.
+            let message: String
+            if captureManager.usingProcessTap {
+                message =
+                    "No audio captured after \(Int(watchdogSeconds))s. Grant Obsidian Microphone and System Audio Recording access in System Settings → Privacy & Security → Screen & System Audio Recording, then restart Obsidian."
+            } else {
+                message =
+                    "No audio captured after \(Int(watchdogSeconds))s. If a meeting app (e.g. Zoom) started after recording, stop and start recording again once it's running. Otherwise grant Obsidian both Screen Recording and Microphone access in System Settings → Privacy & Security and restart Obsidian."
+            }
+            fail(message)
         } else if inputDeviceUID != nil && frames.mic == 0 && captureManager.micTapActive() {
             // System audio is flowing and a mic tap is live, but the
             // explicitly-selected input device has delivered nothing (a live tap

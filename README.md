@@ -46,7 +46,7 @@ Meeting Copilot handles calendar, recording, transcription, and enrichment on it
 Then, regardless of method:
 
 4. Optionally install the plugins from the table above (Dataview, Tasks).
-5. On your first recording, the macOS helper (`system-recorder`) is downloaded from the matching release and verified (SHA-256) if you didn't already copy it in. macOS then prompts for the capture permissions — grant them, then fully quit and reopen Obsidian. On **macOS 14.2+** only **Microphone** is needed (system audio uses a Core Audio process tap); on older macOS you'll also be asked for **Screen Recording** (the ScreenCaptureKit fallback). (Apple Silicon / arm64 only.)
+5. On your first recording, the macOS helper (`system-recorder`) is downloaded from the matching release and verified (SHA-256) if you didn't already copy it in. macOS then prompts for the capture permissions — grant them, then fully quit and reopen Obsidian. On **macOS 14.2+** you'll be asked for **Microphone** (your mic) and **System Audio Recording** (the process tap; under System Settings → Privacy & Security → **Screen & System Audio Recording**) — but *not* Screen Recording. On older macOS you're asked for **Screen Recording** and **Microphone** instead (the ScreenCaptureKit fallback). Both grants are attributed to Obsidian. If the tap can't capture (e.g. the System Audio Recording grant is missing), the plugin falls back to ScreenCaptureKit automatically. (Apple Silicon / arm64 only.)
 
 ### Updating
 

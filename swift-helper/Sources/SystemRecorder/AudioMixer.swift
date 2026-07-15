@@ -240,12 +240,14 @@ final class AudioMixer: @unchecked Sendable {
                 return
             }
         }
-        // Fast path: AudioCaptureManager asks the OS for the target format up
-        // front, so the common case needs no converter (and no per-callback
-        // output allocation) at all — the capture callbacks run dozens of
-        // times per second for hours. If a converter exists from an earlier
-        // source format, drain its resampler tail first so those frames land
-        // in stream order rather than at close time.
+        // Fast path: the SCK source asks the OS for the target format up front,
+        // so its buffers usually need no converter (and no per-callback output
+        // allocation) at all — the capture callbacks run dozens of times per
+        // second for hours. The process-tap source delivers its own native
+        // format (e.g. 48 kHz float), which takes the converter path below. If
+        // a converter exists from an earlier source format, drain its resampler
+        // tail first so those frames land in stream order rather than at close
+        // time.
         if buffer.format == targetFormat {
             drainConverterLocked(stream)
             do {
