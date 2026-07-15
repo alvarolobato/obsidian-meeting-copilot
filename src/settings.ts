@@ -98,6 +98,12 @@ export interface SystemRecordingSettings {
 	detectionIntervalSeconds: number;
 	agendaLookAheadDays: number;
 	agendaLookBackDays: number;
+	/** How many upcoming meetings the dashboard shows per page (10/20/50/100). Set via the dashboard's own dropdown. */
+	dashboardUpcomingPageSize: number;
+	/** How many past meetings the dashboard shows per page (10/20/50/100). Set via the dashboard's own dropdown. */
+	dashboardPastPageSize: number;
+	/** How many notes-with-open-tasks the dashboard's action-items list shows per page (10/20/50/100). Set via the dashboard's own dropdown. */
+	dashboardActionsPageSize: number;
 	// Shared OpenAI-compatible endpoint + credentials (transcription + enrichment).
 	apiBaseUrl: string;
 	apiKey: string;
@@ -169,6 +175,9 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	detectionIntervalSeconds: 10,
 	agendaLookAheadDays: 7,
 	agendaLookBackDays: 7,
+	dashboardUpcomingPageSize: 10,
+	dashboardPastPageSize: 10,
+	dashboardActionsPageSize: 10,
 	apiBaseUrl: "https://api.openai.com/v1",
 	apiKey: "",
 	sttModel: "gpt-4o-transcribe",

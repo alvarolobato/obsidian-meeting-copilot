@@ -213,10 +213,43 @@ export const en = {
 			colActions: "Actions",
 			missing: {
 				date: "date",
-				recording: "recording",
 				transcript: "transcript",
 				summary: "summary",
 			},
+		},
+		controls: {
+			perPage: "Per page",
+			prev: "Previous",
+			next: "Next",
+			refresh: "Refresh",
+			pageOf: (current: number, total: number) =>
+				`${current} / ${total}`,
+		},
+		meetings: {
+			upcomingCount: (n: number) =>
+				`${n} upcoming meeting${n === 1 ? "" : "s"}`,
+			pastCount: (n: number) =>
+				`${n} past meeting${n === 1 ? "" : "s"}`,
+			upcomingEmpty: "No upcoming meetings.",
+			pastEmpty: "No past meetings yet.",
+			loading: "Loading calendar…",
+			calendarError: "Couldn't load calendar meetings; showing notes only.",
+			createNote: "Create note",
+			// Status labels double as the dot tooltips and the toolbar legend.
+			status: {
+				scheduled: "Scheduled",
+				recorded: "Recorded",
+				transcribed: "Transcribed",
+				enriched: "Enriched",
+			},
+		},
+		actions: {
+			count: (n: number) =>
+				`${n} open action item${n === 1 ? "" : "s"}`,
+			empty: "No open action items.",
+			loading: "Scanning notes…",
+			taskMoved: "That task has changed in its note; refreshing.",
+			taskError: (msg: string) => `Couldn't complete the task: ${msg}`,
 		},
 	},
 	settings: {
