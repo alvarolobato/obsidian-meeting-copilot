@@ -73,6 +73,8 @@ import {
     transcribeDiarized,
     type TranscribeConfig,
 } from "./transcribe/TranscriptionService";
+import { OpenAICompatibleBackend } from "./transcribe/OpenAICompatibleBackend";
+import type { TranscriptionBackend } from "./transcribe/backend";
 import { canSeparateSpeakers } from "./transcribe/sttModel";
 import { probeKey } from "./transcribe/probe";
 import {
@@ -1843,6 +1845,17 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /**
+     * The transcription backend for this run, built from current settings.
+     * Today always the OpenAI-compatible engine; the pluggable seam (issue #34)
+     * is where a local on-device backend will drop in behind a settings toggle.
+     * A fresh instance per call is fine — the serial queue guarding the
+     * process-global endpoint seam is shared at module scope.
+     */
+    private buildBackend(): TranscriptionBackend {
+        return new OpenAICompatibleBackend(this.app, this.buildTranscribeConfig());
+    }
+
+    /**
      * Runs the speaker-separated pass. Returns the diarized transcript, or null
      * when separation doesn't apply (no sidecars on disk) or the endpoint
      * returned no segments this pass and we fell back to the mixed file. It only
@@ -1893,10 +1906,9 @@ export default class SystemRecordingPlugin extends Plugin {
         // pass). The `windows` above still gate the merge unchanged.
         const sources = pregateSources(localWindows, rmsWindows);
         const result = await transcribeDiarized(
-            this.app,
             meFile,
             themFile,
-            this.buildTranscribeConfig(),
+            this.buildBackend(),
             windows,
             signal,
             onProgress,
@@ -2073,9 +2085,8 @@ export default class SystemRecordingPlugin extends Plugin {
             const rawText =
                 diarizedText ??
                 (await transcribeAudio(
-                    this.app,
                     recording,
-                    this.buildTranscribeConfig(),
+                    this.buildBackend(),
                     signal,
                     onProgress
                 ));
