@@ -80,6 +80,8 @@ export const en = {
 		transcribeEmpty: "Transcription produced no text.",
 		transcribePartial:
 			"Transcription only partially succeeded — not inserted. Try again.",
+		retranscribeIncomplete:
+			"Couldn't re-transcribe every take — kept the existing transcript. Try again.",
 		transcribeInProgress: "This recording is already being transcribed…",
 		transcribeQueued: (name: string) => `Queued "${name}" for transcription`,
 		transcribeCancelled: "Transcription cancelled",

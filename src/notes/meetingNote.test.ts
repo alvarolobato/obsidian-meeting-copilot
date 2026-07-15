@@ -396,6 +396,20 @@ describe("transcriptAtBottom (append)", () => {
 		expect(out).toContain("> only take");
 		expect(out).not.toContain("---");
 	});
+
+	it("both takes are readable back for enrichment after an append", () => {
+		// Guards the fresh-append path: enrichment must see the FULL combined
+		// transcript (extractTranscript reads the callout the note was left with),
+		// not just the latest take, so a 2nd take's summary includes the 1st.
+		const first = transcriptAtBottom("# T\n\n## Notes\n\nn\n", "first take");
+		const both = transcriptAtBottom(first, "second take", true);
+		const readBack = extractTranscript(both);
+		expect(readBack).toContain("first take");
+		expect(readBack).toContain("second take");
+		expect(readBack.indexOf("first take")).toBeLessThan(
+			readBack.indexOf("second take")
+		);
+	});
 });
 
 describe("extractTranscriptText", () => {

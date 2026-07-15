@@ -56,10 +56,11 @@ export function recordingLinkTargets(rec: unknown): string[] {
 }
 
 /**
- * The link target for a `recording` frontmatter value. With multiple recordings
- * this returns the LATEST (last) one, so single-value consumers — "open
- * recording", agenda state — act on the most recent take. Returns "" for a
- * non-string / empty / absent value.
+ * The link target for a `recording` frontmatter value, accepting either a single
+ * `[[wikilink]]` string or a YAML list of them. With multiple recordings this
+ * returns the LATEST (last) one, so single-value consumers — "open recording",
+ * agenda state — act on the most recent take. Returns "" when there are no
+ * (valid) recording links.
  */
 export function recordingLinkTarget(rec: unknown): string {
 	const targets = recordingLinkTargets(rec);
