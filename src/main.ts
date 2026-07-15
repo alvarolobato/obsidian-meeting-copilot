@@ -1568,6 +1568,7 @@ export default class SystemRecordingPlugin extends Plugin {
      * pipeline, each with buttons to open, transcribe, and enrich.
      */
     private renderAttention(el: HTMLElement): void {
+        const restoreScroll = this.preserveScroll(el);
         el.empty();
         const d = t().dashboard.attention;
         const acts = t().agenda.actions;
@@ -1634,6 +1635,7 @@ export default class SystemRecordingPlugin extends Plugin {
 
         if (rows.length === 0) {
             el.createEl("p", { text: d.allClear, cls: "mc-attention-empty" });
+            restoreScroll();
             return;
         }
 
@@ -1696,6 +1698,8 @@ export default class SystemRecordingPlugin extends Plugin {
             const enBtn = actTd.createEl("button", { text: acts.enrich });
             enBtn.onclick = (): void => void this.enrichMeetingNote(file);
         }
+
+        restoreScroll();
     }
 
     /**
@@ -1771,6 +1775,7 @@ export default class SystemRecordingPlugin extends Plugin {
         force = false
     ): Promise<void> {
         const d = t().dashboard.meetings;
+        const restoreScroll = this.preserveScroll(el);
         el.empty();
         if (this.isCalendarAuthenticated()) {
             el.createEl("p", { text: d.loading, cls: "mc-meetings-loading" });
@@ -1945,6 +1950,8 @@ export default class SystemRecordingPlugin extends Plugin {
             onRefresh: (): void =>
                 void this.renderMeetingsSection(el, direction, view.page, true),
         });
+
+        restoreScroll();
     }
 
     /**
@@ -2019,6 +2026,7 @@ export default class SystemRecordingPlugin extends Plugin {
      */
     private async renderActionItems(el: HTMLElement, page = 1): Promise<void> {
         const a = t().dashboard.actions;
+        const restoreScroll = this.preserveScroll(el);
         el.empty();
         el.createEl("p", { text: a.loading, cls: "mc-actions-loading" });
 
@@ -2060,6 +2068,8 @@ export default class SystemRecordingPlugin extends Plugin {
             onGoTo: (p): void => void this.renderActionItems(el, p),
             onRefresh: (): void => void this.renderActionItems(el, view.page),
         });
+
+        restoreScroll();
     }
 
     /** Renders one note's group of open tasks in the action-items list. */
@@ -2118,30 +2128,43 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /**
-     * Scans every note in the vault for open (`- [ ]`) tasks via the metadata
-     * cache (only reading files that actually have one), returning a group per
-     * note with its title, origin date, and task lines. Kept whole-vault on
+     * Scans every note in the vault for open (`- [ ]`) tasks, returning a group
+     * per note with its title, origin date, and task lines. Kept whole-vault on
      * purpose: action items live in meeting notes wherever they came from
      * (including Granola-synced notes, which carry no `event_id`).
+     *
+     * The metadata cache only *pre-filters* to files that (may) have an open
+     * task — cheap, and avoids reading files with none — but the tasks
+     * themselves are re-derived from a fresh disk read. That way a Refresh
+     * reflects the current vault rather than a stale cache: a file the index
+     * still lists but that has since moved/vanished (e.g. an external reorg
+     * Obsidian hasn't fully re-indexed) fails the read and is dropped, instead
+     * of lingering with tasks pointing at a folder that no longer exists.
      */
     private async scanOpenTaskNotes(): Promise<ActionNoteGroup[]> {
+        const openTaskRe = /^\s*[-*+]\s+\[ \]/;
         const cleanTaskText = (raw: string): string =>
             raw.replace(/^\s*[-*+]\s+\[[^\]]\]\s*/, "").trim();
         const groups: ActionNoteGroup[] = [];
         for (const file of this.app.vault.getMarkdownFiles()) {
             const cache = this.app.metadataCache.getFileCache(file);
-            const openLines = (cache?.listItems ?? [])
-                .filter((it) => it.task === " ")
-                .map((it) => it.position.start.line);
-            if (openLines.length === 0) continue;
+            const mayHaveTasks = (cache?.listItems ?? []).some(
+                (it) => it.task === " "
+            );
+            if (!mayHaveTasks) continue;
 
-            const lines = (await this.app.vault.cachedRead(file)).split("\n");
-            const tasks: ActionTask[] = [];
-            for (const line of openLines) {
-                const raw = lines[line];
-                if (raw === undefined) continue;
-                tasks.push({ line, raw, text: cleanTaskText(raw) });
+            let content: string;
+            try {
+                content = await this.app.vault.read(file);
+            } catch {
+                continue;
             }
+            const tasks: ActionTask[] = [];
+            content.split("\n").forEach((raw, line) => {
+                if (openTaskRe.test(raw)) {
+                    tasks.push({ line, raw, text: cleanTaskText(raw) });
+                }
+            });
             if (tasks.length === 0) continue;
 
             const fm = cache?.frontmatter as
@@ -2208,6 +2231,42 @@ export default class SystemRecordingPlugin extends Plugin {
         }
         lines[idx] = lines[idx]!.replace(/\[[^\]]\]/, "[x]");
         await this.app.vault.modify(file, lines.join("\n"));
+    }
+
+    /** Nearest scrollable ancestor of an element (the markdown view's scroller). */
+    private scrollParent(el: HTMLElement): HTMLElement | null {
+        let node: HTMLElement | null = el.parentElement;
+        while (node) {
+            const oy = getComputedStyle(node).overflowY;
+            if (
+                (oy === "auto" || oy === "scroll") &&
+                node.scrollHeight > node.clientHeight
+            ) {
+                return node;
+            }
+            node = node.parentElement;
+        }
+        return null;
+    }
+
+    /**
+     * Snapshots the section's scroll position and returns a fn that restores
+     * it. Re-rendering a dashboard section empties and rebuilds its element,
+     * which otherwise makes the view jump (usually to the top) on a task tick,
+     * a page change, or Refresh; call the returned fn once the new content is
+     * in place. The rAF re-apply covers async renders whose height settles a
+     * frame later.
+     */
+    private preserveScroll(el: HTMLElement): () => void {
+        const scroller = this.scrollParent(el);
+        const top = scroller ? scroller.scrollTop : 0;
+        return (): void => {
+            if (!scroller) return;
+            scroller.scrollTop = top;
+            window.requestAnimationFrame(() => {
+                scroller.scrollTop = top;
+            });
+        };
     }
 
     /** Opens a file in the active tab (used by dashboard row links/buttons). */
