@@ -68,6 +68,8 @@ export interface SystemRecordingSettings {
 	retentionDays: number;
 	insertTranscript: boolean;
 	autoTranscribe: boolean;
+	/** Auto-discard a just-stopped recording that had no speech (needs auto-transcribe). */
+	discardSilentRecordings: boolean;
 	actionItemsAsTasks: boolean;
 	googleClientId: string;
 	googleClientSecret: string;
@@ -102,6 +104,12 @@ export interface SystemRecordingSettings {
 	detectionIntervalSeconds: number;
 	agendaLookAheadDays: number;
 	agendaLookBackDays: number;
+	/** How many upcoming meetings the dashboard shows per page (10/20/50/100). Set via the dashboard's own dropdown. */
+	dashboardUpcomingPageSize: number;
+	/** How many past meetings the dashboard shows per page (10/20/50/100). Set via the dashboard's own dropdown. */
+	dashboardPastPageSize: number;
+	/** How many notes-with-open-tasks the dashboard's action-items list shows per page (10/20/50/100). Set via the dashboard's own dropdown. */
+	dashboardActionsPageSize: number;
 	// Shared OpenAI-compatible endpoint + credentials (transcription + enrichment).
 	apiBaseUrl: string;
 	apiKey: string;
@@ -155,6 +163,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	retentionDays: 90,
 	insertTranscript: true,
 	autoTranscribe: true,
+	discardSilentRecordings: true,
 	actionItemsAsTasks: true,
 	googleClientId: "",
 	googleClientSecret: "",
@@ -173,6 +182,9 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	detectionIntervalSeconds: 10,
 	agendaLookAheadDays: 7,
 	agendaLookBackDays: 7,
+	dashboardUpcomingPageSize: 10,
+	dashboardPastPageSize: 10,
+	dashboardActionsPageSize: 10,
 	apiBaseUrl: "https://api.openai.com/v1",
 	apiKey: "",
 	sttModel: "gpt-4o-transcribe",
@@ -834,6 +846,18 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.insertTranscript)
 					.onChange(async (value) => {
 						this.plugin.settings.insertTranscript = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName(s.settings.discardSilentRecordings.name)
+			.setDesc(s.settings.discardSilentRecordings.desc)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.discardSilentRecordings)
+					.onChange(async (value) => {
+						this.plugin.settings.discardSilentRecordings = value;
 						await this.plugin.saveSettings();
 					})
 			);

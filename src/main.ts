@@ -1,4 +1,4 @@
-import { FileSystemAdapter, MarkdownView, Menu, normalizePath, Notice, Platform, Plugin, setIcon, TFile } from "obsidian";
+import { Component, FileSystemAdapter, MarkdownRenderer, MarkdownView, Menu, normalizePath, Notice, Platform, Plugin, setIcon, TFile } from "obsidian";
 import {
     DEFAULT_SETTINGS,
     inferSttApiType,
@@ -27,6 +27,7 @@ import { actionNotice, multiActionNotice, NoticeAction } from "./ui/actionNotice
 import {
     ADHOC_ID_PREFIX,
     createMeetingNote,
+    dropRecordingLink,
     findMeetingNoteForAudio,
     folderOf,
     insertTranscript,
@@ -37,10 +38,12 @@ import {
     normalizeFolderPathOrEmpty,
     parseStampDate,
     recordingLinkTarget,
+    recordingLinkTargets,
     sanitizeName,
     scanMeetingNotes,
     stripTranscript,
     templateStaticRoot,
+    TRANSCRIPT_SEGMENT_SEPARATOR,
     transcriptAtBottom,
     upsertSection,
 } from "./notes/meetingNote";
@@ -53,11 +56,32 @@ import {
 import { extractActionItems, refreshActionItems } from "./notes/actionItems";
 import { normalizeManualNotes } from "./notes/manualNotes";
 import {
+    ACTIONS_BLOCK_LANG,
     ATTENTION_BLOCK_LANG,
     buildDashboardBlock,
+    DASHBOARD_CSS_CLASS,
+    PAST_BLOCK_LANG,
+    UPCOMING_BLOCK_LANG,
     withDashboardBlock,
 } from "./notes/dashboard";
 import { computeAttention, type AttentionInput } from "./notes/attention";
+import {
+    meetingRows,
+    type MeetingDirection,
+    normalizePageSize,
+    PAGE_SIZE_OPTIONS,
+    paginate,
+    type DashboardMeetingInput,
+    type Page,
+} from "./notes/dashboardMeetings";
+import {
+    countTasks,
+    parseNoteTasks,
+    sortActionNoteGroups,
+    type ActionNoteGroup,
+    type ActionTask,
+} from "./notes/dashboardActions";
+import type { GCalEvent } from "./calendar/googleCalendar";
 import { findExpiredRecordings, underFolder } from "./recordings/retention";
 
 /** Note section that holds action-item checkboxes (obsidian-tasks compatible). */
@@ -142,6 +166,19 @@ import { execFile } from "child_process";
  *   - "mixed":    always transcribe the single joint track
  */
 type TranscribeMode = "auto" | "diarized" | "mixed";
+
+/**
+ * The outcome of transcribing one recording (take) to text, before any note
+ * write. "text" carries the ready-to-insert transcript; the rest are the
+ * no-transcript outcomes each caller handles differently (a fresh single take
+ * may discard an "empty" as silence; a multi-take rebuild just skips it). User
+ * cancellation is not modelled here — it throws so the queue rejects.
+ */
+type TranscribeTakeResult =
+    | { kind: "text"; text: string }
+    | { kind: "empty" }
+    | { kind: "partial" }
+    | { kind: "error"; message: string };
 
 export default class SystemRecordingPlugin extends Plugin {
     settings: SystemRecordingSettings;
@@ -252,7 +289,7 @@ export default class SystemRecordingPlugin extends Plugin {
         this.ribbonIconEl = this.addRibbonIcon(
             RECORD_ICON,
             t().ribbon.toggleRecording,
-            () => this.toggleRecording()
+            (evt) => this.onRibbonClick(evt)
         );
 
         // Meeting agenda sidebar view
@@ -291,8 +328,61 @@ export default class SystemRecordingPlugin extends Plugin {
         // the pipeline, rendered with per-row action buttons.
         this.registerMarkdownCodeBlockProcessor(
             ATTENTION_BLOCK_LANG,
-            (_src, el) => this.renderAttention(el)
+            (_src, el) => {
+                this.trackDashboardBlock(el, () => this.renderAttention(el));
+                this.renderAttention(el);
+            }
         );
+
+        // "Upcoming"/"Past meetings" dashboard sections: paginated tables that
+        // merge the vault's meeting notes with the calendar events the agenda
+        // already loads (Dataview can't do that, nor interactive pagination).
+        this.registerMarkdownCodeBlockProcessor(
+            UPCOMING_BLOCK_LANG,
+            (_src, el) => {
+                this.trackDashboardBlock(el, () =>
+                    void this.renderMeetingsSection(
+                        el,
+                        "upcoming",
+                        this.blockPage(el)
+                    )
+                );
+                void this.renderMeetingsSection(el, "upcoming");
+            }
+        );
+        this.registerMarkdownCodeBlockProcessor(
+            PAST_BLOCK_LANG,
+            (_src, el) => {
+                this.trackDashboardBlock(el, () =>
+                    void this.renderMeetingsSection(
+                        el,
+                        "past",
+                        this.blockPage(el)
+                    )
+                );
+                void this.renderMeetingsSection(el, "past");
+            }
+        );
+
+        // "Open action items" dashboard section: open tasks from every note in
+        // the vault, grouped by note (newest first), dense and paginated.
+        this.registerMarkdownCodeBlockProcessor(
+            ACTIONS_BLOCK_LANG,
+            (_src, el) => {
+                this.trackDashboardBlock(el, () =>
+                    void this.renderActionItems(el, this.blockPage(el), true)
+                );
+                void this.renderActionItems(el);
+            }
+        );
+
+        // Keep the plugin-rendered dashboard sections live: when the vault or
+        // pipeline changes (recording, transcription, enrichment, note
+        // creation) re-render the tracked blocks in place — restoring the
+        // auto-updating the old Dataview tables had. Debounced; each block
+        // keeps the page the user was on (see blockPage), disconnected ones
+        // are pruned on the next pass.
+        this.agendaEvents.on("changed", () => this.scheduleDashboardRefresh());
 
         // Status bar
         this.statusBarEl = this.addStatusBarItem();
@@ -470,11 +560,18 @@ export default class SystemRecordingPlugin extends Plugin {
             window.clearTimeout(this.retentionTimeout);
             this.retentionTimeout = null;
         }
+        if (this.dashboardRefreshTimer !== null) {
+            window.clearTimeout(this.dashboardRefreshTimer);
+            this.dashboardRefreshTimer = null;
+        }
+        this.dashboardBlocks.clear();
 		this.statusHovered = false;
 		this.hideQueuePopover();
 		this.transcriptionQueue.cancelAll();
 		this.scheduler?.stop();
 		this.agendaEvents.clear();
+		for (const renderer of this.liveActionRenderers) renderer.unload();
+		this.liveActionRenderers.clear();
 		for (const controller of this.meetingNotices.values())
 			controller.dispose();
 		this.meetingNotices.clear();
@@ -656,12 +753,44 @@ export default class SystemRecordingPlugin extends Plugin {
 
     // MARK: - Recording control
 
-    private toggleRecording() {
+    /**
+     * Ribbon mic behavior. While recording it stops. Otherwise, if a meeting
+     * note is the active file, it offers a choice — record another take for that
+     * meeting, or start a fresh ad-hoc one — so the ribbon is useful when you're
+     * looking at a meeting (e.g. the person finally joined and you want to
+     * record again). With no meeting note in focus it just starts an ad-hoc
+     * meeting, exactly as before.
+     */
+    private onRibbonClick(evt: MouseEvent): void {
         if (this.recorder.isRecording) {
             this.stopRecording();
-        } else {
-            void this.startAdHocMeeting();
+            return;
         }
+        const active = this.app.workspace.getActiveFile();
+        if (active && this.isMeetingNote(active)) {
+            const meeting = this.agendaMeetingFromNote(active);
+            const menu = new Menu();
+            menu.addItem((item) =>
+                item
+                    // Mirror the agenda row: "Record again" once a take exists.
+                    .setTitle(
+                        meeting.recording
+                            ? t().event.recordAgain
+                            : t().ribbon.recordForMeeting(meeting.title)
+                    )
+                    .setIcon("mic")
+                    .onClick(() => this.startRecordingForMeeting(meeting))
+            );
+            menu.addItem((item) =>
+                item
+                    .setTitle(t().ribbon.newAdhoc)
+                    .setIcon("plus")
+                    .onClick(() => void this.startAdHocMeeting())
+            );
+            menu.showAtMouseEvent(evt);
+            return;
+        }
+        void this.startAdHocMeeting();
     }
 
     /**
@@ -1648,6 +1777,80 @@ export default class SystemRecordingPlugin extends Plugin {
 		}
 	}
 
+	/**
+	 * Starts a recording for a meeting. When the note already exists (agenda row,
+	 * note context menu, or the ribbon on an open meeting note) it records
+	 * straight into that file, bypassing the identity lookup — otherwise a note
+	 * without an `event_id` (e.g. a hand-made `meeting_url`-only note) would be
+	 * duplicated at the template-resolved path. Only when there is no note yet
+	 * (a calendar meeting never opened) does it create one.
+	 */
+	private startRecordingForMeeting(m: AgendaMeeting): void {
+		if (m.note) {
+			void this.recordIntoNote(
+				m.note,
+				m.id || undefined,
+				m.end instanceof Date ? m.end.getTime() : undefined
+			);
+		} else {
+			void this.startMeetingRecording(agendaToMeetingInfo(m));
+		}
+	}
+
+	/**
+	 * True when meeting `m` is the one currently recording. Matches on the
+	 * calendar event id, and falls back to the note path so record-again into a
+	 * note without an `event_id` (e.g. a hand-made `meeting_url`-only note, whose
+	 * `m.id` is "") still shows "Stop" on its row instead of "Record again".
+	 */
+	private isRecordingMeeting(m: AgendaMeeting): boolean {
+		if (!this.recorder.isRecording) return false;
+		if (this.currentRecordingEventId && this.currentRecordingEventId === m.id) {
+			return true;
+		}
+		// Prefer the live note TFile's path over the string captured at record
+		// start, so a rename mid-recording (which updates the TFile in place)
+		// still matches the row.
+		const recordingNotePath =
+			this.currentMeetingNote?.path ?? this.currentMeetingNotePath;
+		return m.note != null && recordingNotePath === m.note.path;
+	}
+
+	/** Records a new take directly into an existing note (no createMeetingNote). */
+	private async recordIntoNote(
+		file: TFile,
+		eventId?: string,
+		endMs?: number
+	): Promise<void> {
+		if (!Platform.isMacOS) {
+			new Notice(t().notices.macOnly);
+			return;
+		}
+		try {
+			await this.app.workspace.getLeaf(false).openFile(file);
+			await this.startRecording(
+				{
+					folder: folderOf(file),
+					basename: file.basename,
+					notePath: file.path,
+					eventId,
+					eventEnd:
+						typeof endMs === "number" && Number.isFinite(endMs)
+							? endMs
+							: null,
+					note: file,
+				},
+				{ replaceCurrent: true }
+			);
+		} catch (e) {
+			new Notice(
+				t().notices.recordingError(
+					e instanceof Error ? e.message : String(e)
+				)
+			);
+		}
+	}
+
 	private noteConfig(): MeetingNoteConfig {
 		return {
 			oneOffFolderTemplate: this.settings.oneOffFolderTemplate,
@@ -1757,12 +1960,9 @@ export default class SystemRecordingPlugin extends Plugin {
             isAuthenticated: () => this.isCalendarAuthenticated(),
             authenticate: () => this.authenticateCalendar(),
             fetchMeetings: (fromMs, toMs) => this.fetchAgendaMeetings(fromMs, toMs),
-            isRecordingThis: (m) =>
-                this.recorder.isRecording &&
-                this.currentRecordingEventId === m.id,
+            isRecordingThis: (m) => this.isRecordingMeeting(m),
             onOpenOrCreate: (m) => void this.openOrCreateNote(m),
-            onCreateAndRecord: (m) =>
-                void this.startMeetingRecording(agendaToMeetingInfo(m)),
+            onCreateAndRecord: (m) => this.startRecordingForMeeting(m),
             onCreateNote: (m) => void this.createNoteOnly(m),
             onStop: () => this.stopRecording(),
             onOpenRecording: (m) => void this.openRecording(m),
@@ -1788,8 +1988,12 @@ export default class SystemRecordingPlugin extends Plugin {
             const v = fm[k];
             return typeof v === "string" && v.trim().length > 0;
         };
+        // `recording` may be a single link (legacy) or a YAML list (multiple
+        // takes), so resolve through the list-aware helper rather than a bare
+        // string check — otherwise a multi-take note wouldn't be recognized.
+        const hasRecording = recordingLinkTarget(fm["recording"]) !== "";
         return (
-            nonEmpty("event_id") || nonEmpty("recording") || nonEmpty("meeting_url")
+            nonEmpty("event_id") || hasRecording || nonEmpty("meeting_url")
         );
     }
 
@@ -1813,6 +2017,7 @@ export default class SystemRecordingPlugin extends Plugin {
      * pipeline, each with buttons to open, transcribe, and enrich.
      */
     private renderAttention(el: HTMLElement): void {
+        const restoreScroll = this.preserveScroll(el);
         el.empty();
         const d = t().dashboard.attention;
         const acts = t().agenda.actions;
@@ -1828,7 +2033,8 @@ export default class SystemRecordingPlugin extends Plugin {
         // folders we're configured to write to — surfacing Transcribe/Enrich
         // buttons for a note the plugin doesn't own would rewrite it.
         for (const entry of scanMeetingNotes(this.app)) {
-            const hasRecording = recordingLinkTarget(entry.recording) !== "";
+            const recLink = recordingLinkTarget(entry.recording);
+            const hasRecording = recLink !== "";
             const pluginOwned = entry.eventId !== null;
             const legacyMatch =
                 (hasRecording || entry.hasMeetingUrl) &&
@@ -1843,6 +2049,21 @@ export default class SystemRecordingPlugin extends Plugin {
                 typeof titleRaw === "string" && titleRaw
                     ? titleRaw
                     : entry.file.basename;
+
+            // "Processing" = the plugin is already advancing this note on its
+            // own — the recording is transcribing/queued, or it's being
+            // enriched — so there's nothing for the user to do; skip it below.
+            const recDest = hasRecording
+                ? this.app.metadataCache.getFirstLinkpathDest(
+                      recLink,
+                      entry.file.path
+                  )
+                : null;
+            const processing =
+                this.enrichingPaths.has(entry.file.path) ||
+                (recDest instanceof TFile &&
+                    this.transcriptionQueue.has(recDest.path));
+
             byPath.set(entry.file.path, entry.file);
             inputs.push({
                 path: entry.file.path,
@@ -1850,10 +2071,11 @@ export default class SystemRecordingPlugin extends Plugin {
                 start: entry.stamp ? parseStampDate(entry.stamp) : null,
                 status: entry.status,
                 hasRecording,
+                processing,
             });
         }
 
-        const rows = computeAttention(inputs, new Date());
+        const rows = computeAttention(inputs);
 
         const header = el.createDiv({ cls: "mc-attention-header" });
         header.createSpan({ text: d.count(rows.length) });
@@ -1862,6 +2084,7 @@ export default class SystemRecordingPlugin extends Plugin {
 
         if (rows.length === 0) {
             el.createEl("p", { text: d.allClear, cls: "mc-attention-empty" });
+            restoreScroll();
             return;
         }
 
@@ -1924,6 +2147,815 @@ export default class SystemRecordingPlugin extends Plugin {
             const enBtn = actTd.createEl("button", { text: acts.enrich });
             enBtn.onclick = (): void => void this.enrichMeetingNote(file);
         }
+
+        restoreScroll();
+    }
+
+    /**
+     * Fetches the calendar events for the dashboard's Upcoming/Past tables,
+     * over the *same* window the agenda sidebar uses (look-back/look-ahead
+     * days), and caches the raw events briefly so the two blocks — and repeated
+     * re-renders from paging/refresh — share a single request. Note/recording
+     * state is intentionally *not* cached: each render re-derives it from the
+     * vault, so creating a note updates both tables without a refetch. Returns
+     * `[]` (no throw) when the calendar isn't connected, so the tables still
+     * show vault notes. `force` bypasses the TTL (the Refresh button).
+     */
+    private dashboardEventsCache: { at: number; events: GCalEvent[] } | null =
+        null;
+    private dashboardEventsInFlight: Promise<GCalEvent[]> | null = null;
+    private async loadDashboardEvents(force = false): Promise<GCalEvent[]> {
+        if (!this.isCalendarAuthenticated()) return [];
+        const TTL_MS = 60_000;
+        const now = Date.now();
+        if (
+            !force &&
+            this.dashboardEventsCache &&
+            now - this.dashboardEventsCache.at < TTL_MS
+        ) {
+            return this.dashboardEventsCache.events;
+        }
+        if (!force && this.dashboardEventsInFlight) {
+            return this.dashboardEventsInFlight;
+        }
+        const dayMs = 24 * 60 * 60 * 1000;
+        const lookAhead = Math.max(1, this.settings.agendaLookAheadDays);
+        const lookBack = Math.max(
+            0,
+            Math.min(30, this.settings.agendaLookBackDays)
+        );
+        const startOfToday = new Date();
+        startOfToday.setHours(0, 0, 0, 0);
+        const from = new Date(startOfToday.getTime() - lookBack * dayMs);
+        const to = new Date(startOfToday.getTime() + lookAhead * dayMs);
+        const p = listEvents(
+            this.oauth,
+            this.settings.calendarId,
+            from,
+            to,
+            250,
+            parseKeywords(this.settings.exclusionKeywords)
+        )
+            .then((events) => {
+                this.dashboardEventsCache = { at: Date.now(), events };
+                return events;
+            })
+            .finally(() => {
+                this.dashboardEventsInFlight = null;
+            });
+        this.dashboardEventsInFlight = p;
+        return p;
+    }
+
+    /**
+     * Renders one of the dashboard's paginated meeting tables. It merges the
+     * vault's meeting notes with the calendar events the agenda already loads
+     * ({@link loadDashboardEvents}), so a scheduled meeting shows up before its
+     * note exists: those rows aren't links and carry a "create note" action,
+     * while noted rows link to the note. `direction` picks the bucket (upcoming
+     * = `start >= now`, soonest first; past = newest first) and its persisted
+     * per-page size (10/20/50/100). `page` is 1-based; the controls re-render
+     * this same element. `force` re-fetches the calendar (the Refresh button).
+     */
+    private async renderMeetingsSection(
+        el: HTMLElement,
+        direction: MeetingDirection,
+        page = 1,
+        force = false
+    ): Promise<void> {
+        const d = t().dashboard.meetings;
+        const seq = this.nextRenderSeq(el);
+        const restoreScroll = this.preserveScroll(el);
+        // Only clear up front on the very first paint (nothing to preserve).
+        // On a refresh/page change we keep the old rows visible while the
+        // calendar loads, then swap in one pass below — otherwise the section
+        // briefly collapses to empty and the view jumps.
+        if (el.childElementCount === 0 && this.isCalendarAuthenticated()) {
+            el.createEl("p", { text: d.loading, cls: "mc-meetings-loading" });
+        }
+
+        let events: GCalEvent[] = [];
+        let calendarError = false;
+        try {
+            events = await this.loadDashboardEvents(force);
+        } catch {
+            calendarError = true;
+        }
+        // A newer render started while the calendar loaded — let it win.
+        if (this.renderSeq.get(el) !== seq) return;
+
+        // Vault notes: any meeting note we own (`event_id`) or a legacy
+        // `meeting_url` note the dashboard has always listed.
+        const notesByPath = new Map<string, TFile>();
+        const meetingsByKey = new Map<string, AgendaMeeting>();
+        const inputs: DashboardMeetingInput[] = [];
+        // Collapse notes sharing a key (event id, or path for legacy url-only
+        // notes) to the most recently modified one, so a duplicated `event_id`
+        // (e.g. a sync-conflict copy) shows the meeting once, not twice.
+        const notedByKey = new Map<
+            string,
+            { input: DashboardMeetingInput; file: TFile; mtime: number }
+        >();
+        // Normalized meeting URLs of noted meetings, so a calendar event a
+        // legacy `meeting_url` note already covers (but which carries no
+        // matching `event_id`) isn't listed a second time below.
+        const notedUrls = new Set<string>();
+        const normalizeUrl = (v: unknown): string =>
+            typeof v === "string"
+                ? v.trim().replace(/\/+$/, "").toLowerCase()
+                : "";
+        // One vault scan feeds both the noted-meeting inputs below and the
+        // note index used to dedup calendar events (reused, not re-walked).
+        const scanned = scanMeetingNotes(this.app);
+        for (const entry of scanned) {
+            if (entry.eventId === null && !entry.hasMeetingUrl) continue;
+            const fm = this.app.metadataCache.getFileCache(entry.file)
+                ?.frontmatter as Record<string, unknown> | undefined;
+            const titleRaw = fm?.["title"];
+            const title =
+                typeof titleRaw === "string" && titleRaw
+                    ? titleRaw
+                    : entry.file.basename;
+            const url = normalizeUrl(fm?.["meeting_url"]);
+            if (url) notedUrls.add(url);
+            const key = entry.eventId ?? entry.file.path;
+            const mtime = entry.file.stat?.mtime ?? 0;
+            const existing = notedByKey.get(key);
+            if (existing && existing.mtime >= mtime) continue;
+            notedByKey.set(key, {
+                input: {
+                    key,
+                    title,
+                    start: entry.stamp ? parseStampDate(entry.stamp) : null,
+                    status: entry.status ?? "",
+                    hasRecording: recordingLinkTarget(entry.recording) !== "",
+                    notePath: entry.file.path,
+                },
+                file: entry.file,
+                mtime,
+            });
+        }
+        for (const { input, file } of notedByKey.values()) {
+            notesByPath.set(file.path, file);
+            inputs.push(input);
+        }
+
+        // Calendar events without a note yet — the enrichment. A timed event
+        // whose note already exists is dropped here (the note row above
+        // represents it, with fresh state), whether the match is by `event_id`
+        // or a legacy note's meeting URL. All-day entries (OOO, birthdays)
+        // aren't meetings, so they're skipped.
+        const index = buildNoteIndex(this.app, scanned);
+        for (const ev of events) {
+            if (ev.allDay) continue;
+            const m = toAgendaMeeting(ev, index);
+            if (m.note) continue;
+            const url = normalizeUrl(m.meetingUrl);
+            if (url && notedUrls.has(url)) continue;
+            meetingsByKey.set(m.id, m);
+            inputs.push({
+                key: m.id,
+                title: m.title,
+                start: m.start,
+                status: "",
+                hasRecording: false,
+                notePath: null,
+            });
+        }
+
+        const rows = meetingRows(inputs, new Date(), direction);
+        const pageSize = normalizePageSize(
+            direction === "past"
+                ? this.settings.dashboardPastPageSize
+                : this.settings.dashboardUpcomingPageSize
+        );
+        const view = paginate(rows, pageSize, page);
+        // Remember the page so an auto-refresh re-renders where the user is.
+        el.dataset.mcPage = String(view.page);
+
+        el.empty();
+
+        if (calendarError) {
+            el.createEl("p", {
+                text: d.calendarError,
+                cls: "mc-meetings-error",
+            });
+        }
+
+        if (view.total === 0) {
+            el.createEl("p", {
+                text: direction === "past" ? d.pastEmpty : d.upcomingEmpty,
+                cls: "mc-meetings-empty",
+            });
+        } else {
+            const table = el.createEl("table", { cls: "mc-meetings" });
+            const body = table.createEl("tbody");
+            const pad = (n: number): string => String(n).padStart(2, "0");
+            const timeStr = (dt: Date): string =>
+                `${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+            const dayKey = (dt: Date): string =>
+                `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(
+                    dt.getDate()
+                )}`;
+            const dayLabel = (dt: Date): string =>
+                dt.toLocaleDateString(undefined, {
+                    weekday: "short",
+                    month: "short",
+                    day: "numeric",
+                });
+
+            // Aggregate by day: a subheader row per date replaces a per-row
+            // date column. Rows are already sorted, so a running key is enough.
+            let lastDay = "";
+            for (const row of view.rows) {
+                const key = dayKey(row.start);
+                if (key !== lastDay) {
+                    lastDay = key;
+                    const dayTr = body.createEl("tr", {
+                        cls: "mc-meetings-dayrow",
+                    });
+                    dayTr.createEl("td", {
+                        cls: "mc-meetings-day",
+                        text: dayLabel(row.start),
+                        attr: { colspan: "2" },
+                    });
+                }
+
+                const tr = body.createEl("tr");
+                const file = row.notePath
+                    ? notesByPath.get(row.notePath)
+                    : null;
+
+                // Time + title in one column; the time is a fixed-width prefix.
+                const whenTd = tr.createEl("td", { cls: "mc-meetings-when" });
+                whenTd.createSpan({
+                    cls: "mc-meetings-time",
+                    text: timeStr(row.start),
+                });
+                if (file) {
+                    const link = whenTd.createEl("a", {
+                        text: row.title,
+                        cls: "mc-meetings-title internal-link",
+                    });
+                    link.onclick = (e): void => {
+                        e.preventDefault();
+                        this.openFileInTab(file);
+                    };
+                } else {
+                    // No note yet: plain (non-link) title. The create-note icon
+                    // in the trailing cell already signals there's no note, so
+                    // there's no "No note" status text.
+                    whenTd.createSpan({
+                        text: row.title,
+                        cls: "mc-meetings-title mc-meeting-nonote",
+                    });
+                }
+
+                // Trailing cell merges the old Status + Actions columns: for a
+                // noted row, a colour-coded status dot (status is its tooltip);
+                // for a note-less row, the create-note icon. Both centre in a
+                // fixed-width cell so a lone dot lines up with the icon above.
+                const trailTd = tr.createEl("td", { cls: "mc-meetings-trail" });
+                if (row.notePath && row.status && row.status !== "—") {
+                    const label =
+                        (d.status as Record<string, string>)[row.status] ??
+                        row.status;
+                    const dot = trailTd.createSpan({
+                        cls: `mc-status-dot mc-status-${row.status}`,
+                    });
+                    dot.setAttribute("aria-label", label);
+                } else if (!row.notePath) {
+                    const meeting = meetingsByKey.get(row.key);
+                    if (meeting) {
+                        const create = trailTd.createEl("button", {
+                            cls: "mc-icon-btn",
+                        });
+                        setIcon(create, "file-plus");
+                        create.setAttribute("aria-label", d.createNote);
+                        create.onclick = (e): void => {
+                            e.preventDefault();
+                            void this.createNoteOnly(meeting).then(() =>
+                                this.renderMeetingsSection(
+                                    el,
+                                    direction,
+                                    view.page
+                                )
+                            );
+                        };
+                    }
+                }
+            }
+        }
+
+        this.renderDashToolbar(el, {
+            countText:
+                direction === "past"
+                    ? d.pastCount(view.total)
+                    : d.upcomingCount(view.total),
+            legend: [
+                { cls: "mc-status-scheduled", label: d.status.scheduled },
+                { cls: "mc-status-recorded", label: d.status.recorded },
+                { cls: "mc-status-transcribed", label: d.status.transcribed },
+                { cls: "mc-status-enriched", label: d.status.enriched },
+            ],
+            pageSize,
+            view,
+            onPageSize: (n): void => {
+                if (direction === "past") {
+                    this.settings.dashboardPastPageSize = n;
+                } else {
+                    this.settings.dashboardUpcomingPageSize = n;
+                }
+                void this.saveSettings();
+                // A different page size shifts every boundary; back to page 1.
+                void this.renderMeetingsSection(el, direction, 1);
+            },
+            onGoTo: (p): void => void this.renderMeetingsSection(el, direction, p),
+            onRefresh: (): void =>
+                void this.renderMeetingsSection(el, direction, view.page, true),
+        });
+
+        restoreScroll();
+    }
+
+    /**
+     * Shared bottom toolbar for the dashboard's paginated sections: a count on
+     * the left, and on the right the per-page dropdown, prev/next + "page x of
+     * y" (only when there's more than one page), and a circular refresh icon.
+     * Callbacks re-render the owning section.
+     */
+    private renderDashToolbar(
+        parent: HTMLElement,
+        opts: {
+            countText: string;
+            pageSize: number;
+            view: Page<unknown>;
+            onPageSize: (size: number) => void;
+            onGoTo: (page: number) => void;
+            onRefresh: () => void;
+            /** Optional status colour key rendered on the left of the bar. */
+            legend?: Array<{ cls: string; label: string }>;
+        }
+    ): void {
+        const c = t().dashboard.controls;
+        const bar = parent.createDiv({ cls: "mc-dash-toolbar" });
+        const left = bar.createDiv({ cls: "mc-dash-toolbar-left" });
+        left.createSpan({ cls: "mc-dash-count", text: opts.countText });
+        if (opts.legend) {
+            const legend = left.createDiv({ cls: "mc-dash-legend" });
+            for (const item of opts.legend) {
+                const li = legend.createSpan({ cls: "mc-dash-legend-item" });
+                li.createSpan({ cls: `mc-status-dot ${item.cls}` });
+                li.createSpan({
+                    cls: "mc-dash-legend-label",
+                    text: item.label,
+                });
+            }
+        }
+
+        const right = bar.createDiv({ cls: "mc-dash-toolbar-right" });
+
+        const perPage = right.createDiv({ cls: "mc-dash-perpage" });
+        perPage.createSpan({ text: c.perPage });
+        const select = perPage.createEl("select", { cls: "dropdown" });
+        for (const size of PAGE_SIZE_OPTIONS) {
+            select.createEl("option", {
+                text: String(size),
+                value: String(size),
+            });
+        }
+        select.value = String(opts.pageSize);
+        select.onchange = (): void =>
+            opts.onPageSize(normalizePageSize(Number(select.value)));
+
+        if (opts.view.pageCount > 1) {
+            const nav = right.createDiv({ cls: "mc-pagination" });
+            const prev = nav.createEl("button", { cls: "mc-icon-btn" });
+            setIcon(prev, "chevron-left");
+            prev.setAttribute("aria-label", c.prev);
+            prev.disabled = opts.view.page <= 1;
+            prev.onclick = (): void => opts.onGoTo(opts.view.page - 1);
+            nav.createSpan({
+                cls: "mc-pagination-status",
+                text: c.pageOf(opts.view.page, opts.view.pageCount),
+            });
+            const next = nav.createEl("button", { cls: "mc-icon-btn" });
+            setIcon(next, "chevron-right");
+            next.setAttribute("aria-label", c.next);
+            next.disabled = opts.view.page >= opts.view.pageCount;
+            next.onclick = (): void => opts.onGoTo(opts.view.page + 1);
+        }
+
+        const refresh = right.createEl("button", { cls: "mc-icon-btn" });
+        setIcon(refresh, "refresh-cw");
+        refresh.setAttribute("aria-label", c.refresh);
+        refresh.onclick = (): void => opts.onRefresh();
+    }
+
+    /** Per-action-items-block Component owning the current render's task markdown. */
+    private actionRenderers: WeakMap<HTMLElement, Component> = new WeakMap();
+
+    /** Live action-item render Components, so `onunload` can tear them all down. */
+    private liveActionRenderers: Set<Component> = new Set();
+
+    /**
+     * Monotonic render id per dashboard block element. Async renders (calendar
+     * fetch, vault scan) capture the id at start and bail before mutating the
+     * DOM if a newer render superseded them — so fast paging/Refresh can't let
+     * a slow earlier pass overwrite the latest UI.
+     */
+    private renderSeq: WeakMap<HTMLElement, number> = new WeakMap();
+
+    /** Bumps and returns this element's render id. */
+    private nextRenderSeq(el: HTMLElement): number {
+        const seq = (this.renderSeq.get(el) ?? 0) + 1;
+        this.renderSeq.set(el, seq);
+        return seq;
+    }
+
+    /** Live dashboard block elements → their in-place re-render closure. */
+    private dashboardBlocks: Map<HTMLElement, () => void> = new Map();
+    private dashboardRefreshTimer: number | null = null;
+
+    /** Registers a dashboard block for auto-refresh on the next change. */
+    private trackDashboardBlock(el: HTMLElement, rerender: () => void): void {
+        this.dashboardBlocks.set(el, rerender);
+    }
+
+    /** The block's last-rendered (1-based) page, stashed on the element. */
+    private blockPage(el: HTMLElement): number {
+        const n = Number.parseInt(el.dataset.mcPage ?? "", 10);
+        return Number.isFinite(n) && n > 0 ? n : 1;
+    }
+
+    /** Debounced re-render of every connected dashboard block after a change. */
+    private scheduleDashboardRefresh(): void {
+        if (this.dashboardRefreshTimer !== null) {
+            window.clearTimeout(this.dashboardRefreshTimer);
+        }
+        this.dashboardRefreshTimer = window.setTimeout(() => {
+            this.dashboardRefreshTimer = null;
+            for (const [el, rerender] of this.dashboardBlocks) {
+                if (!el.isConnected) {
+                    this.dashboardBlocks.delete(el);
+                    continue;
+                }
+                rerender();
+            }
+        }, 400);
+    }
+
+    /**
+     * Short-lived cache of the (whole-vault, disk-read) action-items scan so
+     * paging/page-size changes reuse it instead of re-reading every task note.
+     * A tick or Refresh forces a fresh scan (`force`).
+     */
+    private actionScanCache: { at: number; groups: ActionNoteGroup[] } | null =
+        null;
+
+    /** Runs (or reuses, within a short TTL) the action-items scan. */
+    private async scanActionGroups(force: boolean): Promise<ActionNoteGroup[]> {
+        const TTL_MS = 15_000;
+        if (
+            !force &&
+            this.actionScanCache &&
+            Date.now() - this.actionScanCache.at < TTL_MS
+        ) {
+            return this.actionScanCache.groups;
+        }
+        const groups = sortActionNoteGroups(await this.scanOpenTaskNotes());
+        this.actionScanCache = { at: Date.now(), groups };
+        return groups;
+    }
+
+    /**
+     * Renders the dashboard's "Open action items" section: every note in the
+     * vault that still has open (`- [ ]`) tasks, grouped by note and ordered
+     * newest note first, kept dense and paginated (by note). Each group shows a
+     * small linked title + date and its open tasks; ticking a task marks it
+     * done in the source note and re-renders. `page` is 1-based (by note).
+     */
+    private async renderActionItems(
+        el: HTMLElement,
+        page = 1,
+        force = false
+    ): Promise<void> {
+        const a = t().dashboard.actions;
+        const seq = this.nextRenderSeq(el);
+        const restoreScroll = this.preserveScroll(el);
+        // Keep the current list visible while (re)scanning; only show the
+        // loading line on first paint. Emptying up front would collapse the
+        // section and jump the view on a tick or Refresh.
+        if (el.childElementCount === 0) {
+            el.createEl("p", { text: a.loading, cls: "mc-actions-loading" });
+        }
+
+        const groups = await this.scanActionGroups(force);
+        // A newer render started while scanning — let it win.
+        if (this.renderSeq.get(el) !== seq) return;
+        const pageSize = normalizePageSize(
+            this.settings.dashboardActionsPageSize
+        );
+        const view = paginate(groups, pageSize, page);
+        // Remember the page so an auto-refresh re-renders where the user is.
+        el.dataset.mcPage = String(view.page);
+
+        // A short-lived child owns the tasks' rendered markdown so its
+        // sub-views are torn down on the next render (or when the dashboard
+        // closes), rather than piling up on the long-lived plugin instance.
+        // Swapped in only now, right before rebuilding, so the previous
+        // content stayed put during the scan above.
+        const prevRenderer = this.actionRenderers.get(el);
+        if (prevRenderer) {
+            prevRenderer.unload();
+            this.liveActionRenderers.delete(prevRenderer);
+        }
+        const renderer = new Component();
+        renderer.load();
+        this.actionRenderers.set(el, renderer);
+        this.liveActionRenderers.add(renderer);
+
+        el.empty();
+
+        if (view.total === 0) {
+            el.createEl("p", { text: a.empty, cls: "mc-actions-empty" });
+        } else {
+            const list = el.createDiv({ cls: "mc-actions-list" });
+            for (const group of view.rows) {
+                this.renderActionNote(list, group, el, view.page, renderer);
+            }
+        }
+
+        this.renderDashToolbar(el, {
+            countText: a.count(countTasks(groups)),
+            pageSize,
+            view,
+            onPageSize: (n): void => {
+                this.settings.dashboardActionsPageSize = n;
+                void this.saveSettings();
+                void this.renderActionItems(el, 1);
+            },
+            onGoTo: (p): void => void this.renderActionItems(el, p),
+            onRefresh: (): void =>
+                void this.renderActionItems(el, view.page, true),
+        });
+
+        restoreScroll();
+    }
+
+    /** Renders one note's group of open tasks in the action-items list. */
+    private renderActionNote(
+        parent: HTMLElement,
+        group: ActionNoteGroup,
+        sectionEl: HTMLElement,
+        page: number,
+        renderer: Component
+    ): void {
+        const note = parent.createDiv({ cls: "mc-action-note" });
+        const header = note.createDiv({ cls: "mc-action-note-header" });
+        const file = this.app.vault.getAbstractFileByPath(group.path);
+        const title = header.createEl("a", {
+            cls: "mc-action-note-title internal-link",
+            text: group.title,
+        });
+        title.onclick = (e): void => {
+            e.preventDefault();
+            if (file instanceof TFile) this.openFileInTab(file);
+        };
+        if (group.date) {
+            const dt = group.date;
+            const pad = (n: number): string => String(n).padStart(2, "0");
+            header.createSpan({
+                cls: "mc-action-note-date",
+                text: `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(
+                    dt.getDate()
+                )}`,
+            });
+        }
+
+        const ul = note.createEl("ul", { cls: "mc-action-tasks" });
+        for (const task of group.tasks) {
+            const li = ul.createEl("li", {
+                cls: task.done
+                    ? "mc-action-task mc-action-task-done"
+                    : "mc-action-task",
+            });
+            const cb = li.createEl("input", {
+                cls: "mc-action-task-check",
+                type: "checkbox",
+            });
+            if (task.done) {
+                // Recently completed: shown checked/struck through its grace
+                // period, not re-tickable.
+                cb.checked = true;
+                cb.disabled = true;
+            } else {
+                cb.onclick = (): void => {
+                    cb.disabled = true;
+                    void (async (): Promise<void> => {
+                        try {
+                            await this.completeTask(group.path, task);
+                        } catch (e) {
+                            // Re-enable so the user can retry; the write failed
+                            // so the item is still open.
+                            cb.disabled = false;
+                            cb.checked = false;
+                            new Notice(
+                                t().dashboard.actions.taskError(
+                                    e instanceof Error ? e.message : String(e)
+                                )
+                            );
+                            return;
+                        }
+                        await this.renderActionItems(sectionEl, page, true);
+                    })();
+                };
+            }
+            const text = li.createSpan({ cls: "mc-action-task-text" });
+            // Render the task's markdown (bold owners, links) inline.
+            void MarkdownRenderer.render(
+                this.app,
+                task.text,
+                text,
+                group.path,
+                renderer
+            );
+        }
+    }
+
+    /**
+     * Scans every note in the vault for open (`- [ ]`) tasks, returning a group
+     * per note with its title, origin date, and task lines. Kept whole-vault on
+     * purpose: action items live in meeting notes wherever they came from
+     * (including Granola-synced notes, which carry no `event_id`).
+     *
+     * The metadata cache only *pre-filters* to files that (may) have an open
+     * task — cheap, and avoids reading files with none — but the tasks
+     * themselves are re-derived from a fresh disk read. That way a Refresh
+     * reflects the current vault rather than a stale cache: a file the index
+     * still lists but that has since moved/vanished (e.g. an external reorg
+     * Obsidian hasn't fully re-indexed) fails the read and is dropped, instead
+     * of lingering with tasks pointing at a folder that no longer exists.
+     */
+    private async scanOpenTaskNotes(): Promise<ActionNoteGroup[]> {
+        const today = this.todayStamp();
+        const groups: ActionNoteGroup[] = [];
+        for (const file of this.app.vault.getMarkdownFiles()) {
+            const cache = this.app.metadataCache.getFileCache(file);
+            // Pre-filter to files that carry *any* checkbox task (open or done)
+            // — done ones matter too, so a task completed today stays in its
+            // grace period even after the cache marks it done.
+            const mayHaveTasks = (cache?.listItems ?? []).some(
+                (it) => it.task !== undefined
+            );
+            if (!mayHaveTasks) continue;
+
+            let content: string;
+            try {
+                content = await this.app.vault.read(file);
+            } catch {
+                continue;
+            }
+            const tasks = parseNoteTasks(content, today);
+            if (tasks.length === 0) continue;
+
+            const fm = cache?.frontmatter as
+                | Record<string, unknown>
+                | undefined;
+            const titleRaw = fm?.["title"];
+            const title =
+                typeof titleRaw === "string" && titleRaw
+                    ? titleRaw
+                    : file.basename;
+            groups.push({
+                path: file.path,
+                title,
+                date: this.resolveNoteDate(file, fm),
+                tasks,
+            });
+        }
+        return groups;
+    }
+
+    /** Local `YYYY-MM-DD` for today (the `✅` completion date we write/match). */
+    private todayStamp(): string {
+        const now = new Date();
+        const pad = (n: number): string => String(n).padStart(2, "0");
+        return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(
+            now.getDate()
+        )}`;
+    }
+
+    /**
+     * Best-effort "when did this note happen" for ordering the action-items
+     * list: a `start`/`date`/`created` frontmatter stamp, else a leading
+     * `YYYY-MM-DD` in the filename (Granola's convention), else the file mtime.
+     */
+    private resolveNoteDate(
+        file: TFile,
+        fm: Record<string, unknown> | undefined
+    ): Date | null {
+        const fromFm = (k: string): Date | null => {
+            const v = fm?.[k];
+            if (typeof v !== "string" || !v) return null;
+            const d = parseStampDate(v);
+            return Number.isNaN(d.getTime()) ? null : d;
+        };
+        const stamped = fromFm("start") ?? fromFm("date") ?? fromFm("created");
+        if (stamped) return stamped;
+        const m = file.basename.match(/^(\d{4}-\d{2}-\d{2})/);
+        if (m) {
+            const d = parseStampDate(m[1]!);
+            if (!Number.isNaN(d.getTime())) return d;
+        }
+        const mtime = file.stat?.mtime;
+        return typeof mtime === "number" ? new Date(mtime) : null;
+    }
+
+    /**
+     * Marks a scanned task done in its source note. The captured line index is
+     * used when it still holds the task; otherwise the original line text is
+     * located afresh (the note may have changed since the scan). The first
+     * `[ ]` checkbox on that line becomes `[x]` and a `✅ YYYY-MM-DD` completion
+     * date (today) is appended — Obsidian-Tasks compatible, and what the
+     * dashboard reads to keep the item visible until that day is over.
+     */
+    private async completeTask(path: string, task: ActionTask): Promise<void> {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (!(file instanceof TFile)) return;
+        const lines = (await this.app.vault.read(file)).split("\n");
+        let idx = task.line;
+        if (lines[idx] !== task.raw) {
+            idx = lines.findIndex((l) => l === task.raw);
+        }
+        if (idx < 0) {
+            new Notice(t().dashboard.actions.taskMoved);
+            return;
+        }
+        const checked = lines[idx]!.replace(/\[[^\]]\]/, "[x]");
+        lines[idx] = this.appendCompletionDate(checked, this.todayStamp());
+        await this.app.vault.modify(file, lines.join("\n"));
+    }
+
+    /**
+     * Appends a `✅ YYYY-MM-DD` completion date to a task line, unless it
+     * already has one. A trailing block reference (` ^id`) is kept at the end
+     * of the line (Obsidian requires it there) with the date inserted before.
+     */
+    private appendCompletionDate(line: string, dateStr: string): string {
+        if (/✅\s*\d{4}-\d{2}-\d{2}/.test(line)) return line;
+        const mark = `✅ ${dateStr}`;
+        const ref = line.match(/(\s+\^[A-Za-z0-9-]+)\s*$/);
+        if (ref) {
+            const head = line.slice(0, line.length - ref[0].length).trimEnd();
+            return `${head} ${mark}${ref[0]}`;
+        }
+        return `${line.trimEnd()} ${mark}`;
+    }
+
+    /** Nearest scrollable ancestor of an element (the markdown view's scroller). */
+    private scrollParent(el: HTMLElement): HTMLElement | null {
+        let node: HTMLElement | null = el.parentElement;
+        while (node) {
+            const oy = getComputedStyle(node).overflowY;
+            if (
+                (oy === "auto" || oy === "scroll") &&
+                node.scrollHeight > node.clientHeight
+            ) {
+                return node;
+            }
+            node = node.parentElement;
+        }
+        return null;
+    }
+
+    /**
+     * Snapshots the section's scroll position and returns a fn that restores
+     * it. Re-rendering a dashboard section empties and rebuilds its element,
+     * which otherwise makes the view jump (usually to the top) on a task tick,
+     * a page change, or Refresh; call the returned fn once the new content is
+     * in place. The rAF re-apply covers async renders whose height settles a
+     * frame later.
+     */
+    private preserveScroll(el: HTMLElement): () => void {
+        const scroller = this.scrollParent(el);
+        const top = scroller ? scroller.scrollTop : 0;
+        return (): void => {
+            if (!scroller) return;
+            // Re-apply across the next few frames (and a macrotask): async
+            // markdown rendering in the action list settles its height a frame
+            // or two after the initial rebuild, and a single restore would be
+            // undone by that late reflow — leaving the view jumped.
+            const apply = (): void => {
+                scroller.scrollTop = top;
+            };
+            apply();
+            window.requestAnimationFrame(() => {
+                apply();
+                window.requestAnimationFrame(apply);
+            });
+            window.setTimeout(apply, 0);
+        };
     }
 
     /** Opens a file in the active tab (used by dashboard row links/buttons). */
@@ -1985,8 +3017,7 @@ export default class SystemRecordingPlugin extends Plugin {
     private noteRowHandlers(): RowHandlers {
         return {
             onOpenOrCreate: (m) => void this.openOrCreateNote(m),
-            onCreateAndRecord: (m) =>
-                void this.startMeetingRecording(agendaToMeetingInfo(m)),
+            onCreateAndRecord: (m) => this.startRecordingForMeeting(m),
             onCreateNote: (m) => void this.createNoteOnly(m),
             onStop: () => this.stopRecording(),
             onOpenRecording: (m) => void this.openRecording(m),
@@ -2001,9 +3032,7 @@ export default class SystemRecordingPlugin extends Plugin {
                 if (m.meetingUrl) void this.copyMeetingLink(m.meetingUrl);
             },
             onSkip: () => {},
-            isRecordingThis: (m) =>
-                this.recorder.isRecording &&
-                this.currentRecordingEventId === m.id,
+            isRecordingThis: (m) => this.isRecordingMeeting(m),
         };
     }
 
@@ -2074,7 +3103,44 @@ export default class SystemRecordingPlugin extends Plugin {
             new Notice(t().agenda.notices.noRecording);
             return;
         }
+        // A manual re-transcribe REPLACES the transcript. With several takes,
+        // transcribing only the latest and replacing would drop the earlier
+        // ones' text, so rebuild the whole transcript from every take in one
+        // atomic write (see rebuildTranscriptFromTakes). A single take falls
+        // through to the plain replace path. Route on the number of linked takes
+        // (not resolved files) so a missing audio file can't silently downgrade
+        // a multi-take note to a single-take replace that wipes earlier text —
+        // the rebuild detects the missing file and aborts instead.
+        const linkCount = m.note ? this.recordingLinkCount(m.note) : 0;
+        if (m.note && linkCount > 1) {
+            await this.rebuildTranscriptFromTakes(m.note, linkCount, mode);
+            return;
+        }
         await this.launchTranscriber(m.recording, mode);
+    }
+
+    /** How many recordings a note's `recording` frontmatter links (array-aware). */
+    private recordingLinkCount(note: TFile): number {
+        const fm = this.app.metadataCache.getFileCache(note)?.frontmatter as
+            | Record<string, unknown>
+            | undefined;
+        return recordingLinkTargets(fm?.["recording"]).length;
+    }
+
+    /** Resolves a note's linked recording(s) to TFiles, in chronological order. */
+    private resolveRecordingTakes(note: TFile): TFile[] {
+        const fm = this.app.metadataCache.getFileCache(note)?.frontmatter as
+            | Record<string, unknown>
+            | undefined;
+        const out: TFile[] = [];
+        for (const link of recordingLinkTargets(fm?.["recording"])) {
+            const dest = this.app.metadataCache.getFirstLinkpathDest(
+                link,
+                note.path
+            );
+            if (dest instanceof TFile) out.push(dest);
+        }
+        return out;
     }
 
     /**
@@ -2241,8 +3307,15 @@ export default class SystemRecordingPlugin extends Plugin {
      */
     private async launchTranscriber(
         recording: TFile,
-        mode: TranscribeMode = "auto"
+        mode: TranscribeMode = "auto",
+        opts: { fresh?: boolean; enrichAfter?: boolean } = {}
     ): Promise<void> {
+        // "fresh" = the auto-transcribe fired right after a stop (vs. a manual
+        // re-transcribe). The fresh path appends its transcript to any existing
+        // one (so a new take extends the meeting) and may auto-discard an empty
+        // result as silence; a manual re-transcribe replaces. A multi-take
+        // manual rebuild has its own path (rebuildTranscriptFromTakes).
+        const fresh = opts?.fresh ?? false;
         if (!this.settings.apiBaseUrl || !this.settings.apiKey) {
             new Notice(t().notices.transcribeNoEndpoint);
             return;
@@ -2273,7 +3346,8 @@ export default class SystemRecordingPlugin extends Plugin {
                         recording,
                         label,
                         mode,
-                        signal
+                        signal,
+                        fresh
                     );
                 },
             });
@@ -2287,10 +3361,13 @@ export default class SystemRecordingPlugin extends Plugin {
         }
 
         const pending = enrichAfter.value;
+        // Enrich afterwards when the auto-transcribe setting says so, or when the
+        // caller explicitly asked to (e.g. the user clicked Enrich on a not-yet-
+        // transcribed note — we transcribe first, then resume into enrichment).
         if (
             pending &&
             this.settings.enableEnrichment &&
-            this.settings.enrichOnTranscribe
+            (opts.enrichAfter || this.settings.enrichOnTranscribe)
         ) {
             // Pass the fresh transcript so enrichment works even when
             // insertTranscript is off and the note has no transcript yet.
@@ -2299,17 +3376,20 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /**
-     * The single transcription pass run by the queue. Returns the note + fresh
-     * transcript to enrich afterward, or null when there's nothing to enrich
-     * (empty/partial result, or no owning note). Throws only on cancellation, so
-     * the queue rejects and the caller skips enrichment.
+     * Transcribes one recording (take) to ready-to-insert text, without writing
+     * to any note — the shared core of the single-take writer
+     * ({@link transcribeToNote}) and the multi-take rebuild
+     * ({@link rebuildTranscriptFromTakes}). Drives the shared progress bar and
+     * classifies the outcome (see {@link TranscribeTakeResult}). User
+     * cancellation throws {@link TranscriptionCancelledError} so the queue
+     * rejects; every other failure returns an "error"/"partial" result.
      */
-    private async transcribeToNote(
+    private async transcribeTakeToText(
         recording: TFile,
         label: string,
         mode: TranscribeMode,
         signal: AbortSignal
-    ): Promise<{ note: TFile; transcript: string } | null> {
+    ): Promise<TranscribeTakeResult> {
         // Single-owner progress: only the running job writes to the shared bar,
         // labelled with the meeting name (and any queued-behind count).
         const onProgress = (pct: number): void => {
@@ -2386,42 +3466,19 @@ export default class SystemRecordingPlugin extends Plugin {
                 console.warn(
                     `[Meeting Copilot][transcribe] "${recording.name}" produced an empty transcript after filtering; note left unchanged`
                 );
-                new Notice(t().notices.transcribeEmpty);
-                if (!this.recorder.isRecording) this.clearActionStatus();
-                return null;
+                return { kind: "empty" };
             }
             // A partial/failed run comes back as a marker-prefixed string
             // (not clean transcript text), so don't insert it as the transcript.
             if (isPartialTranscript(trimmed)) {
-                new Notice(t().notices.transcribePartial);
-                this.setActionStatus(t().statusBar.transcribeFailed, "error");
-                return null;
+                return { kind: "partial" };
             }
             // Tell the reader (and the enrichment model) who "Me"/"Them" are,
             // so owner attribution of action items has something to go on.
             const finalText = diarized
                 ? `${t().transcript.speakerBanner}\n\n${text}`
                 : text;
-            const result = await this.handleTranscriptionCompleted({
-                audioFile: recording,
-                transcription: finalText,
-                file: null,
-            });
-            console.warn(
-                `[Meeting Copilot][transcribe] "${recording.name}" completed: note ${
-                    result.note
-                        ? "found and updated"
-                        : "NOT found (no note matched this recording)"
-                }`
-            );
-            if (!result.note) {
-                new Notice(t().notices.transcribeNoNote(recording.basename));
-                return null;
-            }
-            // The .me/.them/.speech sidecars are left in place: a later manual
-            // re-transcribe reuses them, and the retention sweep ages them out
-            // on the same rule as the audio.
-            return { note: result.note, transcript: result.transcript ?? finalText };
+            return { kind: "text", text: finalText };
         } catch (e) {
             // A user cancellation must propagate so the queue rejects (and the
             // caller skips enrichment); everything else is a recoverable failure
@@ -2438,27 +3495,208 @@ export default class SystemRecordingPlugin extends Plugin {
             // The engine throws the partial text (marker-prefixed) for a
             // partial/failed run rather than returning it, so classify it.
             if (isPartialTranscript(msg)) {
-                new Notice(t().notices.transcribePartial);
-            } else {
-                new Notice(t().notices.transcribeError(msg));
+                return { kind: "partial" };
             }
+            return { kind: "error", message: msg };
+        }
+    }
+
+    /**
+     * The single-take transcription pass run by the queue: transcribes one
+     * recording and writes the result into its meeting note. Returns the note +
+     * fresh transcript to enrich afterward, or null when there's nothing to
+     * enrich (empty/partial/error result, or no owning note). A `fresh` take
+     * (auto-transcribe right after a stop) APPENDS to any existing transcript so
+     * a new take extends the meeting, and may auto-discard an empty result as
+     * silence; a manual re-transcribe REPLACES. Throws only on cancellation, so
+     * the queue rejects and the caller skips enrichment.
+     */
+    private async transcribeToNote(
+        recording: TFile,
+        label: string,
+        mode: TranscribeMode,
+        signal: AbortSignal,
+        fresh = false
+    ): Promise<{ note: TFile; transcript: string } | null> {
+        const res = await this.transcribeTakeToText(recording, label, mode, signal);
+        if (res.kind === "empty") {
+            // A fresh recording with no speech is the "started before anyone
+            // joined" throwaway — discard it (audio + link) so the meeting
+            // re-offers record. Only on the fresh post-stop path: a manual
+            // re-transcribe that comes back empty must never delete audio.
+            // Safety net: if the recorder's own speech detection (split-mode
+            // speech.json) found speech, an empty transcript is a transcription
+            // miss, not silence — keep the audio rather than discard it.
+            if (
+                fresh &&
+                this.settings.discardSilentRecordings &&
+                !(await this.recordingHasSpeech(recording))
+            ) {
+                await this.discardSilentRecording(recording);
+            } else {
+                new Notice(t().notices.transcribeEmpty);
+            }
+            if (!this.recorder.isRecording) this.clearActionStatus();
+            return null;
+        }
+        if (res.kind === "partial") {
+            new Notice(t().notices.transcribePartial);
             this.setActionStatus(t().statusBar.transcribeFailed, "error");
             return null;
+        }
+        if (res.kind === "error") {
+            new Notice(t().notices.transcribeError(res.message));
+            this.setActionStatus(t().statusBar.transcribeFailed, "error");
+            return null;
+        }
+        const finalText = res.text;
+        const result = await this.handleTranscriptionCompleted(
+            {
+                audioFile: recording,
+                transcription: finalText,
+                file: null,
+            },
+            fresh
+        );
+        console.warn(
+            `[Meeting Copilot][transcribe] "${recording.name}" completed: note ${
+                result.note
+                    ? "found and updated"
+                    : "NOT found (no note matched this recording)"
+            }`
+        );
+        if (!result.note) {
+            new Notice(t().notices.transcribeNoNote(recording.basename));
+            return null;
+        }
+        // The .me/.them/.speech sidecars are left in place: a later manual
+        // re-transcribe reuses them, and the retention sweep ages them out
+        // on the same rule as the audio.
+        return { note: result.note, transcript: result.transcript ?? finalText };
+    }
+
+    /**
+     * Manual re-transcribe for a note that owns several takes: transcribes every
+     * take to text (through the queue, one at a time), then does a SINGLE atomic
+     * replace of the note's transcript with all takes joined chronologically and
+     * enriches once. All-or-nothing: the note is written only when EVERY take
+     * produced text, so a missing audio file, an empty/partial/failed take, or a
+     * cancellation mid-run leaves the existing (complete) transcript intact
+     * rather than replacing it with a shorter rebuild. `expectedTakes` is the
+     * number of linked takes, so an unresolvable link is caught as a missing
+     * file instead of silently dropped.
+     */
+    private async rebuildTranscriptFromTakes(
+        note: TFile,
+        expectedTakes: number,
+        mode: TranscribeMode
+    ): Promise<void> {
+        if (!this.settings.apiBaseUrl || !this.settings.apiKey) {
+            new Notice(t().notices.transcribeNoEndpoint);
+            return;
+        }
+        const takes = this.resolveRecordingTakes(note);
+        // A linked take whose audio can't be resolved means we can't reproduce
+        // the full transcript — abort rather than replace it with a rebuild that
+        // silently omits the missing take.
+        if (takes.length !== expectedTakes) {
+            new Notice(t().notices.retranscribeIncomplete);
+            if (!this.recorder.isRecording) this.clearActionStatus();
+            return;
+        }
+        // Bail if any take is already queued/running (a fresh auto-transcribe,
+        // or a double trigger) — rebuilding while one is in flight would
+        // interleave writes.
+        if (takes.some((take) => this.transcriptionQueue.has(take.path))) {
+            new Notice(t().notices.transcribeInProgress);
+            return;
+        }
+        const label = this.meetingNoteLabel(note);
+        const segments: string[] = [];
+        let allText = true;
+        try {
+            for (const take of takes) {
+                if (this.transcriptionQueue.snapshot().running) {
+                    new Notice(t().notices.transcribeQueued(label));
+                }
+                const outcome: { value: TranscribeTakeResult | null } = {
+                    value: null,
+                };
+                await this.transcriptionQueue.enqueue({
+                    id: take.path,
+                    label,
+                    run: async (signal) => {
+                        outcome.value = await this.transcribeTakeToText(
+                            take,
+                            label,
+                            mode,
+                            signal
+                        );
+                    },
+                });
+                const res = outcome.value;
+                if (res?.kind === "text") {
+                    segments.push(res.text);
+                    continue;
+                }
+                // Any non-text outcome (empty/partial/error) means we can't
+                // produce the complete transcript this run — remember that and
+                // surface why, but keep going so the user sees every take's
+                // outcome before we decide not to overwrite.
+                allText = false;
+                if (res?.kind === "partial")
+                    new Notice(t().notices.transcribePartial);
+                else if (res?.kind === "error")
+                    new Notice(t().notices.transcribeError(res.message));
+                else new Notice(t().notices.transcribeEmpty);
+            }
+        } catch (e) {
+            // Cancellation (or an unexpected queue failure) mid-rebuild: leave
+            // the existing transcript untouched rather than write a partial one.
+            if (!(e instanceof TranscriptionCancelledError)) {
+                console.warn("[Meeting Copilot] transcript rebuild failed", e);
+            }
+            return;
+        }
+        if (!allText || segments.length === 0) {
+            // Some take didn't come back as clean text: don't overwrite the
+            // existing (complete) transcript with a shorter rebuild.
+            console.warn(
+                "[Meeting Copilot][transcribe] rebuild incomplete; note left unchanged"
+            );
+            new Notice(t().notices.retranscribeIncomplete);
+            if (!this.recorder.isRecording) this.clearActionStatus();
+            return;
+        }
+        const combined = segments.join(TRANSCRIPT_SEGMENT_SEPARATOR);
+        if (this.settings.insertTranscript) {
+            await insertTranscript(this.app, note, combined, { append: false });
+            new Notice(t().notices.transcriptAdded(note.basename));
+            this.setActionStatus(t().statusBar.transcriptAdded, "success");
+        } else if (!this.recorder.isRecording) {
+            this.hideStatusBar();
+        }
+        this.agendaEvents.emit("changed", undefined);
+        if (this.settings.enableEnrichment && this.settings.enrichOnTranscribe) {
+            await this.enrichMeetingNote(note, combined);
         }
     }
 
     /** A friendly name for a recording in the queue UI: its meeting note's title, else the file basename. */
     private transcribeLabelFor(recording: TFile): string {
         const note = findMeetingNoteForAudio(this.app, recording);
-        if (note) {
-            const fm = this.app.metadataCache.getFileCache(note)?.frontmatter as
-                | Record<string, unknown>
-                | undefined;
-            const title = fm?.["title"];
-            if (typeof title === "string" && title.trim()) return title.trim();
-            return note.basename;
-        }
+        if (note) return this.meetingNoteLabel(note);
         return recording.basename;
+    }
+
+    /** A meeting note's display label for the queue UI: its `title` frontmatter, else its basename. */
+    private meetingNoteLabel(note: TFile): string {
+        const fm = this.app.metadataCache.getFileCache(note)?.frontmatter as
+            | Record<string, unknown>
+            | undefined;
+        const title = fm?.["title"];
+        if (typeof title === "string" && title.trim()) return title.trim();
+        return note.basename;
     }
 
     /** Reflects the queue's running/waiting state in the status bar (single-owner). */
@@ -2998,13 +4236,124 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /**
+     * True when the recorder's speech-window sidecar (split mode's
+     * `<base>.speech.json`) reports any speech. Absent sidecar (mixed mode) →
+     * false: there's no independent evidence, so the empty transcript is taken at
+     * face value. Guards silent-discard against transcription misses, so it errs
+     * toward KEEPING the audio whenever the evidence is uncertain: a sidecar that
+     * exists but is unreadable/unparsable returns true (don't discard). Reads the
+     * sidecar straight off disk via the adapter (not the vault index) so a
+     * just-written speech.json isn't missed to index lag — which would strip the
+     * very safety net right when it matters most (immediately after a stop).
+     */
+    private async recordingHasSpeech(recording: TFile): Promise<boolean> {
+        const speechPath = sidecarPathsFor(recording.path).speech;
+        let raw: string;
+        try {
+            if (!(await this.app.vault.adapter.exists(speechPath))) return false;
+            raw = await this.app.vault.adapter.read(speechPath);
+        } catch {
+            // Present but unreadable → don't treat as silence.
+            return true;
+        }
+        const windows = parseSpeechWindows(raw);
+        // Present but unparsable → err toward keeping the audio.
+        if (!windows) return true;
+        return windows.me.length > 0 || windows.them.length > 0;
+    }
+
+    /**
+     * Moves a vault file to the trash if it exists; never throws. Resolves via
+     * the adapter (+ retry) rather than the vault index so a just-written file
+     * the index hasn't caught up to (the .me/.them/.speech sidecars right after a
+     * stop) is still found and removed instead of orphaned. Returns true when the
+     * path is gone afterward (absent to begin with, or trashed), false only when
+     * the file exists but trashing failed — so callers can avoid unlinking a
+     * recording whose audio is still on disk.
+     */
+    private async trashIfExists(vaultPath: string): Promise<boolean> {
+        // Check the disk directly (bypassing the vault index) so a genuinely
+        // absent path returns fast and a just-written file is still found.
+        if (!(await this.app.vault.adapter.exists(vaultPath))) return true;
+        const f = await this.resolveFileWithRetry(vaultPath);
+        if (!f) {
+            // On disk but never resolved to a TFile (index lag exhausted): we
+            // can't trash it via the file manager, and claiming success would
+            // orphan it — report failure so the caller keeps the link.
+            console.warn(
+                `[Meeting Copilot] could not resolve ${vaultPath} to trash it`
+            );
+            return false;
+        }
+        try {
+            await this.app.fileManager.trashFile(f);
+            return true;
+        } catch (e) {
+            console.warn(`[Meeting Copilot] failed to trash ${vaultPath}`, e);
+            return false;
+        }
+    }
+
+    /**
+     * Discards a just-stopped recording that came back silent (no speech in its
+     * transcript): trashes the audio + its split sidecars and removes the
+     * recording's link from its owning meeting note, so the meeting immediately
+     * re-offers "record". When that was the note's only recording and no
+     * transcript was ever saved, the note falls back to "scheduled" so it
+     * doesn't read as recorded. The owning note is resolved *before* trashing
+     * (the link resolves only while the file still exists). Best-effort.
+     */
+    private async discardSilentRecording(recording: TFile): Promise<void> {
+        const note = findMeetingNoteForAudio(this.app, recording);
+        const prunedPath = recording.path;
+        const sc = sidecarPathsFor(recording.path);
+        // Trash the audio first; only unlink it from the note once it's actually
+        // gone. Unlinking a still-present recording would orphan it — on disk but
+        // owned by no note, so the retention sweep would never reclaim it.
+        if (!(await this.trashIfExists(recording.path))) {
+            console.warn(
+                `[Meeting Copilot][recorder] could not discard silent recording "${recording.name}" (trash failed); left linked`
+            );
+            return;
+        }
+        await this.trashIfExists(sc.me);
+        await this.trashIfExists(sc.them);
+        await this.trashIfExists(sc.speech);
+        if (note) {
+            await this.app.fileManager.processFrontMatter(note, (fm) => {
+                const f = fm as Record<string, unknown>;
+                const next = dropRecordingLink(f.recording, prunedPath);
+                const hasTranscript = f.transcript_saved === true;
+                if (next === undefined) {
+                    // No recordings left: back to "scheduled" unless an earlier
+                    // transcript is still in the note (then it's "transcribed").
+                    delete f.recording;
+                    f.status = hasTranscript ? "transcribed" : "scheduled";
+                } else {
+                    // Other take(s) remain — `linkRecording` had regressed status
+                    // to "recorded" for this now-discarded take; reflect whether
+                    // the survivors are already transcribed.
+                    f.recording = next;
+                    f.status = hasTranscript ? "transcribed" : "recorded";
+                }
+            });
+        }
+        console.warn(
+            `[Meeting Copilot][recorder] discarded silent recording "${recording.name}"`
+        );
+        new Notice(t().notices.silentDiscarded);
+        this.agendaEvents.emit("changed", undefined);
+    }
+
+    /**
      * Inserts a finished transcription into its meeting note and refreshes the
      * agenda. Returns the owning note (when found) and the fresh transcript, so
      * the caller can enrich *after* the transcription queue slot is released
      * (enrichment no longer runs from inside this method — see launchTranscriber).
      */
     private async handleTranscriptionCompleted(
-        payload: unknown
+        payload: unknown,
+        append = false
     ): Promise<{ note: TFile | null; transcript: string | null }> {
         let enrichTarget: TFile | null = null;
         let transcriptText: string | null = null;
@@ -3037,9 +4386,20 @@ export default class SystemRecordingPlugin extends Plugin {
                     // "note found" (not the misleading "no meeting note" notice).
                     enrichTarget = note;
                     if (this.settings.insertTranscript && !already) {
-                        await insertTranscript(this.app, note, transcript);
+                        await insertTranscript(this.app, note, transcript, {
+                            append,
+                        });
                         new Notice(t().notices.transcriptAdded(note.basename));
                         inserted = true;
+                        // Hand the caller the FULL callout (all takes) to enrich,
+                        // not just this take — otherwise a second take's summary
+                        // would ignore the first. On the replace path this equals
+                        // the take just written; on append it's the combined
+                        // chronological transcript.
+                        const combined = extractTranscript(
+                            await this.app.vault.read(note)
+                        );
+                        if (combined.trim().length > 0) transcriptText = combined;
                     }
                 }
             }
@@ -3084,6 +4444,26 @@ export default class SystemRecordingPlugin extends Plugin {
         if (!apiBaseUrl || !apiKey || !enrichModel) {
             new Notice(t().notices.enrichNotConfigured);
             return;
+        }
+        // Resume the workflow: a recorded-but-not-yet-transcribed note has no
+        // transcript to enrich, so transcribe its recording first — the
+        // transcription pipeline then enriches automatically once the transcript
+        // lands. Skipped when a fresh transcript is handed in (i.e. we were
+        // called *by* that pipeline) to avoid looping.
+        const hasFreshTranscript =
+            transcriptOverride !== undefined &&
+            transcriptOverride.trim().length > 0;
+        if (!hasFreshTranscript) {
+            const existing = extractTranscript(await this.app.vault.read(file));
+            if (!existing.trim()) {
+                const recording = this.agendaMeetingFromNote(file).recording;
+                if (recording) {
+                    await this.launchTranscriber(recording, "auto", {
+                        enrichAfter: true,
+                    });
+                    return;
+                }
+            }
         }
         // Guard against overlapping runs on the same note (double-click, agenda
         // + command, or auto-enrich racing a manual enrich).
@@ -3377,13 +4757,15 @@ export default class SystemRecordingPlugin extends Plugin {
             const ownedRecordings = new Set<string>();
             for (const entry of scanMeetingNotes(this.app)) {
                 if (!entry.eventId) continue;
-                const link = recordingLinkTarget(entry.recording);
-                if (!link) continue;
-                const dest = this.app.metadataCache.getFirstLinkpathDest(
-                    link,
-                    entry.file.path
-                );
-                if (dest instanceof TFile) ownedRecordings.add(dest.path);
+                // A meeting can link more than one recording; own them all so a
+                // second take is swept on the same rule as the first.
+                for (const link of recordingLinkTargets(entry.recording)) {
+                    const dest = this.app.metadataCache.getFirstLinkpathDest(
+                        link,
+                        entry.file.path
+                    );
+                    if (dest instanceof TFile) ownedRecordings.add(dest.path);
+                }
             }
             const folders = [...new Set(this.configuredMeetingRoots())].filter(
                 (f) => f.length > 0
@@ -3428,6 +4810,12 @@ export default class SystemRecordingPlugin extends Plugin {
                 // audio) or the transcript was never captured — deleting those
                 // would destroy the only copy.
                 if (!note || !this.noteHasSavedTranscript(note)) continue;
+                // A note carrying more than one recording keeps `transcript_saved`
+                // from an earlier take even while a newer take is still pending
+                // transcription (status "recorded"). Pruning then could delete
+                // the newer, not-yet-captured audio — so hold off on the whole
+                // note until its latest take has been transcribed.
+                if (this.noteHasPendingRecording(note)) continue;
                 if (await trash(info.path)) {
                     removed++;
                     // Trash the split sidecars alongside the primary recording.
@@ -3435,13 +4823,20 @@ export default class SystemRecordingPlugin extends Plugin {
                     await trash(sc.me);
                     await trash(sc.them);
                     await trash(sc.speech);
-                    // Drop the note's now-dangling link (transcript stays in the note).
+                    // Drop just this recording's now-dangling link (a meeting
+                    // may have several); the transcript stays in the note. Only
+                    // stamp `recording_pruned` once the last one is gone.
                     await this.app.fileManager.processFrontMatter(note, (fm) => {
                         const f = fm as Record<string, unknown>;
-                        delete f.recording;
-                        f.recording_pruned = new Date()
-                            .toISOString()
-                            .slice(0, 10);
+                        const next = dropRecordingLink(f.recording, info.path);
+                        if (next === undefined) {
+                            delete f.recording;
+                            f.recording_pruned = new Date()
+                                .toISOString()
+                                .slice(0, 10);
+                        } else {
+                            f.recording = next;
+                        }
                     });
                 }
             }
@@ -3502,12 +4897,24 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /**
-     * Creates or refreshes a Dataview-powered meetings dashboard note. Only the
+     * True when the note has a recording awaiting transcription — its `status`
+     * is "recorded" (the state `linkRecording` stamps on every stop, cleared to
+     * "transcribed" by `insertTranscript`). Used to hold retention off a
+     * multi-take note whose newest take isn't captured yet, even though an
+     * earlier take already set `transcript_saved`.
+     */
+    private noteHasPendingRecording(note: TFile): boolean {
+        const fm = this.app.metadataCache.getFileCache(note)?.frontmatter;
+        return fm?.status === "recorded";
+    }
+
+    /**
+     * Creates or refreshes the plugin-rendered meetings dashboard note. Only the
      * plugin-managed block between markers is rewritten, so user edits around it
      * survive re-runs.
      */
     private async createDashboard(): Promise<void> {
-        // Only decides where the dashboard *note* lives; the Dataview block
+        // Only decides where the dashboard *note* lives; the rendered block
         // itself is vault-wide (see buildDashboardBlock).
         const folder = templateStaticRoot(this.settings.oneOffFolderTemplate) || "Meetings";
         if (!(await this.app.vault.adapter.exists(folder))) {
@@ -3528,6 +4935,19 @@ export default class SystemRecordingPlugin extends Plugin {
         } else {
             file = await this.app.vault.create(path, `${block}\n`);
         }
+        // Tag the note so it can use the full editor width (readable line length
+        // off) and render its tables densely — see styles.css. Merges into any
+        // existing `cssclasses` rather than clobbering the user's.
+        await this.app.fileManager.processFrontMatter(file, (fm) => {
+            const raw = (fm as Record<string, unknown>).cssclasses;
+            const list = Array.isArray(raw)
+                ? raw.filter((c): c is string => typeof c === "string")
+                : typeof raw === "string" && raw
+                  ? [raw]
+                  : [];
+            if (!list.includes(DASHBOARD_CSS_CLASS)) list.push(DASHBOARD_CSS_CLASS);
+            (fm as Record<string, unknown>).cssclasses = list;
+        });
         await this.app.workspace.getLeaf(false).openFile(file);
         new Notice(t().notices.dashboardCreated);
     }
@@ -3609,7 +5029,9 @@ export default class SystemRecordingPlugin extends Plugin {
                                 );
                                 return;
                             }
-                            return this.launchTranscriber(audio);
+                            return this.launchTranscriber(audio, "auto", {
+                                fresh: true,
+                            });
                         })
                         .catch((e) => {
                             console.warn(
