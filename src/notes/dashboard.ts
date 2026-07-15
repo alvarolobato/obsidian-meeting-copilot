@@ -15,6 +15,14 @@ export const PAST_BLOCK_LANG = "meeting-copilot-past";
 export const ACTIONS_BLOCK_LANG = "meeting-copilot-actions";
 
 /**
+ * `cssclasses` value the Create-dashboard command stamps on the dashboard note
+ * so `styles.css` can let it use the full editor width (readable line length
+ * off) and render its tables densely. Kept here so the frontmatter writer and
+ * the stylesheet agree on the string.
+ */
+export const DASHBOARD_CSS_CLASS = "meeting-copilot-dashboard";
+
+/**
  * Builds the managed dashboard block. Every section is plugin-rendered — not
  * Dataview — so each can offer a per-page dropdown + pagination and richer
  * layout than a `TABLE`/`TASK` query allows. "Upcoming"/"Past meetings" merge

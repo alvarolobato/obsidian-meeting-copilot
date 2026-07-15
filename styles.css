@@ -229,12 +229,13 @@
 table.mc-attention {
     width: 100%;
     border-collapse: collapse;
+    font-size: var(--font-ui-smaller);
 }
 
 table.mc-attention th,
 table.mc-attention td {
     text-align: left;
-    padding: var(--size-2-2) var(--size-4-2);
+    padding: var(--size-2-1) var(--size-2-3);
     border-bottom: 1px solid var(--background-modifier-border);
     vertical-align: middle;
 }
@@ -276,6 +277,22 @@ table.mc-attention td {
 }
 
 /* =========================================================================
+ * Dashboard note layout: maximize screen usage. The Create-dashboard command
+ * stamps the note with the `meeting-copilot-dashboard` cssclass; here that
+ * turns off readable-line-length (so the tables use the full window) and trims
+ * the side padding, in both reading and live-preview/source modes.
+ * ====================================================================== */
+.meeting-copilot-dashboard .markdown-preview-sizer,
+.meeting-copilot-dashboard .cm-sizer {
+    max-width: none !important;
+}
+
+.meeting-copilot-dashboard.markdown-preview-view {
+    padding-left: var(--size-4-3);
+    padding-right: var(--size-4-3);
+}
+
+/* =========================================================================
  * Dashboard sections rendered by the plugin (meetings tables + action items):
  * calendar-enriched, dense, and paginated via a shared bottom toolbar.
  * ====================================================================== */
@@ -293,14 +310,22 @@ table.mc-attention td {
 table.mc-meetings {
     width: 100%;
     border-collapse: collapse;
+    font-size: var(--font-ui-smaller);
 }
 
 table.mc-meetings th,
 table.mc-meetings td {
     text-align: left;
-    padding: var(--size-2-2) var(--size-4-2);
+    padding: var(--size-2-1) var(--size-2-3);
     border-bottom: 1px solid var(--background-modifier-border);
     vertical-align: middle;
+}
+
+/* Dense, muted column headers to match the action-items list. */
+table.mc-meetings th,
+table.mc-attention th {
+    font-weight: var(--font-normal);
+    color: var(--text-muted);
 }
 
 /* No-note rows: muted, non-link title with a "create note" action. */

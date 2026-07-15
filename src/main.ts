@@ -56,6 +56,7 @@ import {
     ACTIONS_BLOCK_LANG,
     ATTENTION_BLOCK_LANG,
     buildDashboardBlock,
+    DASHBOARD_CSS_CLASS,
     PAST_BLOCK_LANG,
     UPCOMING_BLOCK_LANG,
     withDashboardBlock,
@@ -3808,6 +3809,19 @@ export default class SystemRecordingPlugin extends Plugin {
         } else {
             file = await this.app.vault.create(path, `${block}\n`);
         }
+        // Tag the note so it can use the full editor width (readable line length
+        // off) and render its tables densely — see styles.css. Merges into any
+        // existing `cssclasses` rather than clobbering the user's.
+        await this.app.fileManager.processFrontMatter(file, (fm) => {
+            const raw = (fm as Record<string, unknown>).cssclasses;
+            const list = Array.isArray(raw)
+                ? raw.filter((c): c is string => typeof c === "string")
+                : typeof raw === "string" && raw
+                  ? [raw]
+                  : [];
+            if (!list.includes(DASHBOARD_CSS_CLASS)) list.push(DASHBOARD_CSS_CLASS);
+            (fm as Record<string, unknown>).cssclasses = list;
+        });
         await this.app.workspace.getLeaf(false).openFile(file);
         new Notice(t().notices.dashboardCreated);
     }
