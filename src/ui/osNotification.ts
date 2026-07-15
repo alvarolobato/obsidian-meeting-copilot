@@ -19,6 +19,8 @@
  * (the native `show` event / web `onshow`), never on a fire-and-forget guess.
  */
 
+import { notifLog } from "../util/notifLog";
+
 /** One action button on a native notification. The first is the default; extras go in the macOS dropdown. */
 export interface OsNotificationAction {
 	text: string;
@@ -113,15 +115,24 @@ function getRemoteNotificationCtor(): RemoteNotificationCtor | null {
 	try {
 		const req = (window as unknown as { require?: (id: string) => unknown })
 			.require;
-		if (typeof req !== "function") return null;
-		const electron = req("electron") as ElectronRendererLike | undefined;
-		const Ctor = electron?.remote?.Notification;
-		if (!Ctor) return null;
-		if (typeof Ctor.isSupported === "function" && !Ctor.isSupported()) {
+		if (typeof req !== "function") {
+			notifLog("getRemoteNotificationCtor: no window.require (web path only)");
 			return null;
 		}
+		const electron = req("electron") as ElectronRendererLike | undefined;
+		const Ctor = electron?.remote?.Notification;
+		if (!Ctor) {
+			notifLog("getRemoteNotificationCtor: electron.remote.Notification missing");
+			return null;
+		}
+		if (typeof Ctor.isSupported === "function" && !Ctor.isSupported()) {
+			notifLog("getRemoteNotificationCtor: Notification.isSupported() === false");
+			return null;
+		}
+		notifLog("getRemoteNotificationCtor: native ctor available");
 		return Ctor;
-	} catch {
+	} catch (err) {
+		notifLog("getRemoteNotificationCtor: threw", { err: String(err) });
 		return null;
 	}
 }
@@ -154,7 +165,12 @@ function makeSettler(opts: NotifyOsOptions): Settler {
 function createWeb(opts: NotifyOsOptions, settle: Settler): Notification | null {
 	try {
 		const N = window.Notification;
+		notifLog("createWeb: attempting", {
+			hasN: !!N,
+			permission: N ? N.permission : "n/a",
+		});
 		if (!N || N.permission !== "granted") {
+			notifLog("createWeb: no permission -> failed");
 			settle.failed();
 			return null;
 		}
@@ -166,9 +182,16 @@ function createWeb(opts: NotifyOsOptions, settle: Settler): Notification | null 
 		const body = opts.webHint ? `${opts.body} · ${opts.webHint}` : opts.body;
 		const notification = new N(opts.title, { body });
 		lastWeb = notification;
+		notifLog("createWeb: created web notification");
 		// `onshow` is the "sure it's on screen" signal for the web path.
-		notification.onshow = (): void => settle.shown();
-		notification.onerror = (): void => settle.failed();
+		notification.onshow = (): void => {
+			notifLog("createWeb: onshow");
+			settle.shown();
+		};
+		notification.onerror = (): void => {
+			notifLog("createWeb: onerror");
+			settle.failed();
+		};
 		notification.onclick = (): void => {
 			focusObsidian();
 			try {
@@ -212,23 +235,37 @@ function createNative(
 			actions: actions.map((a) => ({ type: "button", text: a.text })),
 		});
 		lastNative = notification;
+		notifLog("createNative: created", {
+			title: opts.title,
+			actions: actions.length,
+		});
 		// On the modern UNNotification API (Electron 42+) `show`/`failed` fire
 		// asynchronously, so we can't judge success synchronously — listen.
-		notification.on("show", () => settle.shown());
-		notification.on("failed", () => {
+		notification.on("show", () => {
+			notifLog("createNative: 'show' event (delivered — may be banner or Notification Center)");
+			settle.shown();
+		});
+		notification.on("failed", (...args: unknown[]) => {
+			notifLog("createNative: 'failed' event", { args: args.map(String) });
 			if (lastNative === notification) lastNative = null;
 			// A `show` already won the race (a late/spurious `failed`): don't stack
 			// a second, web banner on top of the native one that's on screen.
-			if (settle.isSettled()) return;
+			if (settle.isSettled()) {
+				notifLog("createNative: 'failed' ignored (already settled)");
+				return;
+			}
 			// Native couldn't render (e.g. unsigned build): degrade to a web banner.
+			notifLog("createNative: 'failed' -> falling back to web");
 			onFallback();
 		});
 		notification.on("click", () => {
+			notifLog("createNative: 'click' event");
 			focusObsidian();
 			if (lastNative === notification) lastNative = null;
 			opts.onClick?.();
 		});
 		notification.on("action", (...args: unknown[]) => {
+			notifLog("createNative: 'action' event", { args: args.map(String) });
 			focusObsidian();
 			// Electron passes (event, index); the index maps into `actions`.
 			const index = typeof args[1] === "number" ? args[1] : 0;
@@ -236,11 +273,14 @@ function createNative(
 			actions[index]?.run();
 		});
 		notification.on("close", () => {
+			notifLog("createNative: 'close' event");
 			if (lastNative === notification) lastNative = null;
 		});
 		notification.show();
+		notifLog("createNative: show() called");
 		return notification;
-	} catch {
+	} catch (err) {
+		notifLog("createNative: threw", { err: String(err) });
 		return null;
 	}
 }
@@ -255,6 +295,10 @@ function createNative(
  * if that path is unavailable / fails we degrade to a plain web banner.
  */
 export function notifyOs(opts: NotifyOsOptions): OsNotificationHandle {
+	notifLog("notifyOs: entry", {
+		title: opts.title,
+		actions: opts.actions?.length ?? 0,
+	});
 	const settle = makeSettler(opts);
 	let nativeInst: RemoteNotificationInstance | null = null;
 	let webInst: Notification | null = null;
@@ -266,8 +310,14 @@ export function notifyOs(opts: NotifyOsOptions): OsNotificationHandle {
 	if (opts.actions && opts.actions.length > 0) {
 		nativeInst = createNative(opts, settle, tryWeb);
 	}
-	if (!nativeInst) tryWeb();
-	if (!nativeInst && !webInst) settle.failed();
+	if (!nativeInst) {
+		notifLog("notifyOs: native unavailable -> trying web");
+		tryWeb();
+	}
+	if (!nativeInst && !webInst) {
+		notifLog("notifyOs: neither native nor web could be created -> failed");
+		settle.failed();
+	}
 
 	return {
 		close(): void {

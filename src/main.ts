@@ -125,6 +125,7 @@ import {
 	InAppHandle,
 } from "./ui/dualChannelPrompt";
 import { MeetingPromptModal } from "./ui/meetingPromptModal";
+import { notifLog } from "./util/notifLog";
 import {
     QueueSnapshot,
     TranscriptionCancelledError,
@@ -372,6 +373,32 @@ export default class SystemRecordingPlugin extends Plugin {
 			callback: () => this.cancelActiveTranscription(),
 		});
 
+		// Diagnostic: fire a sample meeting prompt after a delay so you can click
+		// away first to test the system-notification (not-focused) path. Watch the
+		// DevTools console (Cmd+Opt+I) filtered by `mc:notif`.
+		this.addCommand({
+			id: "debug-test-notification",
+			name: "Debug test meeting notification",
+			callback: () => {
+				notifLog("debug-test-notification: scheduled (4s) — click away now to test the system notification");
+				new Notice("Test notification in 4s — click away to test the system notification", 4000);
+				window.setTimeout(() => {
+					notifLog("debug-test-notification: firing", {
+						focused: this.isWindowFocused(),
+					});
+					this.promptMeeting({
+						key: "debug:test",
+						title: "Test meeting",
+						subtitle: "Debug notification",
+						meetLink: "https://example.com/meet",
+						onRecord: () => notifLog("debug-test-notification: onRecord picked"),
+						onOpenNote: () =>
+							notifLog("debug-test-notification: onOpenNote picked"),
+					});
+				}, 4000);
+			},
+		});
+
 		// Once the vault index is ready, nudge the user about recordings that
 		// finished but were never transcribed (e.g. a reload mid-transcription).
 		this.app.workspace.onLayoutReady(() =>
@@ -404,8 +431,35 @@ export default class SystemRecordingPlugin extends Plugin {
 
 		this.updateScheduler();
 		requestNotificationPermission();
+		this.logNotificationEnvironment();
 		this.updateDetector();
     }
+
+	/** One-shot startup dump so "no notifications" reports have concrete context. */
+	private logNotificationEnvironment(): void {
+		let remoteAvailable = false;
+		try {
+			const req = (window as unknown as { require?: (id: string) => unknown })
+				.require;
+			if (typeof req === "function") {
+				const electron = req("electron") as
+					| { remote?: { Notification?: unknown } }
+					| undefined;
+				remoteAvailable = !!electron?.remote?.Notification;
+			}
+		} catch {
+			remoteAvailable = false;
+		}
+		notifLog("environment", {
+			isMacOS: Platform.isMacOS,
+			focused: this.isWindowFocused(),
+			webPermission:
+				typeof window !== "undefined" && window.Notification
+					? window.Notification.permission
+					: "n/a",
+			electronRemoteNotification: remoteAvailable,
+		});
+	}
 
     onunload() {
         if (this.recorder.isRecording) {
@@ -1091,17 +1145,46 @@ export default class SystemRecordingPlugin extends Plugin {
 		/** Builds the in-app fallback notice. */
 		showInApp: () => InAppHandle;
 	}): DualChannelController {
+		const focused = this.isWindowFocused();
+		notifLog("startOsPrompt", {
+			title: opts.title,
+			focused,
+			actions: opts.actions.length,
+		});
+		const showInApp = (): InAppHandle => {
+			notifLog("startOsPrompt: showInApp -> creating in-app notice", {
+				title: opts.title,
+			});
+			try {
+				return opts.showInApp();
+			} catch (err) {
+				notifLog("startOsPrompt: showInApp threw", { err: String(err) });
+				throw err;
+			}
+		};
 		const inner = startDualChannelPrompt({
 			fallbackDelayMs: SystemRecordingPlugin.OS_NOTICE_FALLBACK_MS,
 			timers: this.notifTimers(),
-			showInApp: opts.showInApp,
+			showInApp,
 		});
 		// Obsidian is in front — show the in-app notice directly and don't post a
 		// (duplicate) native banner.
-		if (this.isWindowFocused()) {
+		if (focused) {
+			notifLog("startOsPrompt: focused -> forcing in-app (no OS notification)");
 			inner.forceInApp();
-			return inner;
+			return {
+				osShown: () => inner.osShown(),
+				osFailed: () => inner.osFailed(),
+				forceInApp: () => inner.forceInApp(),
+				dispose: () => {
+					notifLog("startOsPrompt: dispose (focused path)", {
+						title: opts.title,
+					});
+					inner.dispose();
+				},
+			};
 		}
+		notifLog("startOsPrompt: not focused -> posting OS notification");
 		const handle = notifyOs({
 			title: opts.title,
 			body: opts.body,
@@ -1109,18 +1192,27 @@ export default class SystemRecordingPlugin extends Plugin {
 			onClick: opts.onClick,
 			actions: opts.actions,
 			onShown: () => {
+				notifLog("startOsPrompt: onShown (OS delivered)", {
+					title: opts.title,
+				});
 				inner.osShown();
 				// A system notification actually reached the screen — a good moment
 				// to teach (once) how to make them show/persist reliably.
 				this.maybeShowNotificationStyleHint();
 			},
-			onFailed: () => inner.osFailed(),
+			onFailed: () => {
+				notifLog("startOsPrompt: onFailed (OS could not show)", {
+					title: opts.title,
+				});
+				inner.osFailed();
+			},
 		});
 		return {
 			osShown: () => inner.osShown(),
 			osFailed: () => inner.osFailed(),
 			forceInApp: () => inner.forceInApp(),
 			dispose: () => {
+				notifLog("startOsPrompt: dispose (OS path)", { title: opts.title });
 				inner.dispose();
 				handle.close();
 			},
@@ -1183,6 +1275,7 @@ export default class SystemRecordingPlugin extends Plugin {
 	 * end) don't stack two prompts.
 	 */
 	private promptStopRecording(title: string, body: string): void {
+		notifLog("promptStopRecording", { title, body });
 		this.stopPromptNotice?.dispose();
 		const stop = (): void => {
 			// Tear down our own prompt first (cancels the fallback timer and
@@ -1232,6 +1325,11 @@ export default class SystemRecordingPlugin extends Plugin {
 		/** Called whenever the user opens the link (Join / Join & record), so the auto-open at start can be suppressed. */
 		onLinkOpened?: () => void;
 	}): void {
+		notifLog("promptMeeting", {
+			key: opts.key,
+			title: opts.title,
+			hasLink: !!opts.meetLink,
+		});
 		const link =
 			opts.meetLink && opts.meetLink.startsWith("https://")
 				? opts.meetLink
