@@ -84,11 +84,25 @@ describe("transcribeAudio", () => {
 		expect(jobs[0]!.file).toBe(file);
 	});
 
-	it("returns empty string when the backend yields no result", async () => {
-		const backend = sequentialBackend({});
-		// Backend returns [] would give undefined; our sequential fake always
-		// returns one result per job, so simulate an empty transcript instead.
+	it("returns empty string for a legitimately empty transcript", async () => {
+		// The fake returns a result for the job with empty text (silent audio).
+		const backend = sequentialBackend({ single: { id: "single", text: "" } });
 		expect(await transcribeAudio(fakeFile("a.wav"), backend)).toBe("");
+	});
+
+	it("throws when the backend returns NO result for the job (contract violation)", async () => {
+		// A backend that returns an empty array (not a result with empty text)
+		// must surface as a failure, not be coalesced into a silent "".
+		const backend: TranscriptionBackend = {
+			id: "openai-compatible",
+			async validateConfig() {
+				return { ok: true };
+			},
+			async transcribe() {
+				return [];
+			},
+		};
+		await expect(transcribeAudio(fakeFile("a.wav"), backend)).rejects.toThrow(/no result/i);
 	});
 });
 

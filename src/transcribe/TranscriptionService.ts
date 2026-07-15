@@ -62,7 +62,14 @@ export async function transcribeAudio(
 	});
 	// Select by job id rather than position: a backend's result order is not
 	// part of the contract (mirrors how the diarized path looks up me/them).
-	return results.find((r) => r.id === "single")?.text ?? "";
+	const result = results.find((r) => r.id === "single");
+	// A missing result is a backend contract violation, not an empty
+	// transcript — surface it as a failure rather than returning "" (which
+	// main.ts reads as legitimate silence and silently leaves the note alone).
+	if (!result) {
+		throw new Error("Transcription backend returned no result for the audio");
+	}
+	return result.text;
 }
 
 export interface DiarizedResult {
