@@ -36,6 +36,22 @@ describe("AssetProvisioner", () => {
 		expect(sha256File).not.toHaveBeenCalled();
 	});
 
+	it("falls through to download when the size stat throws (file vanished mid-check)", async () => {
+		const downloadToFile = vi.fn(async () => undefined);
+		const deps = makeDeps({
+			fileExists: async () => true,
+			fileSize: async () => {
+				throw new Error("ENOENT");
+			},
+			downloadToFile,
+			sha256File: async () => SHA,
+		});
+		await expect(
+			new AssetProvisioner(deps).ensure(DEST, URL, SHA, SIZE)
+		).resolves.toBe(DEST);
+		expect(downloadToFile).toHaveBeenCalledOnce();
+	});
+
 	it("re-downloads when a present file has the wrong size (partial download)", async () => {
 		const downloadToFile = vi.fn(async () => undefined);
 		const deps = makeDeps({

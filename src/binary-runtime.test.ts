@@ -89,6 +89,26 @@ describe("assetNodeDeps().downloadToFile", () => {
 		expect(seen).toEqual([[1, 0]]);
 	});
 
+	it("rejects when the destination can't be written (write-stream error propagates)", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				fakeResponse({
+					ok: true,
+					status: 200,
+					body: streamFrom([new Uint8Array([1, 2, 3])]),
+					contentLength: 3,
+				})
+			)
+		);
+		// Point the destination at a directory: createWriteStream fails, and the
+		// pipeline must surface that as a rejection rather than hang.
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mc-dl-"));
+		await expect(
+			assetNodeDeps().downloadToFile("https://x/model.bin", dir)
+		).rejects.toBeTruthy();
+	});
+
 	it("throws HTTP <status> and cancels the body on a non-2xx response", async () => {
 		let cancelled = false;
 		vi.stubGlobal(

@@ -3,6 +3,9 @@ import * as fs from "fs";
 import * as fsp from "fs/promises";
 import * as path from "path";
 import * as crypto from "crypto";
+import { Readable, Transform } from "stream";
+import { pipeline } from "stream/promises";
+import type { ReadableStream as NodeWebReadableStream } from "stream/web";
 import { AssetProvisionerDeps, ProvisionerDeps } from "./binary";
 
 export function nodeDeps(): ProvisionerDeps {
@@ -83,41 +86,38 @@ export function assetNodeDeps(): AssetProvisionerDeps {
 			// preferred over requestUrl, precisely because it can stream.
 			// eslint-disable-next-line no-restricted-globals -- requestUrl buffers the full body; a 500 MB model must stream to disk
 			const res = await fetch(url);
-			// Cancel the body on every early-exit path (non-2xx, mkdir/open
-			// failure) so a failed download can't leak an open connection.
 			if (!res.ok || !res.body) {
+				// Cancel the (unconsumed) body so a non-2xx can't leak a socket.
 				await res.body?.cancel().catch(() => undefined);
 				throw new Error(`HTTP ${res.status}`);
 			}
-			const reader = res.body.getReader();
-			let out: fs.WriteStream | undefined;
 			try {
 				await fsp.mkdir(path.dirname(destPath), { recursive: true });
-				out = fs.createWriteStream(destPath);
-				const total = Number(res.headers.get("content-length") ?? 0);
-				let received = 0;
-				for (;;) {
-					const { done, value } = await reader.read();
-					if (done) break;
-					received += value.byteLength;
-					// value is a Uint8Array; WriteStream accepts it without a copy.
-					if (!out.write(value)) {
-						await new Promise<void>((resolve, reject) => {
-							out!.once("error", reject);
-							out!.once("drain", resolve);
-						});
-					}
-					onProgress?.(received, total);
-				}
-				await new Promise<void>((resolve, reject) => {
-					out!.on("error", reject);
-					out!.end(() => resolve());
-				});
 			} catch (e) {
-				out?.destroy();
-				await reader.cancel().catch(() => undefined);
+				// The body is still unconsumed here (pipeline hasn't taken it),
+				// so cancel it before bailing.
+				await res.body.cancel().catch(() => undefined);
 				throw e;
 			}
+			const total = Number(res.headers.get("content-length") ?? 0);
+			let received = 0;
+			const counter = new Transform({
+				transform(chunk: Buffer, _enc, cb) {
+					received += chunk.length;
+					onProgress?.(received, total);
+					cb(null, chunk);
+				},
+			});
+			// pipeline wires backpressure end-to-end, propagates an error from
+			// ANY stage (a stalled read, a disk-full write), and destroys every
+			// stream — including the fetch body via Readable.fromWeb — on
+			// failure, so there's no hand-rolled drain/error/cleanup to get
+			// subtly wrong.
+			await pipeline(
+				Readable.fromWeb(res.body as NodeWebReadableStream<Uint8Array>),
+				counter,
+				fs.createWriteStream(destPath)
+			);
 		},
 		rename: (from, to) => fsp.rename(from, to),
 		unlink: (p) => fsp.unlink(p),
