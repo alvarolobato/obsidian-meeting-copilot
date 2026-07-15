@@ -27,6 +27,7 @@ import { actionNotice, multiActionNotice, NoticeAction } from "./ui/actionNotice
 import {
     ADHOC_ID_PREFIX,
     createMeetingNote,
+    dropRecordingLink,
     findMeetingNoteForAudio,
     folderOf,
     insertTranscript,
@@ -37,6 +38,7 @@ import {
     normalizeFolderPathOrEmpty,
     parseStampDate,
     recordingLinkTarget,
+    recordingLinkTargets,
     sanitizeName,
     scanMeetingNotes,
     stripTranscript,
@@ -241,7 +243,7 @@ export default class SystemRecordingPlugin extends Plugin {
         this.ribbonIconEl = this.addRibbonIcon(
             RECORD_ICON,
             t().ribbon.toggleRecording,
-            () => this.toggleRecording()
+            (evt) => this.onRibbonClick(evt)
         );
 
         // Meeting agenda sidebar view
@@ -597,6 +599,45 @@ export default class SystemRecordingPlugin extends Plugin {
         } else {
             void this.startAdHocMeeting();
         }
+    }
+
+    /**
+     * Ribbon mic behavior. While recording it stops. Otherwise, if a meeting
+     * note is the active file, it offers a choice — record another take for that
+     * meeting, or start a fresh ad-hoc one — so the ribbon is useful when you're
+     * looking at a meeting (e.g. the person finally joined and you want to
+     * record again). With no meeting note in focus it just starts an ad-hoc
+     * meeting, exactly as before.
+     */
+    private onRibbonClick(evt: MouseEvent): void {
+        if (this.recorder.isRecording) {
+            this.stopRecording();
+            return;
+        }
+        const active = this.app.workspace.getActiveFile();
+        if (active && this.isMeetingNote(active)) {
+            const meeting = this.agendaMeetingFromNote(active);
+            const menu = new Menu();
+            menu.addItem((item) =>
+                item
+                    .setTitle(t().ribbon.recordForMeeting(meeting.title))
+                    .setIcon("mic")
+                    .onClick(() =>
+                        void this.startMeetingRecording(
+                            agendaToMeetingInfo(meeting)
+                        )
+                    )
+            );
+            menu.addItem((item) =>
+                item
+                    .setTitle(t().ribbon.newAdhoc)
+                    .setIcon("plus")
+                    .onClick(() => void this.startAdHocMeeting())
+            );
+            menu.showAtMouseEvent(evt);
+            return;
+        }
+        void this.startAdHocMeeting();
     }
 
     /**
@@ -1957,8 +1998,14 @@ export default class SystemRecordingPlugin extends Plugin {
      */
     private async launchTranscriber(
         recording: TFile,
-        mode: TranscribeMode = "auto"
+        mode: TranscribeMode = "auto",
+        opts?: { fresh?: boolean }
     ): Promise<void> {
+        // "fresh" = the auto-transcribe fired right after a stop (vs. a manual
+        // re-transcribe). It appends to any existing transcript instead of
+        // replacing it (so a second take extends the meeting), and lets an
+        // empty result auto-discard the just-made recording as silence.
+        const fresh = opts?.fresh ?? false;
         if (!this.settings.apiBaseUrl || !this.settings.apiKey) {
             new Notice(t().notices.transcribeNoEndpoint);
             return;
@@ -1989,7 +2036,8 @@ export default class SystemRecordingPlugin extends Plugin {
                         recording,
                         label,
                         mode,
-                        signal
+                        signal,
+                        fresh
                     );
                 },
             });
@@ -2024,7 +2072,8 @@ export default class SystemRecordingPlugin extends Plugin {
         recording: TFile,
         label: string,
         mode: TranscribeMode,
-        signal: AbortSignal
+        signal: AbortSignal,
+        fresh = false
     ): Promise<{ note: TFile; transcript: string } | null> {
         // Single-owner progress: only the running job writes to the shared bar,
         // labelled with the meeting name (and any queued-behind count).
@@ -2102,7 +2151,15 @@ export default class SystemRecordingPlugin extends Plugin {
                 console.warn(
                     `[Meeting Copilot][transcribe] "${recording.name}" produced an empty transcript after filtering; note left unchanged`
                 );
-                new Notice(t().notices.transcribeEmpty);
+                // A fresh recording with no speech is the "started before anyone
+                // joined" throwaway — discard it (audio + link) so the meeting
+                // re-offers record. Only on the fresh post-stop path: a manual
+                // re-transcribe that comes back empty must never delete audio.
+                if (fresh && this.settings.discardSilentRecordings) {
+                    await this.discardSilentRecording(recording);
+                } else {
+                    new Notice(t().notices.transcribeEmpty);
+                }
                 if (!this.recorder.isRecording) this.clearActionStatus();
                 return null;
             }
@@ -2118,11 +2175,14 @@ export default class SystemRecordingPlugin extends Plugin {
             const finalText = diarized
                 ? `${t().transcript.speakerBanner}\n\n${text}`
                 : text;
-            const result = await this.handleTranscriptionCompleted({
-                audioFile: recording,
-                transcription: finalText,
-                file: null,
-            });
+            const result = await this.handleTranscriptionCompleted(
+                {
+                    audioFile: recording,
+                    transcription: finalText,
+                    file: null,
+                },
+                fresh
+            );
             console.warn(
                 `[Meeting Copilot][transcribe] "${recording.name}" completed: note ${
                     result.note
@@ -2710,6 +2770,53 @@ export default class SystemRecordingPlugin extends Plugin {
         }
     }
 
+    /** Moves a vault file to the trash if it exists; best-effort (never throws). */
+    private async trashIfExists(vaultPath: string): Promise<void> {
+        const f = this.app.vault.getAbstractFileByPath(vaultPath);
+        if (!(f instanceof TFile)) return;
+        try {
+            await this.app.fileManager.trashFile(f);
+        } catch (e) {
+            console.warn(`[Meeting Copilot] failed to trash ${vaultPath}`, e);
+        }
+    }
+
+    /**
+     * Discards a just-stopped recording that came back silent (no speech in its
+     * transcript): trashes the audio + its split sidecars and removes the
+     * recording's link from its owning meeting note, so the meeting immediately
+     * re-offers "record". When that was the note's only recording and no
+     * transcript was ever saved, the note falls back to "scheduled" so it
+     * doesn't read as recorded. The owning note is resolved *before* trashing
+     * (the link resolves only while the file still exists). Best-effort.
+     */
+    private async discardSilentRecording(recording: TFile): Promise<void> {
+        const note = findMeetingNoteForAudio(this.app, recording);
+        const prunedName = recording.name;
+        const sc = sidecarPathsFor(recording.path);
+        await this.trashIfExists(recording.path);
+        await this.trashIfExists(sc.me);
+        await this.trashIfExists(sc.them);
+        await this.trashIfExists(sc.speech);
+        if (note) {
+            await this.app.fileManager.processFrontMatter(note, (fm) => {
+                const f = fm as Record<string, unknown>;
+                const next = dropRecordingLink(f.recording, prunedName);
+                if (next === undefined) {
+                    delete f.recording;
+                    if (f.transcript_saved !== true) f.status = "scheduled";
+                } else {
+                    f.recording = next;
+                }
+            });
+        }
+        console.warn(
+            `[Meeting Copilot][recorder] discarded silent recording "${recording.name}"`
+        );
+        new Notice(t().notices.silentDiscarded);
+        this.agendaEvents.emit("changed", undefined);
+    }
+
     /**
      * Inserts a finished transcription into its meeting note and refreshes the
      * agenda. Returns the owning note (when found) and the fresh transcript, so
@@ -2717,7 +2824,8 @@ export default class SystemRecordingPlugin extends Plugin {
      * (enrichment no longer runs from inside this method — see launchTranscriber).
      */
     private async handleTranscriptionCompleted(
-        payload: unknown
+        payload: unknown,
+        append = false
     ): Promise<{ note: TFile | null; transcript: string | null }> {
         let enrichTarget: TFile | null = null;
         let transcriptText: string | null = null;
@@ -2750,7 +2858,9 @@ export default class SystemRecordingPlugin extends Plugin {
                     // "note found" (not the misleading "no meeting note" notice).
                     enrichTarget = note;
                     if (this.settings.insertTranscript && !already) {
-                        await insertTranscript(this.app, note, transcript);
+                        await insertTranscript(this.app, note, transcript, {
+                            append,
+                        });
                         new Notice(t().notices.transcriptAdded(note.basename));
                         inserted = true;
                     }
@@ -3090,13 +3200,15 @@ export default class SystemRecordingPlugin extends Plugin {
             const ownedRecordings = new Set<string>();
             for (const entry of scanMeetingNotes(this.app)) {
                 if (!entry.eventId) continue;
-                const link = recordingLinkTarget(entry.recording);
-                if (!link) continue;
-                const dest = this.app.metadataCache.getFirstLinkpathDest(
-                    link,
-                    entry.file.path
-                );
-                if (dest instanceof TFile) ownedRecordings.add(dest.path);
+                // A meeting can link more than one recording; own them all so a
+                // second take is swept on the same rule as the first.
+                for (const link of recordingLinkTargets(entry.recording)) {
+                    const dest = this.app.metadataCache.getFirstLinkpathDest(
+                        link,
+                        entry.file.path
+                    );
+                    if (dest instanceof TFile) ownedRecordings.add(dest.path);
+                }
             }
             const folders = [...new Set(this.configuredMeetingRoots())].filter(
                 (f) => f.length > 0
@@ -3148,13 +3260,21 @@ export default class SystemRecordingPlugin extends Plugin {
                     await trash(sc.me);
                     await trash(sc.them);
                     await trash(sc.speech);
-                    // Drop the note's now-dangling link (transcript stays in the note).
+                    // Drop just this recording's now-dangling link (a meeting
+                    // may have several); the transcript stays in the note. Only
+                    // stamp `recording_pruned` once the last one is gone.
+                    const prunedName = path.basename(info.path);
                     await this.app.fileManager.processFrontMatter(note, (fm) => {
                         const f = fm as Record<string, unknown>;
-                        delete f.recording;
-                        f.recording_pruned = new Date()
-                            .toISOString()
-                            .slice(0, 10);
+                        const next = dropRecordingLink(f.recording, prunedName);
+                        if (next === undefined) {
+                            delete f.recording;
+                            f.recording_pruned = new Date()
+                                .toISOString()
+                                .slice(0, 10);
+                        } else {
+                            f.recording = next;
+                        }
                     });
                 }
             }
@@ -3322,7 +3442,9 @@ export default class SystemRecordingPlugin extends Plugin {
                                 );
                                 return;
                             }
-                            return this.launchTranscriber(audio);
+                            return this.launchTranscriber(audio, "auto", {
+                                fresh: true,
+                            });
                         })
                         .catch((e) => {
                             console.warn(
