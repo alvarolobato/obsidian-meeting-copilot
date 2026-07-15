@@ -136,7 +136,12 @@ export const en = {
 		startingNow: "Starting now",
 		startedMinAgo: (min: number) =>
 			`Started ${min} min${min === 1 ? "" : "s"} ago`,
-		notificationHint: "click for options",
+		// Web-notification fallback only (a web banner can't render buttons, so
+		// it points the user into Obsidian). The native path omits this.
+		notificationWebHint: "Open Obsidian to choose",
+		// Body of the "meeting ended" system/in-app prompt (the action button
+		// carries the verb; this is the question).
+		stopRecordingPrompt: "Stop recording?",
 		join: "Join",
 		record: "Record",
 		joinAndRecord: "Join & record",

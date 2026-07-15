@@ -80,8 +80,15 @@ In *Settings → Meeting Copilot → AI enrichment*, enable enrichment, then cli
 
 - Click the microphone icon in the left ribbon to start/stop an ad-hoc recording.
 - Open the **meeting agenda** sidebar to create a note + record, transcribe, enrich, or join a meeting for any calendar event.
-- When a calendar meeting starts, a notice offers **"Create note and start recording"**.
+- When a calendar meeting starts (or ends while recording), you get a **native macOS notification** — visible even when Obsidian is minimized or on another Space — with action buttons (*Join & record* / *Record* / *Open note* / *Stop recording*). Clicking the notification body opens the in-app prompt. When Obsidian is in the foreground and the system notification isn't shown, the same choices appear as an in-app notice instead (never both).
 - Right-click a meeting note (or use the editor menu) to run the same actions — transcribe, enrich, open recording, join link.
+
+### Getting the best notifications on macOS
+
+The plugin posts native notifications with action buttons, but macOS controls how they're presented:
+
+- For the **Granola-style default button + dropdown of secondary actions**, set Obsidian to the **Alerts** style: **System Settings → Notifications → Obsidian → "Alerts"**. In the default **Banners** style, macOS collapses the extra actions under a single **"Options"** affordance.
+- Under **Focus / Do Not Disturb**, macOS suppresses banners and routes notifications straight to Notification Center — they'll be waiting there rather than popping up. Allow Obsidian through your Focus filter to see them live.
 
 ## Settings
 

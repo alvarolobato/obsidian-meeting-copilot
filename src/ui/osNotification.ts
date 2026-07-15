@@ -1,27 +1,61 @@
 /**
  * Native OS notifications (Tier 0). Obsidian's `Notice` is in-app only, so it's
- * invisible when Obsidian is minimized.
+ * invisible when Obsidian is minimized or on another Space.
  *
  * We prefer Electron's **main-process** `Notification` (reached from the
  * renderer via `electron.remote`), because it's the only path that can render
- * macOS **action buttons** — the first inline, the rest under the notification's
- * dropdown ("Options"). When `remote` isn't exposed (older/newer Obsidian) or a
- * notification can't be shown that way, we fall back to the renderer's **web
- * Notifications API**, which shows a plain banner (title + body, no buttons)
- * whose click still opens the in-app prompt.
+ * macOS **action buttons** — the first is the default (inline in the *Alerts*
+ * notification style), the rest under the notification's dropdown ("Options").
+ * When `remote` isn't exposed (older/newer Obsidian) or a notification can't be
+ * shown that way, we fall back to the renderer's **web Notifications API**,
+ * which shows a plain banner (title + body, no buttons) whose click still opens
+ * the in-app prompt.
+ *
+ * Both paths report back through {@link NotifyOsOptions.onShown} /
+ * {@link NotifyOsOptions.onFailed} so a caller can skip a redundant in-app
+ * notice **only when it's sure** a system notification is actually on screen
+ * (the native `show` event / web `onshow`), never on a fire-and-forget guess.
  */
 
-/** One action button on a native notification. The first is inline; extras go in the macOS dropdown. */
+/** One action button on a native notification. The first is the default; extras go in the macOS dropdown. */
 export interface OsNotificationAction {
 	text: string;
 	run: () => void;
+}
+
+export interface NotifyOsOptions {
+	title: string;
+	/** Native notification body — kept clean (no "click for options" hint). */
+	body: string;
+	/**
+	 * Appended to the body **only** on the web-API fallback, which can't render
+	 * action buttons — so it nudges the user to open Obsidian to choose. The
+	 * native (button-capable) path ignores it.
+	 */
+	webHint?: string;
+	/** Fires when the notification body is clicked (we also bring Obsidian forward). */
+	onClick?: () => void;
+	/** Native action buttons (first = default; the rest live under the dropdown). */
+	actions?: OsNotificationAction[];
+	/**
+	 * Fired **at most once** when we are sure a system notification is on screen
+	 * (native `show`, or web `onshow`). Lets callers dedupe an in-app fallback.
+	 */
+	onShown?: () => void;
+	/** Fired **at most once** when no system notification could be shown at all. */
+	onFailed?: () => void;
+}
+
+/** Handle to the shown notification, so a caller can close it programmatically. */
+export interface OsNotificationHandle {
+	close(): void;
 }
 
 interface RemoteNotificationInstance {
 	show(): void;
 	close(): void;
 	on(
-		event: "click" | "action" | "close" | "failed",
+		event: "click" | "action" | "close" | "failed" | "show",
 		listener: (...args: unknown[]) => void
 	): void;
 }
@@ -90,35 +124,103 @@ function getRemoteNotificationCtor(): RemoteNotificationCtor | null {
 	}
 }
 
-/** Attempts a native notification with action buttons. Returns false to signal a fallback. */
-function showNativeWithActions(
-	title: string,
-	body: string,
-	onClick: (() => void) | undefined,
-	actions: OsNotificationAction[]
-): boolean {
+/** Ensures `onShown`/`onFailed` each resolve the notification's fate exactly once. */
+function makeSettler(opts: NotifyOsOptions): {
+	shown: () => void;
+	failed: () => void;
+} {
+	let settled = false;
+	return {
+		shown: () => {
+			if (settled) return;
+			settled = true;
+			opts.onShown?.();
+		},
+		failed: () => {
+			if (settled) return;
+			settled = true;
+			opts.onFailed?.();
+		},
+	};
+}
+
+/** Shows a plain web-API banner (no action buttons); its click opens the in-app prompt. */
+function createWeb(
+	opts: NotifyOsOptions,
+	settle: { shown: () => void; failed: () => void }
+): Notification | null {
+	try {
+		const N = window.Notification;
+		if (!N || N.permission !== "granted") {
+			settle.failed();
+			return null;
+		}
+		try {
+			lastWeb?.close();
+		} catch {
+			// ignore
+		}
+		const body = opts.webHint ? `${opts.body} · ${opts.webHint}` : opts.body;
+		const notification = new N(opts.title, { body });
+		lastWeb = notification;
+		// `onshow` is the "sure it's on screen" signal for the web path.
+		notification.onshow = (): void => settle.shown();
+		notification.onerror = (): void => settle.failed();
+		notification.onclick = (): void => {
+			focusObsidian();
+			try {
+				notification.close();
+			} catch {
+				// ignore
+			}
+			if (lastWeb === notification) lastWeb = null;
+			opts.onClick?.();
+		};
+		return notification;
+	} catch {
+		settle.failed();
+		return null;
+	}
+}
+
+/**
+ * Attempts a native notification with action buttons. Returns the instance, or
+ * null to signal the caller should fall back to the web path. On an async
+ * `failed` (unsigned app / OS refusal) it falls back to the web path itself via
+ * `onFallback`, so the settler is still resolved.
+ */
+function createNative(
+	opts: NotifyOsOptions,
+	settle: { shown: () => void; failed: () => void },
+	onFallback: () => void
+): RemoteNotificationInstance | null {
 	const Ctor = getRemoteNotificationCtor();
-	if (!Ctor) return false;
+	if (!Ctor) return null;
 	try {
 		try {
 			lastNative?.close();
 		} catch {
 			// ignore
 		}
+		const actions = opts.actions ?? [];
 		const notification = new Ctor({
-			title,
-			body,
+			title: opts.title,
+			body: opts.body,
 			actions: actions.map((a) => ({ type: "button", text: a.text })),
 		});
 		lastNative = notification;
-		let failed = false;
+		// On the modern UNNotification API (Electron 42+) `show`/`failed` fire
+		// asynchronously, so we can't judge success synchronously — listen.
+		notification.on("show", () => settle.shown());
 		notification.on("failed", () => {
-			failed = true;
+			if (lastNative === notification) lastNative = null;
+			// Native couldn't render (e.g. unsigned build): degrade to a web banner.
+			onFallback();
 		});
 		notification.on("click", () => {
 			focusObsidian();
 			if (lastNative === notification) lastNative = null;
-			onClick?.();
+			opts.onClick?.();
 		});
 		notification.on("action", (...args: unknown[]) => {
 			focusObsidian();
@@ -131,67 +233,48 @@ function showNativeWithActions(
 			if (lastNative === notification) lastNative = null;
 		});
 		notification.show();
-		// `failed` (unsigned app / OS refusal) is emitted synchronously on show
-		// for the common cases; if it fired, fall back to the web notification.
-		return !failed;
+		return notification;
 	} catch {
-		return false;
-	}
-}
-
-/** Shows a plain web-API banner (no action buttons); its click opens the in-app prompt. */
-function showWebNotification(
-	title: string,
-	body: string,
-	onClick?: () => void
-): boolean {
-	try {
-		const N = window.Notification;
-		if (!N || N.permission !== "granted") return false;
-		try {
-			lastWeb?.close();
-		} catch {
-			// ignore
-		}
-		const notification = new N(title, { body });
-		lastWeb = notification;
-		notification.onclick = (): void => {
-			focusObsidian();
-			try {
-				notification.close();
-			} catch {
-				// ignore
-			}
-			if (lastWeb === notification) lastWeb = null;
-			onClick?.();
-		};
-		return true;
-	} catch {
-		return false;
+		return null;
 	}
 }
 
 /**
- * Shows a native OS notification. Returns true when one was actually shown, so
- * callers can fall back to an in-app Notice otherwise. `onClick` fires when the
+ * Shows a native OS notification, coordinating the native / web fallback and
+ * reporting its fate through `onShown` / `onFailed`. `onClick` fires when the
  * user clicks the notification body (we also bring Obsidian to the front).
  *
  * When `actions` are supplied we try Electron's main-process notification so
- * they render as real macOS buttons; if that path is unavailable we degrade to
- * a plain banner (the caller's in-app notice still carries the same actions).
+ * they render as real macOS buttons (default first, rest under the dropdown);
+ * if that path is unavailable / fails we degrade to a plain web banner.
  */
-export function notifyOs(
-	title: string,
-	body: string,
-	onClick?: () => void,
-	actions?: OsNotificationAction[]
-): boolean {
-	if (
-		actions &&
-		actions.length > 0 &&
-		showNativeWithActions(title, body, onClick, actions)
-	) {
-		return true;
+export function notifyOs(opts: NotifyOsOptions): OsNotificationHandle {
+	const settle = makeSettler(opts);
+	let nativeInst: RemoteNotificationInstance | null = null;
+	let webInst: Notification | null = null;
+
+	const tryWeb = (): void => {
+		webInst = createWeb(opts, settle);
+	};
+
+	if (opts.actions && opts.actions.length > 0) {
+		nativeInst = createNative(opts, settle, tryWeb);
 	}
-	return showWebNotification(title, body, onClick);
+	if (!nativeInst) tryWeb();
+	if (!nativeInst && !webInst) settle.failed();
+
+	return {
+		close(): void {
+			try {
+				nativeInst?.close();
+			} catch {
+				// ignore
+			}
+			try {
+				webInst?.close();
+			} catch {
+				// ignore
+			}
+		},
+	};
 }
