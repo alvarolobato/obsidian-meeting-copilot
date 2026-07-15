@@ -370,6 +370,19 @@ export const en = {
 		localModel: {
 			name: "Local model",
 			desc: "The on-device Whisper model. Larger models are more accurate but slower and use more memory. All are multilingual — set the language below, or leave it on auto-detect.",
+			/** Descriptive label for a model id in the picker (size is appended separately). */
+			option: (id: string): string => {
+				switch (id) {
+					case "small-q5_1":
+						return "Small — fastest, least accurate";
+					case "medium-q5_0":
+						return "Medium — balanced";
+					case "large-v3-turbo-q5_0":
+						return "Large v3 Turbo — most accurate (recommended)";
+					default:
+						return id;
+				}
+			},
 		},
 		localModelDownload: {
 			name: "Model file",

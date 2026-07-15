@@ -12,8 +12,6 @@
 export interface LocalModelSpec {
 	/** Stable key stored in settings (`localWhisperModel`). */
 	id: string;
-	/** Human label for the settings dropdown. */
-	label: string;
 	/** On-disk filename under the plugin's `models/` dir. */
 	fileName: string;
 	/** Hugging Face `resolve` URL for the ggml file. */
@@ -41,7 +39,6 @@ function hfUrl(fileName: string): string {
 export const LOCAL_MODELS: Record<string, LocalModelSpec> = {
 	"small-q5_1": {
 		id: "small-q5_1",
-		label: "Small (q5_1) — 190 MB, fastest, lower accuracy",
 		fileName: "ggml-small-q5_1.bin",
 		url: hfUrl("ggml-small-q5_1.bin"),
 		sha256: "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
@@ -50,7 +47,6 @@ export const LOCAL_MODELS: Record<string, LocalModelSpec> = {
 	},
 	"medium-q5_0": {
 		id: "medium-q5_0",
-		label: "Medium (q5_0) — 539 MB, balanced",
 		fileName: "ggml-medium-q5_0.bin",
 		url: hfUrl("ggml-medium-q5_0.bin"),
 		sha256: "19fea4b380c3a618ec4723c3eef2eb785ffba0d0538cf43f8f235e7b3b34220f",
@@ -59,7 +55,6 @@ export const LOCAL_MODELS: Record<string, LocalModelSpec> = {
 	},
 	"large-v3-turbo-q5_0": {
 		id: "large-v3-turbo-q5_0",
-		label: "Large v3 Turbo (q5_0) — 574 MB, best (recommended)",
 		fileName: "ggml-large-v3-turbo-q5_0.bin",
 		url: hfUrl("ggml-large-v3-turbo-q5_0.bin"),
 		sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
@@ -76,10 +71,14 @@ export function localModelSpec(id: string): LocalModelSpec {
 	return LOCAL_MODELS[id] ?? LOCAL_MODELS[DEFAULT_LOCAL_MODEL_ID]!;
 }
 
-/** Format a byte count as a compact "MB"/"GB" string for the UI. */
+/**
+ * Format a byte count as a compact "MB"/"GB" string for the UI. Uses decimal
+ * (1000-based) units to match how Hugging Face and browsers report download
+ * sizes, so the row shows the same "190 MB" a user sees on the model page.
+ */
 export function formatBytes(bytes: number): string {
-	if (bytes >= 1024 * 1024 * 1024) {
-		return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+	if (bytes >= 1000 * 1000 * 1000) {
+		return `${(bytes / (1000 * 1000 * 1000)).toFixed(1)} GB`;
 	}
-	return `${Math.round(bytes / (1024 * 1024))} MB`;
+	return `${Math.round(bytes / (1000 * 1000))} MB`;
 }

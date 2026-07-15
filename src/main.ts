@@ -22,7 +22,7 @@ import {
     resolveBinaryPath,
     resolveModelPath,
 } from "./binary-runtime";
-import type { LocalModelSpec } from "./transcribe/localModels";
+import { LOCAL_MODELS, type LocalModelSpec } from "./transcribe/localModels";
 import * as path from "path";
 import * as fs from "fs";
 import { GoogleOAuth, type StoredTokens } from "./auth/googleOAuth";
@@ -443,6 +443,16 @@ export default class SystemRecordingPlugin extends Plugin {
         // Normalize the shared endpoint (tolerate hand-edited data.json).
         this.settings.apiBaseUrl = (this.settings.apiBaseUrl ?? "").trim();
         this.settings.apiKey = (this.settings.apiKey ?? "").trim();
+        // Clamp the transcription engine + local model to known values so a
+        // hand-edited/corrupt data.json can't persist an unknown engine (which
+        // would fall through to remote in the UI but stay wrong on disk) or a
+        // stale model id.
+        if (this.settings.transcriptionBackend !== "local") {
+            this.settings.transcriptionBackend = "remote";
+        }
+        if (!(this.settings.localWhisperModel in LOCAL_MODELS)) {
+            this.settings.localWhisperModel = DEFAULT_SETTINGS.localWhisperModel;
+        }
         // Migrate the previously enrichment-only endpoint into the shared fields
         // when the shared ones are still unset or at the default.
         const legacyBase = raw?.enrichBaseUrl?.trim();
@@ -1808,15 +1818,13 @@ export default class SystemRecordingPlugin extends Plugin {
      * timestamps. Gates both the split at record time and the diarized pass at
      * transcribe time.
      *
-     * The local Whisper engine (issue #34) always emits segment timestamps, so
-     * it bypasses the remote timestamp probe entirely — diarization then hinges
-     * only on the user's toggle, not on an endpoint capability that doesn't
-     * apply on-device.
+     * Note: the local Whisper engine always emits segment timestamps, so it will
+     * bypass this remote timestamp probe — but that bypass lands together with
+     * the local transcription wiring (the WhisperCppBackend phase of #34). While
+     * transcription is still remote-only, keeping the probe gate here avoids
+     * running doomed diarized passes against the remote endpoint.
      */
     private shouldSeparateSpeakers(): boolean {
-        if (this.settings.transcriptionBackend === "local") {
-            return this.settings.diarizationEnabled;
-        }
         return canSeparateSpeakers(
             this.settings,
             probeKey(this.settings.apiBaseUrl, this.settings.sttModel)
@@ -1859,7 +1867,13 @@ export default class SystemRecordingPlugin extends Plugin {
             spec.sizeBytes,
             {
                 onDownloadStart: () => new Notice(t().notices.downloadingModel),
-                onProgress,
+                // HF's CDN sometimes omits Content-Length after a redirect, so
+                // the stream reports total=0; fall back to the registry's known
+                // size so the UI can still show a real percentage.
+                onProgress: onProgress
+                    ? (received, total) =>
+                          onProgress(received, total > 0 ? total : spec.sizeBytes)
+                    : undefined,
             }
         );
     }

@@ -142,7 +142,11 @@ export interface EnsureAssetOptions {
  *
  * `ensure()` dedupes overlapping downloads of the *same* destination path into
  * one in-flight promise (keyed on the path), so a settings-tab click and an
- * about-to-transcribe call can't race two writers onto one file.
+ * about-to-transcribe call can't race two writers onto one file. As with
+ * {@link BinaryProvisioner}, the first caller's `onProgress`/`onDownloadStart`
+ * win — a concurrent second caller shares that in-flight download and doesn't
+ * get its own callbacks (in practice only one download of a given model is ever
+ * active at once).
  */
 export class AssetProvisioner {
 	private readonly inflight = new Map<string, Promise<string>>();
@@ -177,10 +181,16 @@ export class AssetProvisioner {
 		// Fast path: a present file of the exact expected size is trusted without
 		// re-hashing (models are immutable and hashing 500 MB on every
 		// transcription would tax the quick-roundtrip goal). A wrong size means a
-		// truncated/partial download, so fall through and re-fetch.
+		// truncated/partial download, so fall through and re-fetch. A file that
+		// vanishes between the exists check and the stat (concurrent delete) also
+		// falls through rather than rejecting.
 		if (await this.deps.fileExists(destPath)) {
-			if ((await this.deps.fileSize(destPath)) === expectedSize) {
-				return destPath;
+			try {
+				if ((await this.deps.fileSize(destPath)) === expectedSize) {
+					return destPath;
+				}
+			} catch {
+				// stat failed (e.g. file removed mid-check) — treat as absent.
 			}
 		}
 

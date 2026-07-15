@@ -83,30 +83,38 @@ export function assetNodeDeps(): AssetProvisionerDeps {
 			// preferred over requestUrl, precisely because it can stream.
 			// eslint-disable-next-line no-restricted-globals -- requestUrl buffers the full body; a 500 MB model must stream to disk
 			const res = await fetch(url);
+			// Cancel the body on every early-exit path (non-2xx, mkdir/open
+			// failure) so a failed download can't leak an open connection.
 			if (!res.ok || !res.body) {
+				await res.body?.cancel().catch(() => undefined);
 				throw new Error(`HTTP ${res.status}`);
 			}
-			await fsp.mkdir(path.dirname(destPath), { recursive: true });
-			const total = Number(res.headers.get("content-length") ?? 0);
-			const out = fs.createWriteStream(destPath);
 			const reader = res.body.getReader();
-			let received = 0;
+			let out: fs.WriteStream | undefined;
 			try {
+				await fsp.mkdir(path.dirname(destPath), { recursive: true });
+				out = fs.createWriteStream(destPath);
+				const total = Number(res.headers.get("content-length") ?? 0);
+				let received = 0;
 				for (;;) {
 					const { done, value } = await reader.read();
 					if (done) break;
 					received += value.byteLength;
-					if (!out.write(Buffer.from(value))) {
-						await new Promise<void>((resolve) => out.once("drain", resolve));
+					// value is a Uint8Array; WriteStream accepts it without a copy.
+					if (!out.write(value)) {
+						await new Promise<void>((resolve, reject) => {
+							out!.once("error", reject);
+							out!.once("drain", resolve);
+						});
 					}
 					onProgress?.(received, total);
 				}
 				await new Promise<void>((resolve, reject) => {
-					out.on("error", reject);
-					out.end(() => resolve());
+					out!.on("error", reject);
+					out!.end(() => resolve());
 				});
 			} catch (e) {
-				out.destroy();
+				out?.destroy();
 				await reader.cancel().catch(() => undefined);
 				throw e;
 			}

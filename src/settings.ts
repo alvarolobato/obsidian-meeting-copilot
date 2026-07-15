@@ -291,6 +291,8 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
     private downloadingModel = false;
     /** Whole-percent progress of the in-flight local model download (0–100). */
     private downloadProgress = 0;
+    /** The on-screen local-model download/status row, updated in place during a download. */
+    private modelDownloadRow: Setting | null = null;
 
     constructor(app: App, plugin: SystemRecordingPlugin) {
         super(app, plugin);
@@ -670,6 +672,9 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 				dd.addOption("local", s.settings.transcriptionEngine.local);
 				dd
 					.setValue(this.plugin.settings.transcriptionBackend)
+					// Locked mid-download so the switch can't strand an in-flight
+					// model fetch on a torn-down row.
+					.setDisabled(this.downloadingModel)
 					.onChange(async (value) => {
 						this.plugin.settings.transcriptionBackend =
 							value === "local" ? "local" : "remote";
@@ -678,12 +683,20 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					});
 			});
 
+		// Layout preserves the pre-#34 remote order (engine identity → speaker
+		// separation + language → dictionary → automation); the local rows slot
+		// into the engine-identity position and the remote-only dictionary rows
+		// are simply absent under Local.
 		if (this.plugin.settings.transcriptionBackend === "local") {
 			this.renderLocalTranscription(containerEl);
 		} else {
 			this.renderRemoteTranscription(containerEl);
 		}
-		this.renderSharedTranscription(containerEl);
+		this.renderDiarizationLanguage(containerEl);
+		if (this.plugin.settings.transcriptionBackend !== "local") {
+			this.renderRemoteDictionary(containerEl);
+		}
+		this.renderTranscriptionAutomation(containerEl);
 
 		// ---- AI enrichment ----
 		new Setting(containerEl).setName(s.settings.enrichHeading).setHeading();
@@ -859,7 +872,15 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     }
                 );
             });
+    }
 
+    /**
+     * Remote-only dictionary rows (custom + GPT-assisted correction), which the
+     * vendored engine's pipeline applies. Hidden under the local engine, which
+     * doesn't run them.
+     */
+    private renderRemoteDictionary(containerEl: HTMLElement): void {
+        const s = t();
         new Setting(containerEl)
             .setName(s.settings.dictionaryCorrection.name)
             .setDesc(s.settings.dictionaryCorrection.desc)
@@ -916,61 +937,34 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
             .addDropdown((dd) => {
                 dd.selectEl.addClass("meeting-copilot-model-dropdown");
                 for (const m of Object.values(LOCAL_MODELS)) {
-                    dd.addOption(m.id, m.label);
+                    dd.addOption(
+                        m.id,
+                        `${s.settings.localModel.option(m.id)} (${formatBytes(m.sizeBytes)})`
+                    );
                 }
-                dd.setValue(spec.id).onChange(async (value) => {
-                    this.plugin.settings.localWhisperModel = value;
-                    await this.plugin.saveSettings();
-                    // Re-render so the download row reflects the new model's
-                    // presence/size.
-                    this.display();
-                });
+                dd
+                    .setValue(spec.id)
+                    // Locked mid-download so the in-flight fetch keeps matching
+                    // the model the row is showing.
+                    .setDisabled(this.downloadingModel)
+                    .onChange(async (value) => {
+                        this.plugin.settings.localWhisperModel = value;
+                        await this.plugin.saveSettings();
+                        // Re-render so the download row reflects the new model's
+                        // presence/size.
+                        this.display();
+                    });
             });
 
-        // Download / status row, repainted in place so a download's progress
-        // and the resulting "downloaded" state don't scroll-jump the tab.
-        const dlSetting = new Setting(containerEl).setName(
+        // Download / status row. The row is held on the instance so an in-flight
+        // download's progress ticks (and the final repaint) always target the
+        // *current* row — a re-render (engine/model change, tab reopen) rebuilds
+        // it here and progress keeps flowing rather than freezing on a detached
+        // node.
+        this.modelDownloadRow = new Setting(containerEl).setName(
             s.settings.localModelDownload.name
         );
-        const setDesc = (pct: number): void => {
-            dlSetting.setDesc(s.settings.localModelDownload.downloading(pct));
-        };
-        const paint = async (): Promise<void> => {
-            dlSetting.controlEl.empty();
-            if (this.downloadingModel) {
-                setDesc(this.downloadProgress);
-                return;
-            }
-            const present = await this.plugin.localModelPresent(spec);
-            dlSetting.setDesc(
-                present
-                    ? s.settings.localModelDownload.present(
-                            formatBytes(spec.sizeBytes)
-                        )
-                    : s.settings.localModelDownload.missing(
-                            formatBytes(spec.sizeBytes)
-                        )
-            );
-            if (present) {
-                dlSetting.addButton((b) =>
-                    b
-                        .setButtonText(s.settings.localModelDownload.delete)
-                        .setWarning()
-                        .onClick(async () => {
-                            await this.plugin.deleteLocalModel(spec);
-                            void paint();
-                        })
-                );
-            } else {
-                dlSetting.addButton((b) =>
-                    b
-                        .setButtonText(s.settings.localModelDownload.download)
-                        .setCta()
-                        .onClick(() => void this.startModelDownload(spec, setDesc, paint))
-                );
-            }
-        };
-        void paint();
+        void this.repaintModelDownloadRow();
 
         new Setting(containerEl)
             .setName(s.settings.localFallback.name)
@@ -986,25 +980,69 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
     }
 
     /**
+     * Repaints the local model download/status row from current state: the live
+     * download percentage while a download runs, else a downloaded/missing line
+     * with a Delete/Download action. Targets {@link modelDownloadRow}, which
+     * {@link renderLocalTranscription} keeps pointed at the on-screen row.
+     */
+    private async repaintModelDownloadRow(): Promise<void> {
+        const row = this.modelDownloadRow;
+        if (!row) return;
+        const s = t();
+        const spec = localModelSpec(this.plugin.settings.localWhisperModel);
+        row.controlEl.empty();
+        if (this.downloadingModel) {
+            row.setDesc(s.settings.localModelDownload.downloading(this.downloadProgress));
+            return;
+        }
+        const present = await this.plugin.localModelPresent(spec);
+        row.setDesc(
+            present
+                ? s.settings.localModelDownload.present(formatBytes(spec.sizeBytes))
+                : s.settings.localModelDownload.missing(formatBytes(spec.sizeBytes))
+        );
+        if (present) {
+            row.addButton((b) =>
+                b
+                    .setButtonText(s.settings.localModelDownload.delete)
+                    .setWarning()
+                    .onClick(async () => {
+                        await this.plugin.deleteLocalModel(spec);
+                        await this.repaintModelDownloadRow();
+                    })
+            );
+        } else {
+            row.addButton((b) =>
+                b
+                    .setButtonText(s.settings.localModelDownload.download)
+                    .setCta()
+                    .onClick(() => void this.startModelDownload(spec))
+            );
+        }
+    }
+
+    /**
      * Streams the selected local model to disk, updating the download row's
      * percentage in place (throttled to whole-percent steps) and repainting to
-     * the final state when done. Guards against re-entry while a download runs.
+     * the final state when done. Guards against re-entry while a download runs;
+     * the engine + model dropdowns are disabled meanwhile so `spec` stays valid.
      */
     private async startModelDownload(
-        spec: ReturnType<typeof localModelSpec>,
-        setDesc: (pct: number) => void,
-        paint: () => Promise<void>
+        spec: ReturnType<typeof localModelSpec>
     ): Promise<void> {
         if (this.downloadingModel) return;
         this.downloadingModel = true;
         this.downloadProgress = 0;
-        await paint();
+        // Re-render so the engine/model dropdowns lock and the row shows 0%.
+        this.display();
         try {
             await this.plugin.ensureLocalModel(spec, (received, total) => {
                 const pct = total > 0 ? Math.floor((received / total) * 100) : 0;
                 if (pct !== this.downloadProgress) {
                     this.downloadProgress = pct;
-                    setDesc(pct);
+                    this.modelDownloadRow?.setDesc(
+                        t().settings.localModelDownload.downloading(pct)
+                    );
                 }
             });
             new Notice(t().settings.localModelDownload.done);
@@ -1016,12 +1054,13 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
             );
         } finally {
             this.downloadingModel = false;
-            await paint();
+            // Re-render to unlock the dropdowns and repaint the final state.
+            this.display();
         }
     }
 
-    /** Transcription rows shared by both engines (speaker separation, language, automation). */
-    private renderSharedTranscription(containerEl: HTMLElement): void {
+    /** Speaker-separation + language rows, shared by both engines. */
+    private renderDiarizationLanguage(containerEl: HTMLElement): void {
         const s = t();
         const diarizationDesc =
             this.plugin.settings.transcriptionBackend === "local"
@@ -1052,7 +1091,11 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     })
             );
+    }
 
+    /** Automation + logging rows, shared by both engines. */
+    private renderTranscriptionAutomation(containerEl: HTMLElement): void {
+        const s = t();
         new Setting(containerEl)
             .setName(s.settings.autoTranscribe.name)
             .setDesc(s.settings.autoTranscribe.desc)
