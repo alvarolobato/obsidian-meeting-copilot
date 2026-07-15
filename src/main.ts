@@ -3038,16 +3038,28 @@ export default class SystemRecordingPlugin extends Plugin {
 
     /**
      * True when the recorder's speech-window sidecar (split mode's
-     * `<base>.speech.json`) exists and reports any speech. Absent sidecar (mixed
-     * mode) → false: there's no independent evidence, so the empty transcript is
-     * taken at face value. Guards silent-discard against transcription misses.
+     * `<base>.speech.json`) reports any speech. Absent sidecar (mixed mode) →
+     * false: there's no independent evidence, so the empty transcript is taken at
+     * face value. Guards silent-discard against transcription misses, so it errs
+     * toward KEEPING the audio whenever the evidence is uncertain: a sidecar that
+     * exists but is unreadable/unparsable returns true (don't discard). Reads the
+     * sidecar straight off disk via the adapter (not the vault index) so a
+     * just-written speech.json isn't missed to index lag — which would strip the
+     * very safety net right when it matters most (immediately after a stop).
      */
     private async recordingHasSpeech(recording: TFile): Promise<boolean> {
         const speechPath = sidecarPathsFor(recording.path).speech;
-        const file = await this.resolveExistingFile(speechPath);
-        if (!file) return false;
-        const windows = parseSpeechWindows(await this.app.vault.read(file));
-        if (!windows) return false;
+        let raw: string;
+        try {
+            if (!(await this.app.vault.adapter.exists(speechPath))) return false;
+            raw = await this.app.vault.adapter.read(speechPath);
+        } catch {
+            // Present but unreadable → don't treat as silence.
+            return true;
+        }
+        const windows = parseSpeechWindows(raw);
+        // Present but unparsable → err toward keeping the audio.
+        if (!windows) return true;
         return windows.me.length > 0 || windows.them.length > 0;
     }
 
