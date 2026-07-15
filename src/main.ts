@@ -1063,10 +1063,20 @@ export default class SystemRecordingPlugin extends Plugin {
 	}
 
 	/**
-	 * Posts a dual-channel prompt: a native OS notification (visible while
-	 * Obsidian is minimized / on another Space) plus an in-app notice fallback
-	 * shown only when the OS one isn't confirmed on screen — never both. The
-	 * returned controller's `dispose()` also closes the OS notification, so a
+	 * Posts a meeting prompt, picking the channel by window focus so the user
+	 * sees exactly one, wherever their attention is:
+	 *
+	 *  - **Obsidian frontmost** → an in-app notice. The user is already looking
+	 *    at Obsidian, so it's the reliable channel, and a native banner would
+	 *    just duplicate it. This also sidesteps the native `show` event, which is
+	 *    an unreliable "was it seen?" signal — macOS fires it even when it routes
+	 *    the notification silently to Notification Center (Focus/DND/mirroring),
+	 *    which used to leave the prompt invisible on screen.
+	 *  - **Obsidian not frontmost** (minimized / another app / another Space) →
+	 *    a native OS notification, since an in-app notice can't be seen there;
+	 *    the in-app notice stays a fallback for when the OS one can't show at all.
+	 *
+	 * The returned controller's `dispose()` also closes the OS notification, so a
 	 * superseded / handled prompt can't leave a stale action button lingering in
 	 * Notification Center.
 	 */
@@ -1086,6 +1096,12 @@ export default class SystemRecordingPlugin extends Plugin {
 			timers: this.notifTimers(),
 			showInApp: opts.showInApp,
 		});
+		// Obsidian is in front — show the in-app notice directly and don't post a
+		// (duplicate) native banner.
+		if (this.isWindowFocused()) {
+			inner.forceInApp();
+			return inner;
+		}
 		const handle = notifyOs({
 			title: opts.title,
 			body: opts.body,
@@ -1095,7 +1111,7 @@ export default class SystemRecordingPlugin extends Plugin {
 			onShown: () => {
 				inner.osShown();
 				// A system notification actually reached the screen — a good moment
-				// to teach (once) how to make them persist with buttons.
+				// to teach (once) how to make them show/persist reliably.
 				this.maybeShowNotificationStyleHint();
 			},
 			onFailed: () => inner.osFailed(),
@@ -1109,6 +1125,15 @@ export default class SystemRecordingPlugin extends Plugin {
 				handle.close();
 			},
 		};
+	}
+
+	/** True when Obsidian's window is frontmost (so an in-app notice is visible). */
+	private isWindowFocused(): boolean {
+		try {
+			return typeof document !== "undefined" && document.hasFocus();
+		} catch {
+			return false;
+		}
 	}
 
 	/**

@@ -1,17 +1,23 @@
 /**
  * Coordinates a native OS notification with an in-app Obsidian `Notice` so the
- * user sees **exactly one** prompt, wherever their attention is:
+ * user sees **exactly one** prompt.
  *
- *  - The OS notification is posted immediately by the caller (it's the path
- *    that's visible while Obsidian is minimized / on another Space).
+ * The caller decides the channel by window focus: when Obsidian is frontmost it
+ * calls {@link DualChannelController.forceInApp} (the in-app notice is the
+ * reliable, visible channel and a native banner would just duplicate it) and
+ * skips the OS notification. When Obsidian isn't frontmost it posts the OS
+ * notification and lets this machine coordinate the fallback:
+ *
  *  - The in-app notice is a *fallback*: it's shown only after `fallbackDelayMs`
  *    unless the OS notification is confirmed on screen first — in which case
  *    it's skipped (or hidden, if it had already slipped in) to avoid a duplicate.
+ *  - It's skipped **only when we're sure** the OS one was shown (the caller
+ *    wires {@link DualChannelController.osShown} to the native `show` / web
+ *    `onshow` event). If the OS notification fails, it's shown right away.
  *
- * The in-app notice is skipped **only when we're sure** the OS one was shown
- * (the caller wires {@link DualChannelController.osShown} to the native `show` /
- * web `onshow` event), never on a fire-and-forget guess. If the OS notification
- * fails, the in-app notice is shown right away.
+ * (Note the native `show` event is a best-effort signal — macOS can route a
+ * notification silently to Notification Center yet still fire it — which is why
+ * the caller prefers the focus check over relying on `show` alone.)
  *
  * Timers are injected so the state machine is unit-testable with fakes.
  */
