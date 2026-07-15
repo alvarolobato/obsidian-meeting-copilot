@@ -227,13 +227,14 @@ export const en = {
 			pastEmpty: "No past meetings yet.",
 			loading: "Loading calendar…",
 			calendarError: "Couldn't load calendar meetings; showing notes only.",
-			colMeeting: "Meeting",
-			colDate: "Date",
-			colStatus: "Status",
-			colActions: "Actions",
-			noNote: "No note",
 			createNote: "Create note",
-			openRecording: "Open recording",
+			// Status labels double as the dot tooltips and the toolbar legend.
+			status: {
+				scheduled: "Scheduled",
+				recorded: "Recorded",
+				transcribed: "Transcribed",
+				enriched: "Enriched",
+			},
 		},
 		actions: {
 			count: (n: number) =>

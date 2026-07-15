@@ -1776,8 +1776,11 @@ export default class SystemRecordingPlugin extends Plugin {
     ): Promise<void> {
         const d = t().dashboard.meetings;
         const restoreScroll = this.preserveScroll(el);
-        el.empty();
-        if (this.isCalendarAuthenticated()) {
+        // Only clear up front on the very first paint (nothing to preserve).
+        // On a refresh/page change we keep the old rows visible while the
+        // calendar loads, then swap in one pass below — otherwise the section
+        // briefly collapses to empty and the view jumps.
+        if (el.childElementCount === 0 && this.isCalendarAuthenticated()) {
             el.createEl("p", { text: d.loading, cls: "mc-meetings-loading" });
         }
 
@@ -1859,72 +1862,100 @@ export default class SystemRecordingPlugin extends Plugin {
             });
         } else {
             const table = el.createEl("table", { cls: "mc-meetings" });
-            const head = table.createEl("thead").createEl("tr");
-            for (const h of [d.colMeeting, d.colDate, d.colStatus, d.colActions]) {
-                head.createEl("th", { text: h });
-            }
             const body = table.createEl("tbody");
             const pad = (n: number): string => String(n).padStart(2, "0");
-            const fmtDate = (dt: Date): string =>
+            const timeStr = (dt: Date): string =>
+                `${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+            const dayKey = (dt: Date): string =>
                 `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(
                     dt.getDate()
-                )} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+                )}`;
+            const dayLabel = (dt: Date): string =>
+                dt.toLocaleDateString(undefined, {
+                    weekday: "short",
+                    month: "short",
+                    day: "numeric",
+                });
 
+            // Aggregate by day: a subheader row per date replaces a per-row
+            // date column. Rows are already sorted, so a running key is enough.
+            let lastDay = "";
             for (const row of view.rows) {
+                const key = dayKey(row.start);
+                if (key !== lastDay) {
+                    lastDay = key;
+                    const dayTr = body.createEl("tr", {
+                        cls: "mc-meetings-dayrow",
+                    });
+                    dayTr.createEl("td", {
+                        cls: "mc-meetings-day",
+                        text: dayLabel(row.start),
+                        attr: { colspan: "2" },
+                    });
+                }
+
                 const tr = body.createEl("tr");
-                const nameTd = tr.createEl("td");
                 const file = row.notePath
                     ? notesByPath.get(row.notePath)
                     : null;
+
+                // Time + title in one column; the time is a fixed-width prefix.
+                const whenTd = tr.createEl("td", { cls: "mc-meetings-when" });
+                whenTd.createSpan({
+                    cls: "mc-meetings-time",
+                    text: timeStr(row.start),
+                });
                 if (file) {
-                    const link = nameTd.createEl("a", {
+                    const link = whenTd.createEl("a", {
                         text: row.title,
-                        cls: "internal-link",
+                        cls: "mc-meetings-title internal-link",
                     });
                     link.onclick = (e): void => {
                         e.preventDefault();
                         this.openFileInTab(file);
                     };
                 } else {
-                    // No note yet: plain (non-link) title, explicitly marked,
-                    // so it's clear this row isn't backed by a note.
-                    nameTd.createSpan({
+                    // No note yet: plain (non-link) title. The create-note icon
+                    // in the trailing cell already signals there's no note, so
+                    // there's no "No note" status text.
+                    whenTd.createSpan({
                         text: row.title,
-                        cls: "mc-meeting-nonote",
+                        cls: "mc-meetings-title mc-meeting-nonote",
                     });
                 }
 
-                tr.createEl("td", { text: fmtDate(row.start) });
-                tr.createEl("td", { text: row.notePath ? row.status : d.noNote });
-
-                // Merged actions column (formerly a separate "Rec" indicator):
-                // a note-less row offers "create note"; a noted row with a
-                // recording offers to open it (the old 🎙️ was just a
-                // non-actionable status marker, redundant with the Status
-                // column, so it's now a real action).
-                const actTd = tr.createEl("td", { cls: "mc-meetings-actions" });
-                const meeting = meetingsByKey.get(row.key);
-                if (!row.notePath && meeting) {
-                    const create = actTd.createEl("a", {
-                        text: d.createNote,
-                        cls: "mc-create-note",
+                // Trailing cell merges the old Status + Actions columns: for a
+                // noted row, a colour-coded status dot (status is its tooltip);
+                // for a note-less row, the create-note icon. Both centre in a
+                // fixed-width cell so a lone dot lines up with the icon above.
+                const trailTd = tr.createEl("td", { cls: "mc-meetings-trail" });
+                if (row.notePath && row.status && row.status !== "—") {
+                    const label =
+                        (d.status as Record<string, string>)[row.status] ??
+                        row.status;
+                    const dot = trailTd.createSpan({
+                        cls: `mc-status-dot mc-status-${row.status}`,
                     });
-                    create.onclick = (e): void => {
-                        e.preventDefault();
-                        void this.createNoteOnly(meeting).then(() =>
-                            this.renderMeetingsSection(el, direction, view.page)
-                        );
-                    };
-                } else if (file && row.hasRecording) {
-                    const rec = actTd.createEl("button", {
-                        cls: "mc-icon-btn",
-                    });
-                    setIcon(rec, "mic");
-                    rec.setAttribute("aria-label", d.openRecording);
-                    rec.onclick = (): void =>
-                        void this.openRecording(
-                            this.agendaMeetingFromNote(file)
-                        );
+                    dot.setAttribute("aria-label", label);
+                } else if (!row.notePath) {
+                    const meeting = meetingsByKey.get(row.key);
+                    if (meeting) {
+                        const create = trailTd.createEl("button", {
+                            cls: "mc-icon-btn",
+                        });
+                        setIcon(create, "file-plus");
+                        create.setAttribute("aria-label", d.createNote);
+                        create.onclick = (e): void => {
+                            e.preventDefault();
+                            void this.createNoteOnly(meeting).then(() =>
+                                this.renderMeetingsSection(
+                                    el,
+                                    direction,
+                                    view.page
+                                )
+                            );
+                        };
+                    }
                 }
             }
         }
@@ -1934,6 +1965,12 @@ export default class SystemRecordingPlugin extends Plugin {
                 direction === "past"
                     ? d.pastCount(view.total)
                     : d.upcomingCount(view.total),
+            legend: [
+                { cls: "mc-status-scheduled", label: d.status.scheduled },
+                { cls: "mc-status-recorded", label: d.status.recorded },
+                { cls: "mc-status-transcribed", label: d.status.transcribed },
+                { cls: "mc-status-enriched", label: d.status.enriched },
+            ],
             pageSize,
             view,
             onPageSize: (n): void => {
@@ -1969,11 +2006,25 @@ export default class SystemRecordingPlugin extends Plugin {
             onPageSize: (size: number) => void;
             onGoTo: (page: number) => void;
             onRefresh: () => void;
+            /** Optional status colour key rendered on the left of the bar. */
+            legend?: Array<{ cls: string; label: string }>;
         }
     ): void {
         const c = t().dashboard.controls;
         const bar = parent.createDiv({ cls: "mc-dash-toolbar" });
-        bar.createSpan({ cls: "mc-dash-count", text: opts.countText });
+        const left = bar.createDiv({ cls: "mc-dash-toolbar-left" });
+        left.createSpan({ cls: "mc-dash-count", text: opts.countText });
+        if (opts.legend) {
+            const legend = left.createDiv({ cls: "mc-dash-legend" });
+            for (const item of opts.legend) {
+                const li = legend.createSpan({ cls: "mc-dash-legend-item" });
+                li.createSpan({ cls: `mc-status-dot ${item.cls}` });
+                li.createSpan({
+                    cls: "mc-dash-legend-label",
+                    text: item.label,
+                });
+            }
+        }
 
         const right = bar.createDiv({ cls: "mc-dash-toolbar-right" });
 
@@ -2054,23 +2105,29 @@ export default class SystemRecordingPlugin extends Plugin {
     ): Promise<void> {
         const a = t().dashboard.actions;
         const restoreScroll = this.preserveScroll(el);
-        el.empty();
-        el.createEl("p", { text: a.loading, cls: "mc-actions-loading" });
-
-        // A short-lived child owns the tasks' rendered markdown so its
-        // sub-views are torn down on the next render (or when the dashboard
-        // closes), rather than piling up on the long-lived plugin instance.
-        const prevRenderer = this.actionRenderers.get(el);
-        if (prevRenderer) prevRenderer.unload();
-        const renderer = new Component();
-        renderer.load();
-        this.actionRenderers.set(el, renderer);
+        // Keep the current list visible while (re)scanning; only show the
+        // loading line on first paint. Emptying up front would collapse the
+        // section and jump the view on a tick or Refresh.
+        if (el.childElementCount === 0) {
+            el.createEl("p", { text: a.loading, cls: "mc-actions-loading" });
+        }
 
         const groups = await this.scanActionGroups(force);
         const pageSize = normalizePageSize(
             this.settings.dashboardActionsPageSize
         );
         const view = paginate(groups, pageSize, page);
+
+        // A short-lived child owns the tasks' rendered markdown so its
+        // sub-views are torn down on the next render (or when the dashboard
+        // closes), rather than piling up on the long-lived plugin instance.
+        // Swapped in only now, right before rebuilding, so the previous
+        // content stayed put during the scan above.
+        const prevRenderer = this.actionRenderers.get(el);
+        if (prevRenderer) prevRenderer.unload();
+        const renderer = new Component();
+        renderer.load();
+        this.actionRenderers.set(el, renderer);
 
         el.empty();
 
@@ -2357,10 +2414,19 @@ export default class SystemRecordingPlugin extends Plugin {
         const top = scroller ? scroller.scrollTop : 0;
         return (): void => {
             if (!scroller) return;
-            scroller.scrollTop = top;
-            window.requestAnimationFrame(() => {
+            // Re-apply across the next few frames (and a macrotask): async
+            // markdown rendering in the action list settles its height a frame
+            // or two after the initial rebuild, and a single restore would be
+            // undone by that late reflow — leaving the view jumped.
+            const apply = (): void => {
                 scroller.scrollTop = top;
+            };
+            apply();
+            window.requestAnimationFrame(() => {
+                apply();
+                window.requestAnimationFrame(apply);
             });
+            window.setTimeout(apply, 0);
         };
     }
 
@@ -2679,7 +2745,8 @@ export default class SystemRecordingPlugin extends Plugin {
      */
     private async launchTranscriber(
         recording: TFile,
-        mode: TranscribeMode = "auto"
+        mode: TranscribeMode = "auto",
+        opts: { enrichAfter?: boolean } = {}
     ): Promise<void> {
         if (!this.settings.apiBaseUrl || !this.settings.apiKey) {
             new Notice(t().notices.transcribeNoEndpoint);
@@ -2725,10 +2792,13 @@ export default class SystemRecordingPlugin extends Plugin {
         }
 
         const pending = enrichAfter.value;
+        // Enrich afterwards when the auto-transcribe setting says so, or when the
+        // caller explicitly asked to (e.g. the user clicked Enrich on a not-yet-
+        // transcribed note — we transcribe first, then resume into enrichment).
         if (
             pending &&
             this.settings.enableEnrichment &&
-            this.settings.enrichOnTranscribe
+            (opts.enrichAfter || this.settings.enrichOnTranscribe)
         ) {
             // Pass the fresh transcript so enrichment works even when
             // insertTranscript is off and the note has no transcript yet.
@@ -3519,6 +3589,26 @@ export default class SystemRecordingPlugin extends Plugin {
         if (!apiBaseUrl || !apiKey || !enrichModel) {
             new Notice(t().notices.enrichNotConfigured);
             return;
+        }
+        // Resume the workflow: a recorded-but-not-yet-transcribed note has no
+        // transcript to enrich, so transcribe its recording first — the
+        // transcription pipeline then enriches automatically once the transcript
+        // lands. Skipped when a fresh transcript is handed in (i.e. we were
+        // called *by* that pipeline) to avoid looping.
+        const hasFreshTranscript =
+            transcriptOverride !== undefined &&
+            transcriptOverride.trim().length > 0;
+        if (!hasFreshTranscript) {
+            const existing = extractTranscript(await this.app.vault.read(file));
+            if (!existing.trim()) {
+                const recording = this.agendaMeetingFromNote(file).recording;
+                if (recording) {
+                    await this.launchTranscriber(recording, "auto", {
+                        enrichAfter: true,
+                    });
+                    return;
+                }
+            }
         }
         // Guard against overlapping runs on the same note (double-click, agenda
         // + command, or auto-enrich racing a manual enrich).

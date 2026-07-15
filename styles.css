@@ -229,7 +229,7 @@
 table.mc-attention {
     width: 100%;
     border-collapse: collapse;
-    font-size: var(--font-ui-smaller);
+    font-size: calc(var(--font-ui-smaller) - 1px);
 }
 
 table.mc-attention th,
@@ -283,13 +283,30 @@ table.mc-attention td {
  * the side padding, in both reading and live-preview/source modes.
  * ====================================================================== */
 .meeting-copilot-dashboard .markdown-preview-sizer,
-.meeting-copilot-dashboard .cm-sizer {
+.meeting-copilot-dashboard .cm-sizer,
+.meeting-copilot-dashboard .cm-content,
+.meeting-copilot-dashboard .cm-line {
     max-width: none !important;
+    width: auto !important;
 }
 
-.meeting-copilot-dashboard.markdown-preview-view {
-    padding-left: var(--size-4-3);
-    padding-right: var(--size-4-3);
+.meeting-copilot-dashboard.markdown-preview-view,
+.meeting-copilot-dashboard .markdown-preview-view {
+    padding-left: var(--size-4-1);
+    padding-right: var(--size-4-1);
+}
+
+/* Hide the note's plumbing so the dashboard reads clean: the frontmatter
+ * Properties widget (cssclasses is only there to trigger the styling above)
+ * and the `%% meeting-copilot:dashboard %%` block markers. Reading view already
+ * hides the comment markers; this also hides them in Live Preview (except the
+ * line you're actively editing, so they stay reachable). */
+.meeting-copilot-dashboard .metadata-container {
+    display: none;
+}
+
+.meeting-copilot-dashboard .cm-line:has(> .cm-comment):not(.cm-active) {
+    display: none;
 }
 
 /* =========================================================================
@@ -310,41 +327,106 @@ table.mc-attention td {
 table.mc-meetings {
     width: 100%;
     border-collapse: collapse;
-    font-size: var(--font-ui-smaller);
+    font-size: calc(var(--font-ui-smaller) - 1px);
+    line-height: 1.35;
 }
 
-table.mc-meetings th,
 table.mc-meetings td {
-    text-align: left;
-    padding: var(--size-2-1) var(--size-2-3);
-    border-bottom: 1px solid var(--background-modifier-border);
+    padding: 1px var(--size-2-2);
+    border: none;
     vertical-align: middle;
 }
 
 /* Dense, muted column headers to match the action-items list. */
-table.mc-meetings th,
 table.mc-attention th {
     font-weight: var(--font-normal);
     color: var(--text-muted);
 }
 
-/* No-note rows: muted, non-link title with a "create note" action. */
+/* Date group subheader: one row per day, so the rows below drop the date. */
+.mc-meetings-day {
+    padding-top: var(--size-4-1) !important;
+    padding-bottom: 1px !important;
+    color: var(--text-muted);
+    font-weight: var(--font-semibold);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.mc-meetings-dayrow:first-child .mc-meetings-day {
+    padding-top: 0 !important;
+}
+
+/* Time + title share one column; the time is a fixed-width, muted prefix. */
+.mc-meetings-when {
+    width: 100%;
+    white-space: nowrap;
+}
+
+.mc-meetings-time {
+    display: inline-block;
+    min-width: 3.4em;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+/* No-note rows: muted, non-link title (the create-note icon signals it). */
 .mc-meeting-nonote {
     color: var(--text-muted);
 }
 
-.mc-meetings-actions {
+/* Trailing cell merges status + the create-note icon. Center each item as a
+ * shrink-to-fit block with auto side margins so a lone status dot lines up
+ * exactly under the create-note icon of other rows, despite their different
+ * widths (text-align alone left them a couple of px off). */
+.mc-meetings-trail {
     white-space: nowrap;
+    width: 1.8em;
 }
 
-.mc-create-note {
-    cursor: pointer;
-    color: var(--text-accent);
-    font-size: var(--font-ui-smaller);
+.mc-meetings-trail .mc-status-dot {
+    display: block;
+    margin: 0 auto;
 }
 
-.mc-create-note:hover {
-    text-decoration: underline;
+.mc-meetings-trail .mc-icon-btn {
+    display: flex;
+    width: fit-content;
+    margin: 0 auto;
+    padding: 0;
+}
+
+.mc-meetings-trail .mc-icon-btn .svg-icon {
+    width: 14px;
+    height: 14px;
+}
+
+/* Status shown as a small colour-coded dot with the status as its tooltip. */
+.mc-status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: var(--size-2-2);
+    background: var(--text-faint);
+    vertical-align: middle;
+}
+
+.mc-status-scheduled {
+    background: var(--text-faint);
+}
+
+.mc-status-recorded {
+    background: var(--interactive-accent);
+}
+
+.mc-status-transcribed {
+    background: rgba(var(--color-yellow-rgb), 0.9);
+}
+
+.mc-status-enriched {
+    background: rgba(var(--color-green-rgb), 0.9);
 }
 
 /* Open action items: dense, grouped by note (small muted title + date). */
@@ -361,13 +443,13 @@ table.mc-attention th {
 }
 
 .mc-action-note-title {
-    font-size: var(--font-ui-smaller);
-    font-weight: var(--font-semibold);
+    font-size: calc(var(--font-ui-smaller) - 1px);
+    font-weight: var(--font-normal);
 }
 
 .mc-action-note-date {
     color: var(--text-muted);
-    font-size: var(--font-ui-smaller);
+    font-size: calc(var(--font-ui-smaller) - 1px);
 }
 
 ul.mc-action-tasks {
@@ -380,8 +462,8 @@ ul.mc-action-tasks {
     display: flex;
     align-items: baseline;
     gap: var(--size-2-2);
-    font-size: var(--font-ui-smaller);
-    line-height: 1.3;
+    font-size: calc(var(--font-ui-smaller) - 1px);
+    line-height: 1.35;
     padding: 1px 0;
 }
 
@@ -396,10 +478,17 @@ ul.mc-action-tasks {
     text-decoration: line-through;
 }
 
-/* Keep rendered task markdown inline and margin-free for density. */
+/* Keep rendered task markdown inline and margin-free for density, and let
+ * the task text read at a normal weight (owners come through as bold from the
+ * enricher; the user wants the list uniformly un-bold). */
 .mc-action-task-text > * {
     margin: 0;
     display: inline;
+}
+
+.mc-action-task-text strong,
+.mc-action-task-text b {
+    font-weight: var(--font-normal);
 }
 
 /* Shared bottom toolbar: count on the left, controls + pagination on the right. */
@@ -414,9 +503,36 @@ ul.mc-action-tasks {
     border-top: 1px solid var(--background-modifier-border);
 }
 
+.mc-dash-toolbar-left {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--size-2-3) var(--size-4-2);
+}
+
 .mc-dash-count {
     color: var(--text-muted);
     font-size: var(--font-ui-smaller);
+}
+
+/* Status colour key, shown in the meetings toolbar next to the count. */
+.mc-dash-legend {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--size-2-3) var(--size-4-1);
+}
+
+.mc-dash-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--size-2-1);
+    color: var(--text-muted);
+    font-size: calc(var(--font-ui-smaller) - 1px);
+}
+
+.mc-dash-legend-item .mc-status-dot {
+    margin: 0;
 }
 
 .mc-dash-toolbar-right {
