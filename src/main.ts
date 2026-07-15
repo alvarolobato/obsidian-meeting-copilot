@@ -1112,15 +1112,26 @@ export default class SystemRecordingPlugin extends Plugin {
 	}
 
 	/**
-	 * Opens macOS System Settings at the Notifications pane. macOS won't let an
-	 * app choose Banners vs Alerts, so this is the one-click path to the setting
-	 * users need for notifications that persist (and show their action buttons).
+	 * Opens macOS System Settings at Obsidian's Notifications row. macOS won't let
+	 * an app choose Banners vs Alerts, so this is the one-click path to the
+	 * setting users need for notifications that persist (and show their action
+	 * buttons). The `?id=` deep-links to Obsidian's row where supported and
+	 * harmlessly falls back to the Notifications pane otherwise.
 	 */
 	openMacNotificationSettings(): void {
+		if (!Platform.isMacOS) return;
 		execFile(
 			"open",
-			["x-apple.systempreferences:com.apple.Notifications-Settings.extension"],
-			() => undefined
+			[
+				// `md.obsidian` is Obsidian's macOS bundle identifier (deep-links to
+				// its Notifications row), not the vault config folder.
+				// eslint-disable-next-line obsidianmd/hardcoded-config-path
+				"x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=md.obsidian",
+			],
+			(err) => {
+				if (err)
+					console.warn("Failed to open Notification settings", err);
+			}
 		);
 	}
 
@@ -1130,7 +1141,7 @@ export default class SystemRecordingPlugin extends Plugin {
 	 * (with their buttons) instead of auto-dismissing. Never nags again.
 	 */
 	private maybeShowNotificationStyleHint(): void {
-		if (this.settings.notificationStyleHintShown) return;
+		if (!Platform.isMacOS || this.settings.notificationStyleHintShown) return;
 		this.settings.notificationStyleHintShown = true;
 		void this.saveSettings();
 		multiActionNotice(t().notices.notificationStyleHint, [
