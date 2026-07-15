@@ -148,7 +148,8 @@ import {
 	InAppHandle,
 } from "./ui/dualChannelPrompt";
 import { MeetingPromptModal } from "./ui/meetingPromptModal";
-import { notifLog } from "./util/notifLog";
+import { notifLog, notifDebugEnabled } from "./util/notifLog";
+import { decideWindowFocused, BrowserWindowState } from "./util/windowFocus";
 import {
     QueueSnapshot,
     TranscriptionCancelledError,
@@ -252,10 +253,11 @@ export default class SystemRecordingPlugin extends Plugin {
 	private openedLinkEventIds = new Set<string>();
 	/**
 	 * Meeting prompts currently on screen, keyed by meeting (calendar event id,
-	 * or a detection key). Each is a dual-channel controller (native OS
-	 * notification + in-app fallback). A new prompt for the *same* key supersedes
-	 * its predecessor (upcoming → start), while distinct meetings coexist so
-	 * overlapping / post-wake catch-up prompts don't clobber each other.
+	 * or a detection key). Each is a dual-channel controller (an always-shown
+	 * in-app notice, plus a native OS notification when Obsidian isn't frontmost).
+	 * A new prompt for the *same* key supersedes its predecessor (upcoming →
+	 * start), while distinct meetings coexist so overlapping / post-wake catch-up
+	 * prompts don't clobber each other.
 	 */
 	private meetingNotices = new Map<string, DualChannelController>();
 	/**
@@ -462,31 +464,40 @@ export default class SystemRecordingPlugin extends Plugin {
 			callback: () => this.cancelActiveTranscription(),
 		});
 
-		// Diagnostic: fire a sample meeting prompt after a delay so you can click
-		// away first to test the system-notification (not-focused) path. Watch the
-		// DevTools console (Cmd+Opt+I) filtered by `mc:notif`.
-		this.addCommand({
-			id: "debug-test-notification",
-			name: "Debug test meeting notification",
-			callback: () => {
-				notifLog("debug-test-notification: scheduled (4s) — click away now to test the system notification");
-				new Notice("Test notification in 4s — click away to test the system notification", 4000);
-				window.setTimeout(() => {
-					notifLog("debug-test-notification: firing", {
-						focused: this.isWindowFocused(),
-					});
-					this.promptMeeting({
-						key: "debug:test",
-						title: "Test meeting",
-						subtitle: "Debug notification",
-						meetLink: "https://example.com/meet",
-						onRecord: () => notifLog("debug-test-notification: onRecord picked"),
-						onOpenNote: () =>
-							notifLog("debug-test-notification: onOpenNote picked"),
-					});
-				}, 4000);
-			},
-		});
+		// Dev-only (gated on the `mc:notif-debug` localStorage flag, off in
+		// shipped builds): fire a sample meeting prompt after a delay so you can
+		// click away first to test the system-notification (not-focused) path.
+		// Watch the DevTools console (Cmd+Opt+I) filtered by `mc:notif`.
+		if (notifDebugEnabled()) {
+			this.addCommand({
+				id: "debug-test-notification",
+				name: "Debug test meeting notification",
+				callback: () => {
+					notifLog(
+						"debug-test-notification: scheduled (4s) — click away now to test the system notification"
+					);
+					new Notice(
+						"Test notification in 4s — click away to test the system notification",
+						4000
+					);
+					window.setTimeout(() => {
+						notifLog("debug-test-notification: firing", {
+							focused: this.isWindowFocused(),
+						});
+						this.promptMeeting({
+							key: "debug:test",
+							title: "Test meeting",
+							subtitle: "Debug notification",
+							meetLink: "https://example.com/meet",
+							onRecord: () =>
+								notifLog("debug-test-notification: onRecord picked"),
+							onOpenNote: () =>
+								notifLog("debug-test-notification: onOpenNote picked"),
+						});
+					}, 4000);
+				},
+			});
+		}
 
 		// Once the vault index is ready, nudge the user about recordings that
 		// finished but were never transcribed (e.g. a reload mid-transcription).
@@ -1311,10 +1322,7 @@ export default class SystemRecordingPlugin extends Plugin {
 		const doc = typeof document !== "undefined" ? document : null;
 		const hasFocus = !!doc && doc.hasFocus();
 		const visibilityState = doc ? doc.visibilityState : "n/a";
-		let isFocused: boolean | null = null;
-		let isMinimized: boolean | null = null;
-		let isVisible: boolean | null = null;
-		let result: boolean;
+		let win: BrowserWindowState | null = null;
 		try {
 			const req = (window as unknown as { require?: (id: string) => unknown })
 				.require;
@@ -1332,25 +1340,24 @@ export default class SystemRecordingPlugin extends Plugin {
 							  }
 							| undefined)
 					: undefined;
-			const win = electron?.remote?.getCurrentWindow?.();
-			if (win) {
-				isFocused = win.isFocused();
-				isMinimized = win.isMinimized();
-				isVisible = win.isVisible();
-				result = isFocused && !isMinimized && isVisible;
-			} else {
-				result = visibilityState === "visible" && hasFocus;
+			const current = electron?.remote?.getCurrentWindow?.();
+			if (current) {
+				win = {
+					isFocused: current.isFocused(),
+					isMinimized: current.isMinimized(),
+					isVisible: current.isVisible(),
+				};
 			}
 		} catch (err) {
 			notifLog("isWindowFocused: remote threw", { err: String(err) });
-			result = visibilityState === "visible" && hasFocus;
 		}
+		const result = decideWindowFocused({ win, visibilityState, hasFocus });
 		notifLog("isWindowFocused", {
 			hasFocus,
 			visibilityState,
-			isFocused,
-			isMinimized,
-			isVisible,
+			isFocused: win?.isFocused ?? null,
+			isMinimized: win?.isMinimized ?? null,
+			isVisible: win?.isVisible ?? null,
 			result,
 		});
 		return result;
@@ -1544,12 +1551,13 @@ export default class SystemRecordingPlugin extends Plugin {
 				// button but collapses two-or-more into a generic "Options ▾"
 				// dropdown. Users want the named default button, so the OS
 				// notification carries only the primary action; the rest stay one
-				// tap away via the body click (modal) and the in-app fallback.
+				// tap away via the body click (modal) and the in-app notice.
 				actions: actions
 					.slice(0, 1)
 					.map((a) => ({ text: a.label, run: a.onClick })),
-				// The in-app multi-action notice is the fallback for when the OS
-				// notification isn't confirmed on screen.
+				// The in-app multi-action notice is always shown (it carries the
+				// full set of actions and waits in Obsidian); the OS notification
+				// above is the additive channel when Obsidian isn't frontmost.
 				showInApp: () =>
 					multiActionNotice(
 						`${opts.title} — ${opts.subtitle}`,

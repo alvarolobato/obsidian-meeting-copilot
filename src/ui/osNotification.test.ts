@@ -216,6 +216,36 @@ describe("notifyOs", () => {
 		expect(onShown).toHaveBeenCalledTimes(1);
 	});
 
+	it("keeps consecutive native notifications independent (no global supersede)", () => {
+		const h = setupWindow({ remote: true });
+		const handle1 = notifyOs({
+			title: "t1",
+			body: "b",
+			actions: [{ text: "A", run: vi.fn() }],
+		});
+		const native1 = h.native();
+		const handle2 = notifyOs({
+			title: "t2",
+			body: "b",
+			actions: [{ text: "A", run: vi.fn() }],
+		});
+		const native2 = h.native();
+
+		expect(h.nativeCount()).toBe(2);
+		expect(native1).not.toBe(native2);
+		// Posting the second must NOT have closed the first (the removed
+		// lastNative/lastWeb supersede used to do exactly that).
+		expect(native1?.closed).toBe(false);
+
+		// Closing one handle closes only its own notification.
+		handle1.close();
+		expect(native1?.closed).toBe(true);
+		expect(native2?.closed).toBe(false);
+
+		handle2.close();
+		expect(native2?.closed).toBe(true);
+	});
+
 	it("reports onFailed when neither native nor web can show", () => {
 		setupWindow({ remote: false, webPermission: "denied" });
 		const onFailed = vi.fn();
