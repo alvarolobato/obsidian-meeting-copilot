@@ -1450,11 +1450,12 @@ export default class SystemRecordingPlugin extends Plugin {
 		if (this.currentRecordingEventId && this.currentRecordingEventId === m.id) {
 			return true;
 		}
-		return (
-			m.note != null &&
-			this.currentMeetingNotePath != null &&
-			this.currentMeetingNotePath === m.note.path
-		);
+		// Prefer the live note TFile's path over the string captured at record
+		// start, so a rename mid-recording (which updates the TFile in place)
+		// still matches the row.
+		const recordingNotePath =
+			this.currentMeetingNote?.path ?? this.currentMeetingNotePath;
+		return m.note != null && recordingNotePath === m.note.path;
 	}
 
 	/** Records a new take directly into an existing note (no createMeetingNote). */
@@ -3060,8 +3061,19 @@ export default class SystemRecordingPlugin extends Plugin {
      * recording whose audio is still on disk.
      */
     private async trashIfExists(vaultPath: string): Promise<boolean> {
-        const f = await this.resolveExistingFile(vaultPath);
-        if (!f) return true;
+        // Check the disk directly (bypassing the vault index) so a genuinely
+        // absent path returns fast and a just-written file is still found.
+        if (!(await this.app.vault.adapter.exists(vaultPath))) return true;
+        const f = await this.resolveFileWithRetry(vaultPath);
+        if (!f) {
+            // On disk but never resolved to a TFile (index lag exhausted): we
+            // can't trash it via the file manager, and claiming success would
+            // orphan it — report failure so the caller keeps the link.
+            console.warn(
+                `[Meeting Copilot] could not resolve ${vaultPath} to trash it`
+            );
+            return false;
+        }
         try {
             await this.app.fileManager.trashFile(f);
             return true;
