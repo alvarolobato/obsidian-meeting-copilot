@@ -273,6 +273,10 @@ if #available(macOS 13.0, *) {
     RunLoop.current.run(until: Date.distantFuture)
 
 } else {
-    emitJSON(["status": "error", "message": "macOS 13.0 or later is required"])
+    // Unreachable in practice: the package targets macOS 13.3 (the whisper
+    // framework's floor) and dyld rejects the binary on anything older before
+    // main() runs. Kept as a guard for the macOS 13 ScreenCaptureKit APIs, with
+    // the message matching the real requirement.
+    emitJSON(["status": "error", "message": "macOS 13.3 or later is required"])
     exit(1)
 }

@@ -33,6 +33,7 @@ private func installTranscribeSignalHandlers() {
 private enum TranscribeError: LocalizedError {
     case cannotOpen(String)
     case cannotConvert(String)
+    case audioTooLong(samples: Int)
     case whisperFailed(id: String, code: Int)
 
     var errorDescription: String? {
@@ -41,6 +42,8 @@ private enum TranscribeError: LocalizedError {
             return "could not open the audio file: \(detail)"
         case .cannotConvert(let detail):
             return "audio decoding failed: \(detail)"
+        case .audioTooLong(let samples):
+            return "audio is too long for a single pass (\(samples) samples exceeds the whisper limit)"
         case .whisperFailed(let id, let code):
             return "whisper_full failed for \"\(id)\" (code \(code))"
         }
@@ -75,9 +78,10 @@ private final class ProgressReporter {
 
 /// Decodes any AVFoundation-readable file (the recorder's 24 kHz mono WAV/M4A
 /// sidecars, or a full mix) to the 16 kHz mono float PCM whisper expects,
-/// resampling and down-mixing in a streamed converter pass so nothing
-/// full-length beyond the decoded samples is held. Returns an empty array for a
-/// zero-length file.
+/// resampling and down-mixing in a streamed converter pass. The source read is
+/// streamed chunk-by-chunk, but the decoded samples for the whole file are
+/// returned in one array — whisper_full needs the entire PCM buffer at once.
+/// Returns an empty array for a zero-length file.
 private func decodePCM16kMono(_ url: URL) throws -> [Float] {
     let file: AVAudioFile
     do {
@@ -118,7 +122,14 @@ private func decodePCM16kMono(_ url: URL) throws -> [Float] {
     out.reserveCapacity(Int(Double(frameCount) * ratio) + 1_024)
 
     var reachedEOF = false
+    // A genuine read failure inside the pull block, latched so it can be thrown
+    // after convert() returns (the block can't throw). Without this a read error
+    // would masquerade as EOF and silently truncate the audio.
+    var readError: Error?
     while true {
+        // Honor a SIGTERM/SIGINT that arrives mid-decode (a long file), rather
+        // than only between whisper passes.
+        if gTranscribeCancelled != 0 { exit(130) }
         guard let outBuffer = AVAudioPCMBuffer(pcmFormat: dstFormat, frameCapacity: outCapacity) else {
             throw TranscribeError.cannotConvert("could not allocate the conversion buffer")
         }
@@ -128,10 +139,20 @@ private func decodePCM16kMono(_ url: URL) throws -> [Float] {
                 inStatus.pointee = .endOfStream
                 return nil
             }
+            // Detect EOF by position (like AudioMixer) rather than by letting
+            // read() throw: AVAudioFile.read throws a generic error when asked to
+            // read at end-of-file, so calling it past the end would look like a
+            // failure. Only a throw with frames still remaining is a real error.
+            if file.framePosition >= file.length {
+                reachedEOF = true
+                inStatus.pointee = .endOfStream
+                return nil
+            }
             inBuffer.frameLength = 0
             do {
                 try file.read(into: inBuffer)
             } catch {
+                readError = error
                 reachedEOF = true
                 inStatus.pointee = .endOfStream
                 return nil
@@ -145,6 +166,9 @@ private func decodePCM16kMono(_ url: URL) throws -> [Float] {
             return inBuffer
         }
 
+        if let readError {
+            throw TranscribeError.cannotConvert("read failed: \(readError.localizedDescription)")
+        }
         if status == .error {
             throw TranscribeError.cannotConvert(convError?.localizedDescription ?? "unknown converter error")
         }
@@ -170,6 +194,13 @@ private func runJob(
     threads: Int,
     wantSegments: Bool
 ) throws {
+    // whisper_full takes the sample count as an Int32; guard against wrap on an
+    // absurdly long recording (> ~37 h at 16 kHz) rather than passing a negative
+    // count into the C API.
+    guard samples.count <= Int(Int32.max) else {
+        throw TranscribeError.audioTooLong(samples: samples.count)
+    }
+
     let reporter = ProgressReporter(id: id)
 
     var params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY)
@@ -284,22 +315,28 @@ func runTranscribe(_ args: [String]) -> Never {
     }
     let language = (obj["language"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "auto"
     let translate = obj["translate"] as? Bool ?? false
-    let defaultThreads = max(1, min(8, ProcessInfo.processInfo.activeProcessorCount))
-    let threads = (obj["threads"] as? Int).map { max(1, $0) } ?? defaultThreads
+    let cores = ProcessInfo.processInfo.activeProcessorCount
+    let defaultThreads = max(1, min(8, cores))
+    // Accept an int or any JSON number; clamp to [1, cores] since oversubscribing
+    // the cores hurts throughput rather than helping.
+    let threads = (obj["threads"] as? NSNumber).map { max(1, min($0.intValue, cores)) } ?? defaultThreads
     guard let jobs = obj["jobs"] as? [[String: Any]], !jobs.isEmpty else {
         failTranscribe("transcribe manifest has no jobs")
     }
 
     var cparams = whisper_context_default_params()
-    cparams.use_gpu = true
+    // Metal by default; whisper falls back to CPU when the GPU is unavailable. A
+    // manifest "gpu": false forces CPU (useful for a GPU-less CI runner / debug).
+    cparams.use_gpu = obj["gpu"] as? Bool ?? true
     guard let ctx = whisper_init_from_file_with_params(modelPath, cparams) else {
         failTranscribe("failed to load the Whisper model at \(modelPath)")
     }
     defer { whisper_free(ctx) }
 
     for job in jobs {
-        guard let id = job["id"] as? String, let audioPath = job["audio"] as? String else {
-            failTranscribe("a transcribe job is missing \"id\" or \"audio\"")
+        guard let id = job["id"] as? String, !id.isEmpty,
+              let audioPath = job["audio"] as? String, !audioPath.isEmpty else {
+            failTranscribe("a transcribe job is missing a non-empty \"id\" or \"audio\"")
         }
         let wantSegments = job["segments"] as? Bool ?? false
 
