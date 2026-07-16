@@ -25,7 +25,7 @@ export type SpeechWindowSource = Exclude<PregateSource, "none">;
 
 /** One audio file to transcribe within a request. */
 export interface TranscribeJob {
-	/** Stable id echoed back on the result ("single" | "me" | "them"). */
+	/** Stable id echoed back on the result ("mixed" | "me" | "them"). */
 	id: string;
 	file: TFile;
 	/** Diarized passes need timestamped segments; the mixed pass doesn't. */
