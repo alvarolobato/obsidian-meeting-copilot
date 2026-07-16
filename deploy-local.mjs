@@ -96,6 +96,25 @@ if (deployBinaryFrom) {
 	const target = path.join(DEST, "system-recorder");
 	fs.copyFileSync(deployBinaryFrom, target);
 	fs.chmodSync(target, 0o755);
+
+	// The helper links whisper.cpp's *dynamic* framework (issue #34): the binary
+	// references @rpath/whisper.framework/… and resolves it at launch via an
+	// @loader_path rpath, so whisper.framework MUST sit next to the binary or
+	// dyld fails before main() — breaking recording, not just transcription.
+	// SwiftPM co-locates it in the build's release dir; copy it alongside the
+	// binary, preserving the framework's Versions/Current symlinks. (Release
+	// packaging + release-time provisioning of this framework land later in the
+	// stack; this keeps the local --swift dev loop launchable now.)
+	const frameworkSrc = path.join(path.dirname(deployBinaryFrom), "whisper.framework");
+	if (!fs.existsSync(frameworkSrc)) {
+		die(`built whisper.framework not found next to ${deployBinaryFrom}`);
+	}
+	const frameworkDest = path.join(DEST, "whisper.framework");
+	fs.rmSync(frameworkDest, { recursive: true, force: true });
+	// dereference:false (the default, made explicit) is load-bearing: the
+	// framework's Versions/Current -> A symlink must survive the copy or dyld
+	// can't resolve @rpath/whisper.framework/Versions/Current/whisper.
+	fs.cpSync(frameworkSrc, frameworkDest, { recursive: true, dereference: false });
 }
 
 console.log(`deploy-local: deployed to ${DEST}`);
