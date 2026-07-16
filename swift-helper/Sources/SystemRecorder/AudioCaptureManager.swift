@@ -27,7 +27,6 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
     /// barrier) falls back to ScreenCaptureKit if the tap never delivers, and
     /// rebuilds the tap if it stalls after delivering.
     private var tapHealthTimer: DispatchSourceTimer?
-    private var tapStartedAt = Date()
 
     // Callbacks for captured audio buffers
     var onSystemAudio: ((CMSampleBuffer) -> Void)?
@@ -69,6 +68,11 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
     private var isCapturing = false
     private var restartingSystem = false
     private var restartingMic = false
+    /// Whether we've already switched the tap path over to the ScreenCaptureKit
+    /// fallback. One-shot: the fallback is a terminal action, and (unlike a tap
+    /// restart) it must remain possible even after the restart budget is spent,
+    /// so we never end up with no system-audio source at all.
+    private var tapFallbackStarted = false
     /// Whether the mic engine currently has a live tap installed. False when the
     /// mic was deliberately left off at start (e.g. an unusable device format),
     /// so the watchdog can tell an intentionally-off mic from one that's
@@ -119,6 +123,20 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
     private func endSystemRestart() {
         restartLock.lock(); defer { restartLock.unlock() }
         restartingSystem = false
+    }
+
+    /// Claim the one-shot switch to the ScreenCaptureKit fallback. Blocks while
+    /// another system restart is in flight and fires at most once, but is NOT
+    /// bounded by maxRestarts — falling back must always be possible so a spent
+    /// tap-restart budget can't strand us with no system-audio source. Released
+    /// via endSystemRestart() (which clears `restartingSystem`); the one-shot
+    /// `tapFallbackStarted` stays set.
+    private func beginTapFallback() -> Bool {
+        restartLock.lock(); defer { restartLock.unlock() }
+        guard isCapturing, !restartingSystem, !tapFallbackStarted else { return false }
+        tapFallbackStarted = true
+        restartingSystem = true
+        return true
     }
 
     /// Claim a mic-engine restart. Returns false if stopped, one is already in
@@ -212,7 +230,6 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
         }
         try tap.start()
         processTap = tap
-        tapStartedAt = Date()
     }
 
     // MARK: - Tap liveness monitor
@@ -254,7 +271,7 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
     /// another restart or resurrect capture past stop.
     @available(macOS 14.2, *)
     private func fallbackToScreenCapture(reason: String) {
-        guard beginSystemRestart() else { return }
+        guard beginTapFallback() else { return }
         // Once we're on SCK, the tap monitor has no more job to do.
         tapHealthTimer?.cancel()
         tapHealthTimer = nil

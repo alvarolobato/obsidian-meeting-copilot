@@ -78,8 +78,9 @@ final class SystemAudioProcessTap: @unchecked Sendable {
     private let ioQueue = DispatchQueue(label: "com.meetingcopilot.audio-tap-io")
 
     // IO-proc liveness, updated on ioQueue and read from other threads under the
-    // lock. `lastCallback` starts at "now" at start() so the stall check has a
-    // sane baseline before the first buffer arrives.
+    // lock. `callbackCount` counts only cycles that carried audio frames (see
+    // startIOProc); `lastCallback` is initialized to "now" so the stall check
+    // has a sane baseline before the first buffer arrives.
     private let livenessLock = NSLock()
     private var callbackCount = 0
     private var lastCallback = Date()
@@ -147,15 +148,19 @@ final class SystemAudioProcessTap: @unchecked Sendable {
             &newProcID, aggregateID, ioQueue
         ) { [weak self] _, inInputData, _, _, _ in
             guard let self else { return }
+            guard let pcm = SystemAudioProcessTap.makeBuffer(
+                inInputData, format: format, bytesPerFrame: bytesPerFrame
+            ) else { return }
+            // Count only cycles that actually carried audio frames: a tap that
+            // clocks but delivers empty buffers (e.g. the System Audio Recording
+            // grant is missing) then still reads as "never delivered", so the
+            // liveness monitor falls back to ScreenCaptureKit. Genuine silence
+            // still delivers full (zero-sample) frames, so a quiet meeting won't
+            // trip the fallback.
             self.noteCallback()
             // Read the handler on the ioQueue; teardown nils it under the same
             // queue's barrier, so this can't race a stop.
-            guard let handler = self.onAudioBuffer,
-                  let pcm = SystemAudioProcessTap.makeBuffer(
-                      inInputData, format: format, bytesPerFrame: bytesPerFrame
-                  )
-            else { return }
-            handler(pcm)
+            self.onAudioBuffer?(pcm)
         }
         guard procStatus == noErr, let procID = newProcID else {
             throw TapError.createIOProc(procStatus)
@@ -208,6 +213,9 @@ final class SystemAudioProcessTap: @unchecked Sendable {
 
     // MARK: - Teardown
 
+    // Must NOT be called from the IO queue itself (the `ioQueue.sync` barrier
+    // below would self-deadlock). All current callers run off it: stop(), the
+    // start() failure path, and AudioCaptureManager's control-queue health path.
     private func teardown() {
         if let procID = ioProcID {
             // Stop the device, then drain the IO queue so any block already
