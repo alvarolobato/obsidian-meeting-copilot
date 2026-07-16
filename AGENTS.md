@@ -7,7 +7,8 @@ Calendar sync, dual-channel recording via a macOS Swift helper, transcription
 and LLM enrichment.
 
 Repo: `alvarolobato/obsidian-meeting-copilot`. Platform: macOS only (the
-recorder helper uses ScreenCaptureKit / Core Audio).
+recorder helper captures system audio with a Core Audio process tap on macOS
+14.4+, ScreenCaptureKit on older releases).
 
 ## Repository layout
 
@@ -20,6 +21,7 @@ recorder helper uses ScreenCaptureKit / Core Audio).
   - `src/ui/` — agenda sidebar view and modals.
   - `src/i18n/` — localization; **English is the base language** (`en.ts`). UI strings go through `t()`.
 - `swift-helper/` — the `SystemRecorder` Swift package (dual-channel audio capture + the `transcribe` subcommand in `Transcribe.swift`, which drives whisper.cpp over Metal and streams NDJSON). Built into the `system-recorder` binary; links whisper.cpp's **dynamic** `whisper.framework`, so the `whisper` dylib ships in the `whisper.framework/Versions/Current/whisper` layout next to the binary.
+  - System audio: `SystemAudioProcessTap.swift` (Core Audio process tap + private aggregate device, macOS 14.4+) with `AudioCaptureManager.startSystemStream` (ScreenCaptureKit) as the pre-14.4 / failure fallback. Mic: `AVAudioEngine`. Both feed `AudioMixer` (24 kHz mono, `.me`/`.them` split sidecars).
 - `.github/workflows/` — `ci.yml` (PRs + pushes to main) and `release.yml` (version tags).
 - `manifest.json`, `versions.json`, `styles.css`, `esbuild.config.mjs`.
 
@@ -248,6 +250,38 @@ current (e.g. `actions/checkout@v5`, `actions/setup-node@v5`).
   (`ensureHelperRuntime()`, shared with recording/device-listing) and the model,
   then constructs the backend; `localFallbackToRemote` retries a failed local
   run remotely (non-diarized), never on an abort.
+- **System-audio capture:** the process tap (`SystemAudioProcessTap`) is a
+  *private, auto-starting aggregate device* wrapping a `CATapDescription`
+  (global mono mixdown, `.unmuted` so the user still hears the meeting). It's
+  device-independent, so the SCK path's "an app switched the default device and
+  audio went silent" recovery isn't needed here. Force the legacy path with
+  `MC_DISABLE_PROCESS_TAP=1` for A/B testing.
+  - **Permission:** the tap needs the **System Audio Recording** TCC grant
+    (`Screen & System Audio Recording`), *not* Screen Recording. That grant is
+    attributed to the responsible app (Obsidian), which macOS prompts for on
+    first tap use; the CLI helper has no bundle of its own. So the
+    `notifyRecordingError` screen-capture classification in `main.ts` now only
+    fires on the SCK fallback.
+  - **Silence = no IO (important):** a process tap delivers **no IO callbacks
+    while system audio is silent** — it is *not* a continuous clock like an
+    input device. So "no callbacks for N seconds" is a normal quiet meeting, not
+    a failure, and can't be used for liveness. Two consequences the code handles:
+    - *Timeline alignment:* the mic stream runs continuously but the tap stream
+      has gaps. `deliver(...)` anchors to `AudioGetCurrentHostTime()` at
+      `start()` and, on each buffer, compares `deliveredFrames` against the
+      elapsed host-time; if a gap exceeds ~1.5 IO periods it backfills
+      zero-filled buffers so `.them` stays wall-clock aligned with `.me`. Gaps
+      are capped so a long silence can't allocate an enormous buffer.
+    - *Health/recovery is event-driven, not timer-based:* there is **no**
+      liveness timer. `installHealthListeners` registers Core Audio property
+      listeners (`kAudioDevicePropertyDeviceIsAlive`,
+      `kAudioHardwarePropertyServiceRestarted`, `kAudioTapPropertyFormat`) and
+      calls `onNeedsRestart`; `AudioCaptureManager` rebuilds the tap in place
+      (bounded by the shared `systemRestarts` cap) or falls back to SCK. A
+      tap-creation *throw* still falls back to SCK immediately.
+  - **Concurrency:** `teardown()` is guarded by an `NSLock` (idempotent), and
+    `AudioCaptureManager` serializes all tap start/stop/restart/fallback work on
+    its `controlQueue` so a mid-recording recovery can't race `stopCapture`.
 - **i18n:** English is the base. Add UI strings to `src/i18n/en.ts` and use
   `t()`; don't hardcode user-facing strings.
 - **Notification tracing (`src/util/notifLog.ts`):** off by default, gated on the

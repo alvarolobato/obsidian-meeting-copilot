@@ -240,12 +240,14 @@ final class AudioMixer: @unchecked Sendable {
                 return
             }
         }
-        // Fast path: AudioCaptureManager asks the OS for the target format up
-        // front, so the common case needs no converter (and no per-callback
-        // output allocation) at all — the capture callbacks run dozens of
-        // times per second for hours. If a converter exists from an earlier
-        // source format, drain its resampler tail first so those frames land
-        // in stream order rather than at close time.
+        // Fast path: the SCK source asks the OS for the target format up front,
+        // so its buffers usually need no converter (and no per-callback output
+        // allocation) at all — the capture callbacks run dozens of times per
+        // second for hours. The process-tap source delivers its own native
+        // format (e.g. 48 kHz float), which takes the converter path below. If
+        // a converter exists from an earlier source format, drain its resampler
+        // tail first so those frames land in stream order rather than at close
+        // time.
         if buffer.format == targetFormat {
             drainConverterLocked(stream)
             do {
@@ -364,6 +366,19 @@ final class AudioMixer: @unchecked Sendable {
         }
 
         append(pcmBuffer, to: systemStream)
+    }
+
+    // MARK: - System audio (from a Core Audio process tap)
+
+    /// System audio delivered as an `AVAudioPCMBuffer` (the process-tap path on
+    /// macOS 14.4+). Shares the systemStream pipeline with `appendSystemAudio`,
+    /// so conversion/downmix to the 24 kHz mono target, temp-file writing, and
+    /// the split "them" sidecar all behave identically to the SCK source. The
+    /// tap already backfills silent gaps with zeros (a global tap emits no IO
+    /// cycles during silence), so these buffers form a continuous timeline the
+    /// mixer can align positionally against the mic — no timestamps needed here.
+    func appendSystemAudioPCM(_ buffer: AVAudioPCMBuffer) {
+        append(buffer, to: systemStream)
     }
 
     // MARK: - Microphone audio (from AVAudioEngine)

@@ -133,9 +133,14 @@ if #available(macOS 13.0, *) {
         fail("Failed to create audio writer: \(error.localizedDescription)")
     }
 
-    // Wire system audio → mixer
+    // Wire system audio → mixer. Both sources are wired; only the one that
+    // actually starts (process tap on macOS 14.4+, else ScreenCaptureKit)
+    // delivers buffers.
     captureManager.onSystemAudio = { sampleBuffer in
         mixer.appendSystemAudio(sampleBuffer)
+    }
+    captureManager.onSystemAudioPCM = { buffer in
+        mixer.appendSystemAudioPCM(buffer)
     }
 
     // Wire microphone audio → mixer
@@ -149,14 +154,15 @@ if #available(macOS 13.0, *) {
         emitJSON(["status": "warning", "message": message])
     }
 
-    // Fail fast on a dead capture. Both sources feed the mixer within a second
-    // or two even in silence, so zero frames well past capture start means it
-    // never came up — most often because an audio device change (Zoom launching
-    // after we start and grabbing the input/output device) stopped both paths
-    // before recovery could re-establish them, or because the helper's Screen
-    // Recording / Microphone TCC grant was invalidated (its code hash changed on
-    // an update). Without this the user records a whole meeting into the void and
-    // only learns at stop ("No audio was captured").
+    // Fail fast on a dead capture. The mic (AVAudioEngine) delivers buffers
+    // continuously from start, even in silence, so if BOTH sources are still at
+    // zero frames well past capture start the capture never came up — most often
+    // because the helper's Microphone (and, on the tap path, System Audio
+    // Recording) TCC grant is missing/invalidated, or an audio device change
+    // stopped the SCK path before recovery. (The process tap alone can sit at
+    // zero during a silent meeting — it clocks only while audio plays — which is
+    // why the guard requires the mic to be silent too.) Without this the user
+    // records a whole meeting into the void and only learns at stop.
     //
     // Scheduled only AFTER startCapture() reports "recording" (so a slow
     // SCShareableContent call or a first-run TCC prompt doesn't count against the
@@ -166,9 +172,20 @@ if #available(macOS 13.0, *) {
     let watchdog = DispatchWorkItem {
         let frames = mixer.capturedFrames
         if frames.system == 0 && frames.mic == 0 {
-            fail(
-                "No audio captured after \(Int(watchdogSeconds))s. If a meeting app (e.g. Zoom) started after recording, stop and start recording again once it's running. Otherwise grant Obsidian both Screen Recording and Microphone access in System Settings → Privacy & Security and restart Obsidian."
-            )
+            // Name the permissions and recovery that actually apply to the
+            // source that came up: the tap path needs Microphone + System Audio
+            // Recording (no Screen Recording, no device-change dance); the SCK
+            // fallback needs Screen Recording + Microphone and is the one
+            // susceptible to an app switching the default device after start.
+            let message: String
+            if captureManager.isUsingProcessTap() {
+                message =
+                    "No audio captured after \(Int(watchdogSeconds))s. In System Settings → Privacy & Security, grant Obsidian both Microphone (under “Microphone”) and System Audio Recording (under “Screen & System Audio Recording”), then restart Obsidian."
+            } else {
+                message =
+                    "No audio captured after \(Int(watchdogSeconds))s. If a meeting app (e.g. Zoom) started after recording, stop and start recording again once it's running. Otherwise grant Obsidian both Screen Recording and Microphone access in System Settings → Privacy & Security and restart Obsidian."
+            }
+            fail(message)
         } else if inputDeviceUID != nil && frames.mic == 0 && captureManager.micTapActive() {
             // System audio is flowing and a mic tap is live, but the
             // explicitly-selected input device has delivered nothing (a live tap
@@ -182,6 +199,19 @@ if #available(macOS 13.0, *) {
             emitJSON([
                 "status": "warning",
                 "message": "The selected microphone produced no audio after \(Int(watchdogSeconds))s; recording continues with system audio only. Try selecting “System default” as the input device, or reconnect the microphone.",
+            ])
+        } else if captureManager.isUsingProcessTap() && frames.system == 0 && frames.mic > 0 {
+            // Mic audio is flowing (so we're well past start and the Microphone
+            // grant is fine), yet the process tap has produced no frames. Usually
+            // that's just a quiet meeting — a global tap clocks only while some
+            // app plays audio — so this is a non-fatal nudge, deliberately NOT a
+            // fallback: we can't distinguish "silent" from a denied System Audio
+            // Recording grant (which can let the tap be created yet never deliver
+            // IO). Surfacing it keeps a missing grant from being invisible; a
+            // genuinely silent meeting can ignore it.
+            emitJSON([
+                "status": "warning",
+                "message": "No system audio captured after \(Int(watchdogSeconds))s. If the meeting is playing sound, grant Obsidian System Audio Recording (under “Screen & System Audio Recording”) in System Settings → Privacy & Security, then restart Obsidian. If it's simply quiet so far, you can ignore this.",
             ])
         }
     }
