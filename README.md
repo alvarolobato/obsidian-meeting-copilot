@@ -91,6 +91,40 @@ When Obsidian isn't in front, the plugin posts a native notification, but **macO
 - **Make them stay on screen with a button.** Set Obsidian to the **Alerts** style (**System Settings → Notifications → Obsidian → "Alerts"**). In the default **Banners** style macOS auto-dismisses notifications after a few seconds and collapses actions under an **"Options"** affordance. Note: macOS/Electron can only show **one** notification action as a named button (the primary — e.g. *Join & record*); the remaining choices open when you click the notification body.
 - **While recording or mirroring a display**, macOS hides banners unless you turn on **System Settings → Notifications → "Allow notifications when mirroring or sharing the display"** (off by default).
 
+### Debugging notifications
+
+If prompts still misbehave and you want to file a bug report, you can turn on
+notification tracing. It's **off by default**, so normally nothing extra is
+logged and no extra command exists.
+
+1. Open the DevTools console (**Cmd+Opt+I** → **Console**) and run:
+
+```js
+localStorage.setItem("mc:notif-debug", "1")
+```
+
+2. Reload the plugin (toggle **Meeting Copilot** off/on, or restart Obsidian).
+
+You'll now get:
+
+- `[mc:notif] …` traces of the whole notification pipeline (window focus,
+  which channel was used, and every native/web notification event). They're
+  logged at the normal console level so tools that export the console capture
+  them — paste these into a bug report.
+- A **"Debug test meeting notification"** command in the palette that fires a
+  sample prompt after 4 s (click away first to test the not-focused path).
+
+The flag is read when the plugin loads, so it only takes full effect after a
+reload — and the debug command likewise only appears while the flag was set at
+load time. To turn everything back off:
+
+```js
+localStorage.removeItem("mc:notif-debug")
+```
+
+then reload the plugin again (this also removes the debug command from the
+palette).
+
 ## Settings
 
 - **Google Calendar integration**: Client ID / secret, authentication, target calendar, agenda look-ahead / look-back, exclusion keywords.

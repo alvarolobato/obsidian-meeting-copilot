@@ -207,6 +207,13 @@ current (e.g. `actions/checkout@v5`, `actions/setup-node@v5`).
   code. See `src/transcribe/vendor/VENDOR.md`.
 - **i18n:** English is the base. Add UI strings to `src/i18n/en.ts` and use
   `t()`; don't hardcode user-facing strings.
+- **Notification tracing (`src/util/notifLog.ts`):** off by default, gated on the
+  `mc:notif-debug` localStorage flag (read at plugin load). When set it prints
+  `[mc:notif] …` traces (via `console.warn`, so console-export tools capture
+  them) and registers a dev-only "Debug test meeting notification" command in
+  `main.ts`. Nothing ships to end users while the flag is off; changing it needs
+  a plugin reload. User-facing steps live under *Debugging notifications* in the
+  README.
 - **Retention safety:** audio is pruned only when the owning note has the
   managed `transcript_saved` frontmatter flag (set by `insertTranscript`), never
   by sniffing the note body — a template placeholder must not cause data loss.
