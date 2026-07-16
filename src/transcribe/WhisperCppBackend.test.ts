@@ -4,6 +4,7 @@ import { PassThrough } from "stream";
 import { TFile } from "obsidian";
 import {
 	WhisperCppBackend,
+	type WhisperCppConfig,
 	type WhisperCppDeps,
 	type WhisperChildProcess,
 } from "./WhisperCppBackend";
@@ -40,7 +41,7 @@ interface Harness {
 	cleaned: string[];
 }
 
-function makeHarness(): Harness {
+function makeHarness(configOverride: Partial<WhisperCppConfig> = {}): Harness {
 	let latest: FakeProcess | undefined;
 	const spawned: Array<{ bin: string; args: string[] }> = [];
 	const manifests: string[] = [];
@@ -61,7 +62,12 @@ function makeHarness(): Harness {
 		resolveAudioPath: (f) => `/vault/${f.path}`,
 	};
 	const backend = new WhisperCppBackend(
-		{ binaryPath: "/plugin/system-recorder", modelPath: "/models/ggml.bin", language: "en" },
+		{
+			binaryPath: "/plugin/system-recorder",
+			modelPath: "/models/ggml.bin",
+			language: "en",
+			...configOverride,
+		},
 		deps
 	);
 	return {
@@ -174,6 +180,33 @@ describe("WhisperCppBackend", () => {
 		h.proc().emit("close", 0, null);
 		await p;
 		expect(pct).toEqual([0, 25, 50, 50, 75, 100]);
+	});
+
+	it("ignores non-JSON noise interleaved with the NDJSON stream", async () => {
+		const h = makeHarness();
+		const p = h.backend.transcribe({ jobs: [job("single")] });
+		await flush();
+		// whisper.cpp / dyld can print plain-text lines to stdout; they must be
+		// skipped, not fail the run.
+		h.proc().stdout.write("loading model...\n");
+		h.proc().stdout.write('{"type":"result","id":"single","text":"clean"}\n');
+		h.proc().stdout.write("ggml_metal_init: using Metal\n");
+		h.proc().stdout.write('{"type":"done"}\n');
+		await flush();
+		h.proc().emit("close", 0, null);
+		const [result] = await p;
+		expect(result!.text).toBe("clean");
+	});
+
+	it("defaults the manifest language to 'auto' when the config language is empty", async () => {
+		const h = makeHarness({ language: "" });
+		const p = h.backend.transcribe({ jobs: [job("me")] });
+		await flush();
+		expect((JSON.parse(h.manifests[0]!) as { language: string }).language).toBe("auto");
+		h.proc().stdout.write('{"type":"result","id":"me","text":"x"}\n{"type":"done"}\n');
+		await flush();
+		h.proc().emit("close", 0, null);
+		await p;
 	});
 
 	it("reassembles an NDJSON object split across two stdout chunks", async () => {

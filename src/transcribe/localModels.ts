@@ -32,9 +32,10 @@ function hfUrl(fileName: string): string {
 
 /**
  * The offered models, smallest → largest. `large-v3-turbo-q5_0` is the default:
- * near large-v3 quality at a fraction of the compute, ~90x real-time on
- * Apple-Silicon Max tiers. `small`/`medium` trade accuracy for size/RAM on
- * lower-end machines.
+ * near large-v3 quality at a fraction of the compute, tens of times real time
+ * on Apple-Silicon Max tiers (measured ~56x on an M5 Max — see the README's
+ * Performance note). `small`/`medium` trade accuracy for size/RAM on lower-end
+ * machines.
  */
 export const LOCAL_MODELS: Record<string, LocalModelSpec> = {
 	"small-q5_1": {
