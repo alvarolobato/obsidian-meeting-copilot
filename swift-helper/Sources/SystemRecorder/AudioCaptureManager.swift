@@ -11,26 +11,22 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
     private var streamOutput: StreamOutput?
     private var audioEngine: AVAudioEngine?
     private var configChangeObserver: NSObjectProtocol?
-    // The Core Audio process tap, when the tap path is active (macOS 14.2+).
-    // Stored as AnyObject because the concrete type is only available on 14.2+
+    // The Core Audio process tap, when the tap path is active (macOS 14.4+).
+    // Stored as AnyObject because the concrete type is only available on 14.4+
     // while this class is available from 13.0; it's cast back inside
-    // `if #available` blocks. Nil when the SCK fallback is in use.
+    // `if #available` blocks. Nil when the SCK fallback is in use. Mutated only
+    // on controlQueue (start / recovery / stop), so it never races itself.
     private var processTap: AnyObject?
     /// Which system-audio source actually came up, for accurate diagnostics
     /// (the watchdog's permission hint differs: the tap path needs no Screen
-    /// Recording grant). Set by startSystemAudio(); read on the main flow.
-    private(set) var usingProcessTap = false
-    /// Tap-path liveness monitor. A process tap can *start* successfully yet
-    /// deliver nothing when the System Audio Recording grant is missing (the
-    /// call doesn't fail), and can stall mid-recording on a HAL glitch. This
-    /// timer (on controlQueue, serialized with mic restarts and the stop
-    /// barrier) falls back to ScreenCaptureKit if the tap never delivers, and
-    /// rebuilds the tap if it stalls after delivering.
-    private var tapHealthTimer: DispatchSourceTimer?
+    /// Recording grant). Backed by `_usingProcessTap` under `restartLock` since
+    /// it's written on the control path and read from the watchdog thread; use
+    /// `isUsingProcessTap()` / `setUsingProcessTap(_:)`.
+    private var _usingProcessTap = false
 
     // Callbacks for captured audio buffers
     var onSystemAudio: ((CMSampleBuffer) -> Void)?
-    /// System audio from the Core Audio process tap (macOS 14.2+ path), as an
+    /// System audio from the Core Audio process tap (macOS 14.4+ path), as an
     /// already-decoded PCM buffer. Wired in addition to `onSystemAudio` so the
     /// same manager can drive either source.
     var onSystemAudioPCM: ((AVAudioPCMBuffer) -> Void)?
@@ -106,6 +102,19 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
     func micTapActive() -> Bool {
         restartLock.lock(); defer { restartLock.unlock() }
         return micTapInstalled
+    }
+
+    private func setUsingProcessTap(_ value: Bool) {
+        restartLock.lock(); defer { restartLock.unlock() }
+        _usingProcessTap = value
+    }
+
+    /// Whether the Core Audio process tap (not the SCK fallback) is the live
+    /// system-audio source. Read from the watchdog thread; guarded so it can't
+    /// race the control-path writes.
+    func isUsingProcessTap() -> Bool {
+        restartLock.lock(); defer { restartLock.unlock() }
+        return _usingProcessTap
     }
 
     /// Claim a system-stream restart. Returns false if we shouldn't restart
@@ -184,9 +193,6 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
         }
         setCapturing(true)
 
-        // Watch the tap for a silent/denied start or a mid-recording stall.
-        if #available(macOS 14.2, *), usingProcessTap { startTapHealthMonitor() }
-
         // If stop somehow raced start-up, don't leave capture running.
         if !capturing() { await stopCapture() }
     }
@@ -200,15 +206,15 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
     }
 
     /// Bring up system-audio capture, preferring the Core Audio process tap on
-    /// macOS 14.2+ and falling back to ScreenCaptureKit. The tap needs no
+    /// macOS 14.4+ and falling back to ScreenCaptureKit. The tap needs no
     /// Screen Recording permission and is device-change-resilient; if it can't
-    /// be created (older OS, permission, or an API error) we transparently fall
-    /// back to SCK, which keeps working exactly as before.
+    /// be created (older OS, a denied System Audio Recording grant, or an API
+    /// error) we transparently fall back to SCK, which keeps working as before.
     private func startSystemAudio() async throws {
-        if #available(macOS 14.2, *), !Self.forceLegacySystemAudio {
+        if #available(macOS 14.4, *), !Self.forceLegacySystemAudio {
             do {
                 try startProcessTap()
-                usingProcessTap = true
+                setUsingProcessTap(true)
                 return
             } catch {
                 // Non-fatal: warn and fall through to the SCK source so a tap
@@ -218,70 +224,55 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
                 )
             }
         }
-        usingProcessTap = false
+        setUsingProcessTap(false)
         try await startSystemStream()
     }
 
-    @available(macOS 14.2, *)
+    @available(macOS 14.4, *)
     private func startProcessTap() throws {
         let tap = SystemAudioProcessTap()
         tap.onAudioBuffer = { [weak self] buffer in
             self?.onSystemAudioPCM?(buffer)
         }
+        // The tap edge-triggers this when the HAL reports it stopped working
+        // (coreaudiod restart, aggregate died, or a format change). Rebuild on
+        // controlQueue so it serializes with stopCapture()'s barrier and other
+        // restarts. There's no timer: silence legitimately produces no IO
+        // cycles, so "quiet" must never be mistaken for "dead".
+        tap.onNeedsRestart = { [weak self] in
+            guard let self else { return }
+            self.controlQueue.async { [weak self] in
+                guard let self, self.capturing(), self.isUsingProcessTap() else { return }
+                self.restartProcessTap()
+            }
+        }
         try tap.start()
         processTap = tap
     }
 
-    // MARK: - Tap liveness monitor
+    // MARK: - Tap recovery
 
-    @available(macOS 14.2, *)
-    private func startTapHealthMonitor() {
-        let timer = DispatchSource.makeTimerSource(queue: controlQueue)
-        // First fire at +3s (long enough for the tap's first IO cycles), then
-        // every 3s to catch a mid-recording stall.
-        timer.schedule(deadline: .now() + 3, repeating: 3)
-        timer.setEventHandler { [weak self] in self?.checkTapHealth() }
-        tapHealthTimer = timer
-        timer.resume()
-    }
-
-    @available(macOS 14.2, *)
-    private func checkTapHealth() {
-        guard capturing(), usingProcessTap,
-              let tap = processTap as? SystemAudioProcessTap else { return }
-        let live = tap.liveness()
-        if live.callbackCount == 0 {
-            // Started but the HAL never clocked the tap — almost always the
-            // System Audio Recording grant is missing (the create call doesn't
-            // fail for that). Fall back to ScreenCaptureKit.
-            fallbackToScreenCapture(
-                reason:
-                    "the system-audio tap produced no audio (grant Obsidian System Audio Recording in System Settings → Privacy & Security)"
-            )
-        } else if live.secondsSinceLastCallback > 8 {
-            // Delivered before, now stalled (coreaudiod restart / HAL glitch):
-            // rebuild the tap in place, mirroring the SCK restart path.
-            restartProcessTap()
-        }
-    }
-
-    /// Tear down a non-delivering/stalled tap and switch to the ScreenCaptureKit
-    /// source, which has its own device-change recovery. Runs from the health
-    /// timer (controlQueue); claimed via beginSystemRestart so it can't overlap
-    /// another restart or resurrect capture past stop.
-    @available(macOS 14.2, *)
+    /// Tear down the tap and switch to the ScreenCaptureKit source, which has
+    /// its own device-change recovery. Called only from `restartProcessTap`
+    /// (already on controlQueue). The tap teardown + flag reset happen
+    /// **synchronously** here so they serialize with stopCapture()'s barrier and
+    /// can't race it; only the async SCK bring-up is deferred to a Task. Claimed
+    /// via beginTapFallback so it fires at most once and isn't bounded by
+    /// maxRestarts — a spent tap-restart budget must never strand us with no
+    /// system-audio source.
+    @available(macOS 14.4, *)
     private func fallbackToScreenCapture(reason: String) {
         guard beginTapFallback() else { return }
-        // Once we're on SCK, the tap monitor has no more job to do.
-        tapHealthTimer?.cancel()
-        tapHealthTimer = nil
+        // Synchronous on controlQueue: destroy the tap and clear the flag before
+        // spawning the async SCK start, so a concurrent stopCapture() barrier
+        // never overlaps the teardown.
+        if let tap = processTap as? SystemAudioProcessTap { tap.stop() }
+        processTap = nil
+        setUsingProcessTap(false)
         Task { [weak self] in
             guard let self else { return }
             defer { self.endSystemRestart() }
             guard self.capturing() else { return }
-            if let tap = self.processTap as? SystemAudioProcessTap { tap.stop() }
-            self.processTap = nil
-            self.usingProcessTap = false
             do {
                 try await self.startSystemStream()
             } catch {
@@ -300,10 +291,10 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
         }
     }
 
-    /// Rebuild a stalled tap in place. Synchronous (tap start doesn't await), so
-    /// it runs inline on the health timer's controlQueue. Bounded by the shared
-    /// systemRestarts cap; on repeated failure it falls back to SCK.
-    @available(macOS 14.2, *)
+    /// Rebuild a dead tap in place. Runs on controlQueue (dispatched from the
+    /// tap's onNeedsRestart). Bounded by the shared systemRestarts cap; on
+    /// repeated failure it falls back to SCK (which is not so bounded).
+    @available(macOS 14.4, *)
     private func restartProcessTap() {
         guard beginSystemRestart() else { return }
         guard capturing() else { endSystemRestart(); return }
@@ -312,9 +303,11 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
         do {
             try startProcessTap()
         } catch {
+            // Release the restart claim BEFORE falling back so beginTapFallback
+            // (which requires no in-flight restart) isn't blocked by our own claim.
             endSystemRestart()
-            onWarning?("System-audio tap stalled; restarting it failed: \(error.localizedDescription).")
-            fallbackToScreenCapture(reason: "the system-audio tap stalled")
+            onWarning?("System-audio tap stopped; rebuilding it failed: \(error.localizedDescription).")
+            fallbackToScreenCapture(reason: "the system-audio tap stopped and could not be rebuilt")
             return
         }
         endSystemRestart()
@@ -527,21 +520,19 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
             NotificationCenter.default.removeObserver(observer)
             configChangeObserver = nil
         }
-        // Drain any in-flight mic restart / tap health check: both re-check
-        // capturing() (now false) and bail, so after this barrier no restart can
-        // touch audioEngine and no health check can spawn a fallback. Cancelling
-        // the timer inside the barrier serializes it with the handler.
-        controlQueue.sync {
-            tapHealthTimer?.cancel()
-            tapHealthTimer = nil
-        }
+        // Drain any in-flight mic restart / tap rebuild / SCK-fallback teardown:
+        // all run on controlQueue and re-check capturing() (now false), so after
+        // this barrier none is mid-flight touching audioEngine or the tap, and
+        // none can resurrect capture. The tap's own teardown is idempotent, so
+        // the tap.stop() below is safe even if a rebuild just tore one down.
+        controlQueue.sync {}
 
         if let stream = stream {
             try? await stream.stopCapture()
             self.stream = nil
             self.streamOutput = nil
         }
-        if #available(macOS 14.2, *), let tap = processTap as? SystemAudioProcessTap {
+        if #available(macOS 14.4, *), let tap = processTap as? SystemAudioProcessTap {
             tap.stop()
         }
         processTap = nil

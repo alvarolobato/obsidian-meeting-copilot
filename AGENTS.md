@@ -7,7 +7,7 @@ Calendar sync, dual-channel recording via a macOS Swift helper, transcription
 
 Repo: `alvarolobato/obsidian-meeting-copilot`. Platform: macOS only (the
 recorder helper captures system audio with a Core Audio process tap on macOS
-14.2+, ScreenCaptureKit on older releases).
+14.4+, ScreenCaptureKit on older releases).
 
 ## Repository layout
 
@@ -20,7 +20,7 @@ recorder helper captures system audio with a Core Audio process tap on macOS
   - `src/ui/` — agenda sidebar view and modals.
   - `src/i18n/` — localization; **English is the base language** (`en.ts`). UI strings go through `t()`.
 - `swift-helper/` — the `SystemRecorder` Swift package (dual-channel audio capture). Built into the `system-recorder` binary shipped with the plugin.
-  - System audio: `SystemAudioProcessTap.swift` (Core Audio process tap + private aggregate device, macOS 14.2+) with `AudioCaptureManager.startSystemStream` (ScreenCaptureKit) as the pre-14.2 / failure fallback. Mic: `AVAudioEngine`. Both feed `AudioMixer` (24 kHz mono, `.me`/`.them` split sidecars).
+  - System audio: `SystemAudioProcessTap.swift` (Core Audio process tap + private aggregate device, macOS 14.4+) with `AudioCaptureManager.startSystemStream` (ScreenCaptureKit) as the pre-14.4 / failure fallback. Mic: `AVAudioEngine`. Both feed `AudioMixer` (24 kHz mono, `.me`/`.them` split sidecars).
 - `.github/workflows/` — `ci.yml` (PRs + pushes to main) and `release.yml` (version tags).
 - `manifest.json`, `versions.json`, `styles.css`, `esbuild.config.mjs`.
 
@@ -199,12 +199,26 @@ current (e.g. `actions/checkout@v5`, `actions/setup-node@v5`).
     first tap use; the CLI helper has no bundle of its own. So the
     `notifyRecordingError` screen-capture classification in `main.ts` now only
     fires on the SCK fallback.
-  - **Silent-start / stall handling:** creating a tap can return `noErr` yet
-    deliver no IO cycles when the grant is missing. `AudioCaptureManager` runs a
-    liveness timer: no callbacks within ~3s → tear down and fall back to SCK; a
-    stall after delivering (HAL glitch) → rebuild the tap in place (bounded by
-    the shared `systemRestarts` cap). A tap-creation *throw* also falls back to
-    SCK immediately.
+  - **Silence = no IO (important):** a process tap delivers **no IO callbacks
+    while system audio is silent** — it is *not* a continuous clock like an
+    input device. So "no callbacks for N seconds" is a normal quiet meeting, not
+    a failure, and can't be used for liveness. Two consequences the code handles:
+    - *Timeline alignment:* the mic stream runs continuously but the tap stream
+      has gaps. `deliver(...)` anchors to `AudioGetCurrentHostTime()` at
+      `start()` and, on each buffer, compares `deliveredFrames` against the
+      elapsed host-time; if a gap exceeds ~1.5 IO periods it backfills
+      zero-filled buffers so `.them` stays wall-clock aligned with `.me`. Gaps
+      are capped so a long silence can't allocate an enormous buffer.
+    - *Health/recovery is event-driven, not timer-based:* there is **no**
+      liveness timer. `installHealthListeners` registers Core Audio property
+      listeners (`kAudioDevicePropertyDeviceIsAlive`,
+      `kAudioHardwarePropertyServiceRestarted`, `kAudioTapPropertyFormat`) and
+      calls `onNeedsRestart`; `AudioCaptureManager` rebuilds the tap in place
+      (bounded by the shared `systemRestarts` cap) or falls back to SCK. A
+      tap-creation *throw* still falls back to SCK immediately.
+  - **Concurrency:** `teardown()` is guarded by an `NSLock` (idempotent), and
+    `AudioCaptureManager` serializes all tap start/stop/restart/fallback work on
+    its `controlQueue` so a mid-recording recovery can't race `stopCapture`.
 - **i18n:** English is the base. Add UI strings to `src/i18n/en.ts` and use
   `t()`; don't hardcode user-facing strings.
 - **Retention safety:** audio is pruned only when the owning note has the

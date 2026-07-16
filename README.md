@@ -1,6 +1,6 @@
 # Meeting Copilot
 
-A Granola-style meeting workflow for Obsidian on macOS. Meeting Copilot reads your Google Calendar, creates a note from the meeting invite, records **dual-channel** audio (system audio from Zoom / Google Meet / Teams **plus** your microphone), then transcribes and enriches the note with an AI summary and action items — no extra audio driver and no sidecar app. On macOS 14.2+ system audio is captured with a **Core Audio process tap** (audio-only — no Screen Recording permission, no screen-recording indicator, and your notifications aren't suppressed while recording); older macOS falls back to ScreenCaptureKit.
+A Granola-style meeting workflow for Obsidian on macOS. Meeting Copilot reads your Google Calendar, creates a note from the meeting invite, records **dual-channel** audio (system audio from Zoom / Google Meet / Teams **plus** your microphone), then transcribes and enriches the note with an AI summary and action items — no extra audio driver and no sidecar app. On macOS 14.4+ system audio is captured with a **Core Audio process tap** (audio-only — no Screen Recording permission, no screen-recording indicator, and your notifications aren't suppressed while recording); older macOS falls back to ScreenCaptureKit.
 
 ## Requirements
 
@@ -11,7 +11,7 @@ A Granola-style meeting workflow for Obsidian on macOS. Meeting Copilot reads yo
 
 ## Features
 
-- **Dual-channel recording** — system audio (via a Core Audio process tap on macOS 14.2+, ScreenCaptureKit on older releases) **plus** microphone, mixed into one file (no extra driver, no sidecar).
+- **Dual-channel recording** — system audio (via a Core Audio process tap on macOS 14.4+, ScreenCaptureKit on older releases) **plus** microphone, mixed into one file (no extra driver, no sidecar).
 - **Google Calendar integration** — upcoming events, attendees, and Meet/Zoom link extraction, built in (no separate calendar plugin required).
 - **Meeting agenda sidebar** — a "coming up / recent" list with per-row actions: create note + record, open note, transcribe, enrich, open recording, join link.
 - **Automatic notes** — creates a meeting note from the invite, colocates the recording with it, and files recurring meetings into a per-series folder.
@@ -46,7 +46,9 @@ Meeting Copilot handles calendar, recording, transcription, and enrichment on it
 Then, regardless of method:
 
 4. Optionally install the plugins from the table above (Dataview, Tasks).
-5. On your first recording, the macOS helper (`system-recorder`) is downloaded from the matching release and verified (SHA-256) if you didn't already copy it in. macOS then prompts for the capture permissions — grant them, then fully quit and reopen Obsidian. On **macOS 14.2+** you'll be asked for **Microphone** (your mic) and **System Audio Recording** (the process tap; under System Settings → Privacy & Security → **Screen & System Audio Recording**) — but *not* Screen Recording. On older macOS you're asked for **Screen Recording** and **Microphone** instead (the ScreenCaptureKit fallback). Both grants are attributed to Obsidian. If the tap can't capture (e.g. the System Audio Recording grant is missing), the plugin falls back to ScreenCaptureKit automatically. (Apple Silicon / arm64 only.)
+5. On your first recording, the macOS helper (`system-recorder`) is downloaded from the matching release and verified (SHA-256) if you didn't already copy it in. macOS then prompts for the capture permissions — grant them, then fully quit and reopen Obsidian. On **macOS 14.4+** you'll be asked for **Microphone** (your mic) and **System Audio Recording** (the process tap; under System Settings → Privacy & Security → **Screen & System Audio Recording**) — but *not* Screen Recording. On **older macOS (including 14.2–14.3, which don't have the System Audio Recording grant)** you're asked for **Screen Recording** and **Microphone** instead (the ScreenCaptureKit fallback). Both grants are attributed to Obsidian. (Apple Silicon / arm64 only.)
+
+   If the process tap can't be created (older OS, or the System Audio Recording grant is denied), the plugin falls back to ScreenCaptureKit automatically. Because that fallback can also happen *mid-recording* (e.g. if Core Audio restarts), the first such fallback may raise a **Screen Recording** permission prompt in the middle of a meeting — and a fresh 14.4+ install that only ever granted System Audio Recording won't have it. If you want the fallback to be seamless, grant Screen Recording too.
 
 ### Updating
 

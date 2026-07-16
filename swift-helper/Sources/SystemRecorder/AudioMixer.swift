@@ -371,9 +371,12 @@ final class AudioMixer: @unchecked Sendable {
     // MARK: - System audio (from a Core Audio process tap)
 
     /// System audio delivered as an `AVAudioPCMBuffer` (the process-tap path on
-    /// macOS 14.2+). Shares the systemStream pipeline with `appendSystemAudio`,
+    /// macOS 14.4+). Shares the systemStream pipeline with `appendSystemAudio`,
     /// so conversion/downmix to the 24 kHz mono target, temp-file writing, and
-    /// the split "them" sidecar all behave identically to the SCK source.
+    /// the split "them" sidecar all behave identically to the SCK source. The
+    /// tap already backfills silent gaps with zeros (a global tap emits no IO
+    /// cycles during silence), so these buffers form a continuous timeline the
+    /// mixer can align positionally against the mic — no timestamps needed here.
     func appendSystemAudioPCM(_ buffer: AVAudioPCMBuffer) {
         append(buffer, to: systemStream)
     }

@@ -126,7 +126,7 @@ if #available(macOS 13.0, *) {
     }
 
     // Wire system audio → mixer. Both sources are wired; only the one that
-    // actually starts (process tap on macOS 14.2+, else ScreenCaptureKit)
+    // actually starts (process tap on macOS 14.4+, else ScreenCaptureKit)
     // delivers buffers.
     captureManager.onSystemAudio = { sampleBuffer in
         mixer.appendSystemAudio(sampleBuffer)
@@ -146,14 +146,15 @@ if #available(macOS 13.0, *) {
         emitJSON(["status": "warning", "message": message])
     }
 
-    // Fail fast on a dead capture. Both sources feed the mixer within a second
-    // or two even in silence, so zero frames well past capture start means it
-    // never came up — most often because an audio device change (Zoom launching
-    // after we start and grabbing the input/output device) stopped both paths
-    // before recovery could re-establish them, or because the helper's Screen
-    // Recording / Microphone TCC grant was invalidated (its code hash changed on
-    // an update). Without this the user records a whole meeting into the void and
-    // only learns at stop ("No audio was captured").
+    // Fail fast on a dead capture. The mic (AVAudioEngine) delivers buffers
+    // continuously from start, even in silence, so if BOTH sources are still at
+    // zero frames well past capture start the capture never came up — most often
+    // because the helper's Microphone (and, on the tap path, System Audio
+    // Recording) TCC grant is missing/invalidated, or an audio device change
+    // stopped the SCK path before recovery. (The process tap alone can sit at
+    // zero during a silent meeting — it clocks only while audio plays — which is
+    // why the guard requires the mic to be silent too.) Without this the user
+    // records a whole meeting into the void and only learns at stop.
     //
     // Scheduled only AFTER startCapture() reports "recording" (so a slow
     // SCShareableContent call or a first-run TCC prompt doesn't count against the
@@ -169,7 +170,7 @@ if #available(macOS 13.0, *) {
             // fallback needs Screen Recording + Microphone and is the one
             // susceptible to an app switching the default device after start.
             let message: String
-            if captureManager.usingProcessTap {
+            if captureManager.isUsingProcessTap() {
                 message =
                     "No audio captured after \(Int(watchdogSeconds))s. In System Settings → Privacy & Security, grant Obsidian both Microphone (under “Microphone”) and System Audio Recording (under “Screen & System Audio Recording”), then restart Obsidian."
             } else {
