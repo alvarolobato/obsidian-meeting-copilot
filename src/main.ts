@@ -2298,7 +2298,14 @@ export default class SystemRecordingPlugin extends Plugin {
                     "[Meeting Copilot] local transcription failed; falling back to the remote service",
                     e
                 );
-                new Notice(t().notices.localFallback);
+                // Say diarization was dropped when the user asked for it: the
+                // remote fallback is always a plain mixed pass, so a forced
+                // speaker-separated request silently becomes mixed otherwise.
+                new Notice(
+                    wantDiarized
+                        ? t().notices.localFallbackNoDiarization
+                        : t().notices.localFallback
+                );
                 // Reset the bar so the remote pass ramps 0→100 instead of jumping
                 // backward from wherever the failed local attempt left it.
                 onProgress(0);
