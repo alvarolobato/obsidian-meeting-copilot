@@ -41,8 +41,8 @@ Meeting Copilot handles calendar, recording, transcription, and enrichment on it
 
 **Option B — manual:**
 
-1. From the [latest release](https://github.com/alvarolobato/obsidian-meeting-copilot/releases/latest), download `main.js`, `manifest.json`, `styles.css` (and optionally the `system-recorder` helper — if you grab it, also grab the `whisper` runtime asset next to it, since the helper won't launch without it).
-2. Copy them into `.obsidian/plugins/meeting-copilot/` in your vault.
+1. From the [latest release](https://github.com/alvarolobato/obsidian-meeting-copilot/releases/latest), download `main.js`, `manifest.json`, `styles.css` (and optionally the `system-recorder` helper — if you grab it, also grab the `whisper` runtime asset, since the helper won't launch without it).
+2. Copy `main.js`, `manifest.json`, and `styles.css` into `.obsidian/plugins/meeting-copilot/` in your vault. If you also downloaded the helper, put `system-recorder` in that same folder and place the `whisper` asset at `whisper.framework/Versions/Current/whisper` **inside** it (create those directories) — the plugin only loads the dylib from that exact path, so a `whisper` file dropped next to `main.js` is ignored and it will just re-download the asset on first use. Easiest is to skip the manual helper copy and let step 5 fetch both.
 3. In Obsidian, enable **Meeting Copilot** under *Settings → Community plugins*.
 
 Then, regardless of method:
@@ -99,10 +99,10 @@ The RAM column is a conservative planning estimate; actual peak resident memory 
 
 Other options in this mode:
 
-- **Speaker separation** — because recording is dual-channel (you vs. everyone else), enabling it labels the two sides. It transcribes each channel in its own pass, so it roughly doubles the transcription time versus the mixed track.
-- **Fall back to remote** — if a local run fails and a remote endpoint is configured, retry the audio there (non-diarized). Off by default; when it triggers you'll see a "falling back to the remote service" notice.
+- **Separate my voice from others** — because recording is dual-channel (you vs. everyone else), enabling it labels the two sides. It transcribes each channel in its own pass, so it roughly doubles the transcription time versus the mixed track.
+- **Fall back to remote on failure** — if a local run fails and a remote endpoint is configured, retry the audio there (non-diarized). Off by default; when it triggers you'll see a "falling back to the remote service" notice.
 
-Switching the transcription engine or the local model is locked while a model is downloading so an in-flight fetch can't be stranded.
+Switching the transcription engine or the local model is locked while a model is downloading so an in-flight fetch can't be stranded. Switching to a different model keeps the previous one on disk — use the **Delete** button on the **Model file** row to reclaim the ~0.2–0.6 GB when you no longer need it.
 
 **Performance.** On-device transcription runs on the GPU and is typically **much faster than real time**. On one Apple M5 Max (64 GB), the default `large-v3-turbo-q5_0` model transcribed a single track at **~56× real time** (363 s of audio in 6.4 s) at **~0.8 GB peak resident memory** — comfortably under the table's conservative ~1.6 GB estimate. The model loads once and is reused across jobs, so a two-pass **speaker-separated** run is ~2× that wall time. Rules of thumb from these numbers: a 1-hour meeting is **~1 minute** transcribed as a single mixed track, or **~2 minutes** with speaker separation on. Slower / lower-RAM Macs will be proportionally slower — pick `small-q5_1` or `medium-q5_0` there. These are one machine's figures; wall-clock varies by chip, model, and meeting length.
 
@@ -153,7 +153,7 @@ Releases are automated by [`.github/workflows/release.yml`](.github/workflows/re
 git tag 1.0.5 && git push origin 1.0.5
 ```
 
-On an Apple-Silicon runner the workflow lints/tests, syncs `manifest.json` / `versions.json` to the tag, builds the Swift helper (and its `whisper` dylib), verifies both against the SHA-256 (and, for the dylib, the byte size) pinned in `src/binary.ts`, pins the helper's SHA into the build, builds the plugin, and publishes a GitHub release with `main.js`, `manifest.json`, `styles.css`, `system-recorder`, and `whisper` attached. (You can also trigger it manually via *Actions → Release → Run workflow*.)
+On an Apple-Silicon runner the workflow lints/tests, syncs `manifest.json` / `versions.json` to the tag, builds the Swift helper (and its `whisper` dylib), verifies both against the SHA-256 (and, for the dylib, the byte size) pinned in `src/binary.ts`, pins the helper's SHA into the build, builds the plugin, and publishes a GitHub release with `main.js`, `manifest.json`, `styles.css`, `system-recorder`, `whisper`, and `fvad.wasm` (the bundled WebRTC-VAD module; a missing copy degrades gracefully) attached. (You can also trigger it manually via *Actions → Release → Run workflow*.)
 
 ## Attribution
 

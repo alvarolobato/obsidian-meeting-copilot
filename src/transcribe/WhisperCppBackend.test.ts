@@ -4,6 +4,7 @@ import { PassThrough } from "stream";
 import { TFile } from "obsidian";
 import {
 	WhisperCppBackend,
+	type WhisperCppConfig,
 	type WhisperCppDeps,
 	type WhisperChildProcess,
 } from "./WhisperCppBackend";
@@ -40,7 +41,7 @@ interface Harness {
 	cleaned: string[];
 }
 
-function makeHarness(): Harness {
+function makeHarness(configOverride: Partial<WhisperCppConfig> = {}): Harness {
 	let latest: FakeProcess | undefined;
 	const spawned: Array<{ bin: string; args: string[] }> = [];
 	const manifests: string[] = [];
@@ -61,7 +62,12 @@ function makeHarness(): Harness {
 		resolveAudioPath: (f) => `/vault/${f.path}`,
 	};
 	const backend = new WhisperCppBackend(
-		{ binaryPath: "/plugin/system-recorder", modelPath: "/models/ggml.bin", language: "en" },
+		{
+			binaryPath: "/plugin/system-recorder",
+			modelPath: "/models/ggml.bin",
+			language: "en",
+			...configOverride,
+		},
 		deps
 	);
 	return {
@@ -193,26 +199,13 @@ describe("WhisperCppBackend", () => {
 	});
 
 	it("defaults the manifest language to 'auto' when the config language is empty", async () => {
-		let latest: FakeProcess | undefined;
-		const manifests: string[] = [];
-		const backend = new WhisperCppBackend(
-			{ binaryPath: "/bin", modelPath: "/m.bin", language: "" },
-			{
-				spawn: (): WhisperChildProcess => (latest = new FakeProcess()),
-				writeManifest: async (json) => {
-					manifests.push(json);
-					return "/tmp/m.json";
-				},
-				cleanup: async () => undefined,
-				resolveAudioPath: (f) => `/vault/${f.path}`,
-			}
-		);
-		const p = backend.transcribe({ jobs: [job("me")] });
+		const h = makeHarness({ language: "" });
+		const p = h.backend.transcribe({ jobs: [job("me")] });
 		await flush();
-		expect((JSON.parse(manifests[0]!) as { language: string }).language).toBe("auto");
-		latest!.stdout.write('{"type":"result","id":"me","text":"x"}\n{"type":"done"}\n');
+		expect((JSON.parse(h.manifests[0]!) as { language: string }).language).toBe("auto");
+		h.proc().stdout.write('{"type":"result","id":"me","text":"x"}\n{"type":"done"}\n');
 		await flush();
-		latest!.emit("close", 0, null);
+		h.proc().emit("close", 0, null);
 		await p;
 	});
 

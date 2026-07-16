@@ -181,7 +181,8 @@ macOS runner, pins the freshly built binary's sha into the bundle, verifies the
 built `whisper` dylib against the pinned `EXPECTED_WHISPER_SHA256` **and**
 `WHISPER_DYLIB_SIZE` (an XCFramework bump that refreshes only one would fail the
 build rather than ship an unverified dylib), and publishes a GitHub Release with
-`main.js`, `manifest.json`, `styles.css`, `system-recorder`, and `whisper`.
+`main.js`, `manifest.json`, `styles.css`, `system-recorder`, `whisper`, and
+`fvad.wasm` (the bundled WebRTC-VAD module — a missing copy degrades gracefully).
 
 ```bash
 git tag -a 0.2.0 -m "0.2.0"
