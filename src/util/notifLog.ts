@@ -32,9 +32,13 @@ export function notifDebugEnabled(): boolean {
 
 export function notifLog(event: string, data?: Record<string, unknown>): void {
 	if (!notifDebugEnabled()) return;
+	// `console.warn` (not `debug`) so the trace shows at the default DevTools log
+	// level and is captured by the console interceptors people use for bug
+	// reports — `console.debug` is filtered out by both. It's gated behind the
+	// off-by-default flag, so this only appears while actively diagnosing.
 	if (data) {
-		console.debug(`[mc:notif] ${event}`, data);
+		console.warn(`[mc:notif] ${event}`, data);
 	} else {
-		console.debug(`[mc:notif] ${event}`);
+		console.warn(`[mc:notif] ${event}`);
 	}
 }
