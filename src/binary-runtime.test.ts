@@ -24,6 +24,29 @@ function streamFrom(chunks: Uint8Array[], onCancel?: () => void): ReadableStream
 	});
 }
 
+// A body that implements ONLY the WHATWG reader API (`getReader`) and is NOT a
+// Node `stream/web` ReadableStream — exactly what Electron's renderer `fetch`
+// returns. This shape broke the original `Readable.fromWeb(res.body)` with the
+// baffling 'must be an instance of ReadableStream. Received an instance of
+// ReadableStream' (two different ReadableStream classes across realms). The
+// generator-based pump must accept it. Regressing to fromWeb fails this test.
+function foreignReaderBody(chunks: Uint8Array[], onCancel?: () => void): ReadableStream<Uint8Array> {
+	let i = 0;
+	return {
+		getReader() {
+			return {
+				read: async () =>
+					i < chunks.length
+						? { done: false, value: chunks[i++] }
+						: { done: true, value: undefined },
+				cancel: async () => {
+					onCancel?.();
+				},
+			};
+		},
+	} as unknown as ReadableStream<Uint8Array>;
+}
+
 function fakeResponse(opts: {
 	ok: boolean;
 	status: number;
@@ -72,6 +95,37 @@ describe("assetNodeDeps().downloadToFile", () => {
 			[3, 5],
 			[5, 5],
 		]);
+	});
+
+	it("streams a foreign Web ReadableStream body (the Electron fetch case)", async () => {
+		let cancelled = false;
+		const chunks = [new Uint8Array([7, 8]), new Uint8Array([9])];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				fakeResponse({
+					ok: true,
+					status: 200,
+					body: foreignReaderBody(chunks, () => {
+						cancelled = true;
+					}),
+					contentLength: 3,
+				})
+			)
+		);
+		const dest = await tmpPath();
+		const seen: Array<[number, number]> = [];
+		await assetNodeDeps().downloadToFile("https://x/model.bin", dest, (r, t) =>
+			seen.push([r, t])
+		);
+		const written = await fs.readFile(dest);
+		expect([...written]).toEqual([7, 8, 9]);
+		expect(seen).toEqual([
+			[2, 3],
+			[3, 3],
+		]);
+		// The generator's finally releases the body even on a clean finish.
+		expect(cancelled).toBe(true);
 	});
 
 	it("reports total 0 when Content-Length is absent (HF CDN redirect)", async () => {

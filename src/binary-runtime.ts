@@ -5,9 +5,8 @@ import * as os from "os";
 import * as path from "path";
 import * as crypto from "crypto";
 import { spawn as childSpawn } from "child_process";
-import { Readable, Transform } from "stream";
+import { Readable } from "stream";
 import { pipeline } from "stream/promises";
-import type { ReadableStream as NodeWebReadableStream } from "stream/web";
 import { AssetProvisionerDeps, ProvisionerDeps } from "./binary";
 import type { WhisperCppDeps } from "./transcribe/WhisperCppBackend";
 
@@ -118,31 +117,43 @@ export function assetNodeDeps(): AssetProvisionerDeps {
 			try {
 				await fsp.mkdir(path.dirname(destPath), { recursive: true });
 			} catch (e) {
-				// The body is still unconsumed here (pipeline hasn't taken it),
-				// so cancel it before bailing.
+				// The body is still unconsumed here, so cancel it before bailing.
 				await res.body.cancel().catch(() => undefined);
 				throw e;
 			}
 			const total = Number(res.headers.get("content-length") ?? 0);
 			let received = 0;
-			const counter = new Transform({
-				transform(chunk: Buffer, _enc, cb) {
-					received += chunk.length;
-					onProgress?.(received, total);
-					cb(null, chunk);
-				},
-			});
-			// pipeline wires backpressure end-to-end, propagates an error from
-			// ANY stage (a stalled read, a disk-full write), and destroys every
-			// stream — including the fetch body via Readable.fromWeb — on
-			// failure, so there's no hand-rolled drain/error/cleanup to get
-			// subtly wrong.
-			await pipeline(
-				Readable.fromWeb(res.body as NodeWebReadableStream<Uint8Array>),
-				counter,
-				fs.createWriteStream(destPath),
-				{ signal }
+			// Do NOT use `Readable.fromWeb(res.body)`: in Electron's renderer,
+			// fetch returns a *Web* ReadableStream whose class identity differs
+			// from Node's `stream/web` ReadableStream, so fromWeb's instanceof
+			// check rejects it with the (baffling) 'The "readableStream" argument
+			// must be an instance of ReadableStream. Received an instance of
+			// ReadableStream'. Pump the reader through an async generator instead
+			// — realm-agnostic, works with any WHATWG stream — and let pipeline
+			// own backpressure, error propagation, the abort signal, and stream
+			// teardown. Progress is counted as chunks pass through the generator.
+			const reader = res.body.getReader();
+			const body = Readable.from(
+				(async function* () {
+					try {
+						for (;;) {
+							const { done, value } = await reader.read();
+							if (done) return;
+							if (value && value.byteLength > 0) {
+								received += value.byteLength;
+								onProgress?.(received, total);
+								yield value;
+							}
+						}
+					} finally {
+						// Early teardown (abort / disk-full / write error) or a
+						// normal end: release the fetch body so it can't leak.
+						reader.cancel().catch(() => undefined);
+					}
+				})(),
+				{ objectMode: false }
 			);
+			await pipeline(body, fs.createWriteStream(destPath), { signal });
 		},
 		rename: (from, to) => fsp.rename(from, to),
 		unlink: (p) => fsp.unlink(p),
