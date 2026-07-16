@@ -15,8 +15,14 @@ import {
     listInputDevices,
     type InputDevice,
 } from "./recorder";
-import { BinaryProvisioner } from "./binary";
-import { nodeDeps, resolveBinaryPath } from "./binary-runtime";
+import { AssetProvisioner, BinaryProvisioner } from "./binary";
+import {
+    assetNodeDeps,
+    nodeDeps,
+    resolveBinaryPath,
+    resolveModelPath,
+} from "./binary-runtime";
+import { LOCAL_MODELS, type LocalModelSpec } from "./transcribe/localModels";
 import * as path from "path";
 import * as fs from "fs";
 import { GoogleOAuth, type StoredTokens } from "./auth/googleOAuth";
@@ -187,6 +193,7 @@ export default class SystemRecordingPlugin extends Plugin {
     settings: SystemRecordingSettings;
     private recorder = new Recorder();
     private provisioner = new BinaryProvisioner(nodeDeps());
+    private modelProvisioner = new AssetProvisioner(assetNodeDeps());
     private starting = false;
     /** Dedupe identical capture warnings so a flapping device can't spam. */
     private lastWarningMessage: string | null = null;
@@ -613,6 +620,23 @@ export default class SystemRecordingPlugin extends Plugin {
         // Normalize the shared endpoint (tolerate hand-edited data.json).
         this.settings.apiBaseUrl = (this.settings.apiBaseUrl ?? "").trim();
         this.settings.apiKey = (this.settings.apiKey ?? "").trim();
+        // Clamp the transcription engine + local model to known values so a
+        // hand-edited/corrupt data.json can't persist an unknown engine (which
+        // would fall through to remote in the UI but stay wrong on disk) or a
+        // stale model id.
+        if (this.settings.transcriptionBackend !== "local") {
+            this.settings.transcriptionBackend = "remote";
+        }
+        // Own-property check, not `in`: `in` walks the prototype chain, so a
+        // hand-edited "constructor"/"toString"/etc. would slip past the clamp.
+        if (
+            !Object.prototype.hasOwnProperty.call(
+                LOCAL_MODELS,
+                this.settings.localWhisperModel
+            )
+        ) {
+            this.settings.localWhisperModel = DEFAULT_SETTINGS.localWhisperModel;
+        }
         // Migrate the previously enrichment-only endpoint into the shared fields
         // when the shared ones are still unset or at the default.
         const legacyBase = raw?.enrichBaseUrl?.trim();
@@ -3162,12 +3186,76 @@ export default class SystemRecordingPlugin extends Plugin {
      * and the current endpoint + model has been probed and confirmed to return
      * timestamps. Gates both the split at record time and the diarized pass at
      * transcribe time.
+     *
+     * Note: the local Whisper engine always emits segment timestamps, so it will
+     * bypass this remote timestamp probe — but that bypass lands together with
+     * the local transcription wiring (the WhisperCppBackend phase of #34). While
+     * transcription is still remote-only, keeping the probe gate here avoids
+     * running doomed diarized passes against the remote endpoint.
      */
     private shouldSeparateSpeakers(): boolean {
         return canSeparateSpeakers(
             this.settings,
             probeKey(this.settings.apiBaseUrl, this.settings.sttModel)
         );
+    }
+
+    /** Absolute path where the given local model file lives (or would live). */
+    localModelPath(spec: LocalModelSpec): string {
+        return resolveModelPath(this, spec.fileName);
+    }
+
+    /**
+     * True when the model file is present on disk at its expected size. A
+     * partial/interrupted download (wrong size) reads as absent so the UI
+     * offers to re-download rather than treating it as ready.
+     */
+    async localModelPresent(spec: LocalModelSpec): Promise<boolean> {
+        try {
+            const st = await fs.promises.stat(this.localModelPath(spec));
+            return st.size === spec.sizeBytes;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Ensures the model is downloaded and SHA-256-verified, streaming it to disk
+     * on first use and reusing it thereafter. `onProgress` reports received /
+     * total bytes for a download; it isn't called when the model is already
+     * present.
+     */
+    ensureLocalModel(
+        spec: LocalModelSpec,
+        onProgress?: (received: number, total: number) => void,
+        signal?: AbortSignal
+    ): Promise<string> {
+        return this.modelProvisioner.ensure(
+            this.localModelPath(spec),
+            spec.url,
+            spec.sha256,
+            spec.sizeBytes,
+            {
+                onDownloadStart: () => new Notice(t().notices.downloadingModel),
+                // HF's CDN sometimes omits Content-Length after a redirect, so
+                // the stream reports total=0; fall back to the registry's known
+                // size so the UI can still show a real percentage.
+                onProgress: onProgress
+                    ? (received, total) =>
+                          onProgress(received, total > 0 ? total : spec.sizeBytes)
+                    : undefined,
+                signal,
+            }
+        );
+    }
+
+    /** Deletes the model file if present (best-effort; a missing file is a no-op). */
+    async deleteLocalModel(spec: LocalModelSpec): Promise<void> {
+        try {
+            await fs.promises.unlink(this.localModelPath(spec));
+        } catch {
+            // already gone / never downloaded — nothing to do
+        }
     }
 
     /**
