@@ -192,6 +192,19 @@ if #available(macOS 13.0, *) {
                 "status": "warning",
                 "message": "The selected microphone produced no audio after \(Int(watchdogSeconds))s; recording continues with system audio only. Try selecting “System default” as the input device, or reconnect the microphone.",
             ])
+        } else if captureManager.isUsingProcessTap() && frames.system == 0 && frames.mic > 0 {
+            // Mic audio is flowing (so we're well past start and the Microphone
+            // grant is fine), yet the process tap has produced no frames. Usually
+            // that's just a quiet meeting — a global tap clocks only while some
+            // app plays audio — so this is a non-fatal nudge, deliberately NOT a
+            // fallback: we can't distinguish "silent" from a denied System Audio
+            // Recording grant (which can let the tap be created yet never deliver
+            // IO). Surfacing it keeps a missing grant from being invisible; a
+            // genuinely silent meeting can ignore it.
+            emitJSON([
+                "status": "warning",
+                "message": "No system audio captured after \(Int(watchdogSeconds))s. If the meeting is playing sound, grant Obsidian System Audio Recording (under “Screen & System Audio Recording”) in System Settings → Privacy & Security, then restart Obsidian. If it's simply quiet so far, you can ignore this.",
+            ])
         }
     }
 

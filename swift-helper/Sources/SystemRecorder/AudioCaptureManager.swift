@@ -134,6 +134,17 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
         restartingSystem = false
     }
 
+    /// True when a tap rebuild can't be claimed *specifically because the restart
+    /// budget is spent* (not because we're stopping or a restart is already in
+    /// flight) — mirrors `beginSystemRestart`'s guard. This is the one denial
+    /// `restartProcessTap` must act on: otherwise the 31st genuine tap death
+    /// would silently leave a dead tap with no source. Reads consistently since
+    /// it runs on the same serialized controlQueue as the tap rebuild path.
+    private func systemRestartBudgetExhausted() -> Bool {
+        restartLock.lock(); defer { restartLock.unlock() }
+        return isCapturing && !restartingSystem && systemRestarts >= Self.maxRestarts
+    }
+
     /// Claim the one-shot switch to the ScreenCaptureKit fallback. Blocks while
     /// another system restart is in flight and fires at most once, but is NOT
     /// bounded by maxRestarts — falling back must always be possible so a spent
@@ -296,7 +307,17 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
     /// repeated failure it falls back to SCK (which is not so bounded).
     @available(macOS 14.4, *)
     private func restartProcessTap() {
-        guard beginSystemRestart() else { return }
+        guard beginSystemRestart() else {
+            // Denied for one of three reasons: we're stopping, a restart is
+            // already in flight, or the budget is spent. Only the last must act
+            // here — leaving a dead tap with no system-audio source is exactly
+            // what beginTapFallback's unbounded claim exists to prevent — so
+            // switch to SCK (not bounded by maxRestarts) instead of returning.
+            if systemRestartBudgetExhausted() {
+                fallbackToScreenCapture(reason: "the system-audio tap failed repeatedly")
+            }
+            return
+        }
         guard capturing() else { endSystemRestart(); return }
         if let tap = processTap as? SystemAudioProcessTap { tap.stop() }
         processTap = nil

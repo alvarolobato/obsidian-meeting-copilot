@@ -230,6 +230,33 @@ final class SystemAudioProcessTap: @unchecked Sendable {
         }
     }
 
+    /// Backfill the silence between the last delivered frame and *now*, so the
+    /// system stream reaches wall-clock time before this tap is torn down. The
+    /// tap clocks only while audio plays, so at teardown `deliveredFrames` sits
+    /// at the last IO cycle — potentially far behind wall-clock if a silent
+    /// stretch preceded the teardown. On an in-place rebuild the replacement tap
+    /// re-anchors at *now*, so without this flush that entire silent gap is
+    /// dropped and every later sample lands early against the mic (the exact
+    /// desync `deliver`'s backfill prevents mid-stream). At final stop it's
+    /// harmless (the mixer zero-pads the shorter stream anyway). Runs on the IO
+    /// queue (touches `deliveredFrames`/`anchorHostTime`); call before nilling
+    /// the handler under the teardown barrier.
+    private func flushTrailingSilence() {
+        guard let format = tapFormat, let handler = onAudioBuffer, anchorHostTime != 0 else {
+            return
+        }
+        let now = AudioGetCurrentHostTime()
+        guard now > anchorHostTime else { return }
+        let elapsedNanos =
+            AudioConvertHostTimeToNanos(now) - AudioConvertHostTimeToNanos(anchorHostTime)
+        let expected = Int64((Double(elapsedNanos) / 1_000_000_000.0 * format.sampleRate).rounded())
+        let gap = expected - deliveredFrames
+        if gap > 0 {
+            emitSilence(frames: Self.cappedGap(gap, sampleRate: format.sampleRate),
+                        format: format, to: handler)
+        }
+    }
+
     /// Clamp a synthesized gap to [0, 1 h] so a single bad timestamp can't write
     /// an absurd amount of zeros.
     private static func cappedGap(_ frames: Int64, sampleRate: Double) -> Int64 {
@@ -368,9 +395,15 @@ final class SystemAudioProcessTap: @unchecked Sendable {
         if let procID = ioProcID {
             // Stop the device, then drain the IO queue so any block already
             // dispatched has finished before we destroy the proc/aggregate/tap —
-            // otherwise a late block could memcpy from a freed IO buffer.
+            // otherwise a late block could memcpy from a freed IO buffer. While
+            // holding the barrier (no IO cycle can be mid-flight), flush the
+            // trailing silence up to now so a rebuild doesn't drop the gap, then
+            // detach the handler.
             AudioDeviceStop(aggregateID, procID)
-            ioQueue.sync { self.onAudioBuffer = nil }
+            ioQueue.sync {
+                self.flushTrailingSilence()
+                self.onAudioBuffer = nil
+            }
             AudioDeviceDestroyIOProcID(aggregateID, procID)
             ioProcID = nil
         } else {
