@@ -171,7 +171,7 @@ if #available(macOS 13.0, *) {
             let message: String
             if captureManager.usingProcessTap {
                 message =
-                    "No audio captured after \(Int(watchdogSeconds))s. Grant Obsidian Microphone and System Audio Recording access in System Settings → Privacy & Security → Screen & System Audio Recording, then restart Obsidian."
+                    "No audio captured after \(Int(watchdogSeconds))s. In System Settings → Privacy & Security, grant Obsidian both Microphone (under “Microphone”) and System Audio Recording (under “Screen & System Audio Recording”), then restart Obsidian."
             } else {
                 message =
                     "No audio captured after \(Int(watchdogSeconds))s. If a meeting app (e.g. Zoom) started after recording, stop and start recording again once it's running. Otherwise grant Obsidian both Screen Recording and Microphone access in System Settings → Privacy & Security and restart Obsidian."
