@@ -305,7 +305,6 @@ export const en = {
 		},
 		noteTitlePatternCustomize: {
 			name: "Customize note title pattern",
-			desc: "Off by default: use the plugin's built-in title pattern, which improves with each update. Turn on to edit and store your own.",
 		},
 		noteTitlePattern: {
 			name: "Note title pattern",
@@ -313,7 +312,6 @@ export const en = {
 		},
 		noteTemplateCustomize: {
 			name: "Customize note template",
-			desc: "Off by default: use the plugin's built-in note template, which improves with each update. Turn on to edit and store your own.",
 		},
 		noteTemplate: {
 			name: "Note template",
@@ -570,7 +568,6 @@ export const en = {
 		},
 		enrichPromptCustomize: {
 			name: "Customize enrichment prompt",
-			desc: "Off by default: use the plugin's built-in prompt, which improves with each update. Turn on to edit and store your own prompt instead.",
 		},
 		enrichPrompt: {
 			name: "Enrichment prompt",

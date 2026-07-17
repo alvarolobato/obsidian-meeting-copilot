@@ -188,7 +188,7 @@
     margin-top: var(--size-4-2);
 }
 
-.meeting-copilot-settings .meeting-copilot-template-input:disabled {
+.meeting-copilot-settings .setting-item.mc-customizable .meeting-copilot-template-input:disabled {
     opacity: 0.55;
     cursor: not-allowed;
 }

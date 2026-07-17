@@ -1801,9 +1801,15 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                   attr: { type: "text" },
               });
         if (editor instanceof HTMLTextAreaElement) editor.rows = TEXTAREA_ROWS;
+        // Show the built-in default as a (greyed) placeholder so a disabled/empty
+        // box previews what the plugin will actually use while Customize is off.
+        editor.placeholder = defaultValue;
         editor.value = getValue();
         editor.disabled = !isOn();
         editor.addEventListener("input", () => {
+            // Defensive: a disabled field can't fire `input`, but never persist
+            // edits while Customize is off (the runtime ignores them anyway).
+            if (!isOn()) return;
             setValue(editor.value);
             void this.plugin.saveSettings();
         });

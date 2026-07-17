@@ -4751,7 +4751,10 @@ export default class SystemRecordingPlugin extends Plugin {
                 transcriptOverride && transcriptOverride.trim().length > 0
                     ? transcriptOverride
                     : extractTranscript(content);
-            if (!notes && !transcript) {
+            // Hand-written action items are now enrichment input too, so a note
+            // that only has a "## Action items" list (no notes/transcript) is
+            // still worth enriching — the model can tidy/unify those items.
+            if (!notes && !transcript && manualActionItems.length === 0) {
                 new Notice(t().notices.nothingToEnrich);
                 return;
             }
