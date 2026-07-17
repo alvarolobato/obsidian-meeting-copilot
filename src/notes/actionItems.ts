@@ -2,8 +2,8 @@
 const ACTION_HEADING =
 	/^#{2,3}\s+(next steps|action items|actions|follow[- ]?ups?|to[- ]?dos?)\s*$/i;
 
-/** Matches a markdown task line, e.g. `- [ ] foo` or `* [x] bar`. */
-const TASK_LINE = /^\s*[-*]\s+\[[ xX]\]\s+/;
+/** Matches a markdown task line, e.g. `- [ ] foo`, `* [x] bar`, or `1. [ ] baz`. */
+const TASK_LINE = /^\s*(?:[-*]|\d+\.)\s+\[[ xX]\]\s+/;
 
 export interface ExtractedActions {
 	/** Action items rendered as `- [ ] …` task lines (top-level items only). */
@@ -84,8 +84,8 @@ export function extractManualActionItems(sectionBody: string): string[] {
 	return found.filter((f) => f.indent === topLevel).map((f) => f.text);
 }
 
-/** Matches an *unchecked* task line, e.g. `- [ ] foo`. */
-const UNCHECKED_TASK = /^\s*[-*]\s+\[ \]\s+/;
+/** Matches an *unchecked* task line, e.g. `- [ ] foo` or `1. [ ] foo`. */
+const UNCHECKED_TASK = /^\s*(?:[-*]|\d+\.)\s+\[ \]\s+/;
 
 /** Normalizes a task line for duplicate detection (drops checkbox, bold, casing). */
 function normalizeTask(line: string): string {

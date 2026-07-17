@@ -156,6 +156,23 @@ describe("refreshActionItems", () => {
 		const merged = refreshActionItems("", ["- [ ] first task"]);
 		expect(merged).toBe("- [ ] first task");
 	});
+
+	it("replaces an ordered unchecked task without duplicating it", () => {
+		// A hand-written `1. [ ] …` must be treated as an unchecked task (dropped
+		// and replaced by the model's unified `- [ ] …`), not kept as prose — which
+		// would leave both the numbered original and the new dash version.
+		const merged = refreshActionItems("1. [ ] Follow up with Bob", [
+			"- [ ] Follow up with Bob about pricing",
+		]);
+		expect(merged).toBe("- [ ] Follow up with Bob about pricing");
+	});
+
+	it("keeps a completed ordered task and dedupes a matching fresh item", () => {
+		const merged = refreshActionItems("1. [x] Ship the thing", [
+			"- [ ] **ship the thing**",
+		]);
+		expect(merged).toBe("1. [x] Ship the thing");
+	});
 });
 
 // Mirrors the merge chain in enrichMeetingNote (extractActionItems ->
