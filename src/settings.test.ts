@@ -106,6 +106,20 @@ describe("migrateSettings", () => {
 		expect(migrated.enrichPrompt).toBe(custom);
 	});
 
+	it("upgrades a legacy default enrichPrompt on the legacy meetingsFolder branch too", () => {
+		const legacy = LEGACY_ENRICH_PROMPTS[0];
+		const migrated = migrateSettings({
+			meetingsFolder: "Work/Meetings",
+			enrichPrompt: legacy,
+		});
+		// Folder migration still runs on this branch…
+		expect(migrated.oneOffFolderTemplate).toBe("Work/Meetings");
+		// …and the prompt is upgraded here as well.
+		expect(Object.assign({}, DEFAULT_SETTINGS, migrated).enrichPrompt).toBe(
+			DEFAULT_ENRICH_PROMPT
+		);
+	});
+
 	it("does not add enrichPrompt when it was not persisted", () => {
 		const migrated = migrateSettings({ oneOffFolderTemplate: "Meetings" });
 		expect(migrated).not.toHaveProperty("enrichPrompt");
