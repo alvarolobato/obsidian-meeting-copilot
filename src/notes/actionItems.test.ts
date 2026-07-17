@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { extractActionItems, refreshActionItems } from "./actionItems";
+import {
+	extractActionItems,
+	extractManualActionItems,
+	refreshActionItems,
+} from "./actionItems";
 
 describe("extractActionItems", () => {
 	it("converts a Next steps section into task lines and strips it", () => {
@@ -25,6 +29,85 @@ describe("extractActionItems", () => {
 		const { items, without } = extractActionItems("### Topic\n- a point");
 		expect(items).toEqual([]);
 		expect(without).toBe("### Topic\n- a point");
+	});
+});
+
+describe("extractManualActionItems", () => {
+	it("returns top-level unchecked items with markers stripped", () => {
+		const body = [
+			"- [ ] Follow up with Bob",
+			"* [ ] Draft the RFC",
+			"1. [ ] File the ticket",
+		].join("\n");
+		expect(extractManualActionItems(body)).toEqual([
+			"Follow up with Bob",
+			"Draft the RFC",
+			"File the ticket",
+		]);
+	});
+
+	it("captures a uniformly-indented top-level list", () => {
+		// refreshActionItems drops indented unchecked tasks too, so a list the
+		// user (or their editor) indented as a whole must still be fed to the
+		// model — otherwise it could be dropped without ever being honored.
+		const body = ["  - [ ] Indented task one", "  * [ ] Indented task two"].join(
+			"\n"
+		);
+		expect(extractManualActionItems(body)).toEqual([
+			"Indented task one",
+			"Indented task two",
+		]);
+	});
+
+	it("keeps only the least-indented tasks when nesting is mixed", () => {
+		const body = [
+			"- [ ] Parent task",
+			"  - [ ] nested detail task",
+			"- [ ] Sibling task",
+		].join("\n");
+		expect(extractManualActionItems(body)).toEqual([
+			"Parent task",
+			"Sibling task",
+		]);
+	});
+
+	it("ignores a transcript callout that trails the section body", () => {
+		// enrichMeetingNote reads manual items before stripping the transcript,
+		// and the transcript callout has no heading so it sits inside the last
+		// section (usually "## Action items"). Its quoted lines must not become
+		// action items.
+		const body = [
+			"- [ ] Real task",
+			"",
+			"> [!quote]- Transcript",
+			"> Me: - [ ] this is speech, not a task",
+			"> Them: hi",
+		].join("\n");
+		expect(extractManualActionItems(body)).toEqual(["Real task"]);
+	});
+
+	it("skips completed items and indented sub-bullets", () => {
+		const body = [
+			"- [x] Already done",
+			"- [ ] Send the recap",
+			"  - context that should be ignored",
+			"  - [ ] nested task ignored",
+		].join("\n");
+		expect(extractManualActionItems(body)).toEqual(["Send the recap"]);
+	});
+
+	it("ignores prose, blank lines, and plain bullets", () => {
+		const body = [
+			"Some manual note",
+			"",
+			"- a plain bullet, not a task",
+			"- [ ] Real task",
+		].join("\n");
+		expect(extractManualActionItems(body)).toEqual(["Real task"]);
+	});
+
+	it("returns nothing for an empty section", () => {
+		expect(extractManualActionItems("")).toEqual([]);
 	});
 });
 
@@ -72,5 +155,52 @@ describe("refreshActionItems", () => {
 	it("returns the fresh items when there is no existing section", () => {
 		const merged = refreshActionItems("", ["- [ ] first task"]);
 		expect(merged).toBe("- [ ] first task");
+	});
+
+	it("replaces an ordered unchecked task without duplicating it", () => {
+		// A hand-written `1. [ ] …` must be treated as an unchecked task (dropped
+		// and replaced by the model's unified `- [ ] …`), not kept as prose — which
+		// would leave both the numbered original and the new dash version.
+		const merged = refreshActionItems("1. [ ] Follow up with Bob", [
+			"- [ ] Follow up with Bob about pricing",
+		]);
+		expect(merged).toBe("- [ ] Follow up with Bob about pricing");
+	});
+
+	it("keeps a completed ordered task and dedupes a matching fresh item", () => {
+		const merged = refreshActionItems("1. [x] Ship the thing", [
+			"- [ ] **ship the thing**",
+		]);
+		expect(merged).toBe("1. [x] Ship the thing");
+	});
+});
+
+// Mirrors the merge chain in enrichMeetingNote (extractActionItems ->
+// refreshActionItems) to lock in the #93 fix: when the model returns a unified
+// "Next steps" that carries over the hand-written items, the merge preserves
+// them (improved) instead of dropping them, with no duplication.
+describe("enrichment merge preserves hand-written action items", () => {
+	it("keeps an improved hand-written item and appends new ones", () => {
+		const existingSection = "- [ ] Follow up with Bob";
+		const modelOutput = [
+			"### TL;DR",
+			"- shipped the thing",
+			"",
+			"### Next steps",
+			"- **Follow up with Bob about Q3 pricing**",
+			"- **Draft the launch email**",
+		].join("\n");
+
+		const { items } = extractActionItems(modelOutput);
+		const merged = refreshActionItems(existingSection, items);
+
+		expect(merged).toBe(
+			[
+				"- [ ] **Follow up with Bob about Q3 pricing**",
+				"- [ ] **Draft the launch email**",
+			].join("\n")
+		);
+		// The original, un-improved wording is gone (superseded, not duplicated).
+		expect(merged).not.toContain("Follow up with Bob\n");
 	});
 });

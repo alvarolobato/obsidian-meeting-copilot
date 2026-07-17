@@ -6,12 +6,18 @@ import {
 	sanitizeName,
 	templateStaticRoot,
 } from "./paths";
+import {
+	TRANSCRIPT_CALLOUT_MARKER,
+	TRANSCRIPT_CALLOUT_TITLE,
+} from "./transcriptCallout";
+import { resolveCustomizable } from "../util/customizable";
 
 export {
 	normalizeFolderPath,
 	normalizeFolderPathOrEmpty,
 	sanitizeName,
 	templateStaticRoot,
+	TRANSCRIPT_CALLOUT_TITLE,
 };
 
 /** Prefix marking an ad-hoc (unplanned) meeting's synthetic id, e.g. "adhoc-1699999999999". */
@@ -154,6 +160,14 @@ export interface MeetingNoteConfig {
 
 export const DEFAULT_TITLE_PATTERN = "{{date}} {{start:HHmm}} {{title}}";
 
+/** The filename pattern to use: the user's custom one when opted in, else the built-in default. */
+export function effectiveTitlePattern(
+	customize: boolean,
+	custom: string | null | undefined
+): string {
+	return resolveCustomizable(customize, custom, DEFAULT_TITLE_PATTERN);
+}
+
 export const DEFAULT_NOTE_TEMPLATE = `# {{title}}
 
 - **When:** {{start:YYYY-MM-DD HH:mm}} – {{end:HH:mm}} ({{duration}} min)
@@ -170,6 +184,14 @@ export const DEFAULT_NOTE_TEMPLATE = `# {{title}}
 ## Action items
 
 `;
+
+/** The new-note body template to use: the user's custom one when opted in, else the built-in default. */
+export function effectiveNoteTemplate(
+	customize: boolean,
+	custom: string | null | undefined
+): string {
+	return resolveCustomizable(customize, custom, DEFAULT_NOTE_TEMPLATE);
+}
 
 export interface MeetingNoteRef {
 	file: TFile;
@@ -698,12 +720,13 @@ export async function linkRecording(
 	});
 }
 
-export const TRANSCRIPT_CALLOUT_TITLE = "Transcript";
-
 /**
  * Inserts or replaces a `heading`-delimited section in a markdown body.
  * The section runs from its heading line to the next top-or-second-level
- * heading (or end of file); if absent, the block is appended. Pure/testable.
+ * heading, the pinned transcript callout, or end of file; if the heading is
+ * absent, the block is appended. Stopping at the transcript callout keeps a
+ * section edit from clobbering the transcript that trails it, since the callout
+ * has no heading of its own (#20). Pure/testable.
  */
 export function upsertSection(
 	content: string,
@@ -722,7 +745,8 @@ export function upsertSection(
 
 	let end = lines.length;
 	for (let i = start + 1; i < lines.length; i++) {
-		if (/^#{1,2}\s/.test(lines[i] ?? "")) {
+		const line = lines[i] ?? "";
+		if (/^#{1,2}\s/.test(line) || TRANSCRIPT_CALLOUT_MARKER.test(line)) {
 			end = i;
 			break;
 		}
@@ -791,10 +815,7 @@ export function stripTranscript(content: string): string {
 			continue;
 		}
 		// Collapsed transcript callout: drop the marker + its ">" continuation.
-		const marker = new RegExp(
-			`^>\\s*\\[![\\w-]+\\][+-]?\\s*${TRANSCRIPT_CALLOUT_TITLE}\\s*$`
-		);
-		if (marker.test(line)) {
+		if (TRANSCRIPT_CALLOUT_MARKER.test(line)) {
 			i++;
 			while (i < lines.length && /^>/.test(lines[i] ?? "")) i++;
 			i--;
@@ -816,12 +837,9 @@ export const TRANSCRIPT_SEGMENT_SEPARATOR = "\n\n---\n\n";
  */
 export function extractTranscriptText(content: string): string {
 	const lines = content.split("\n");
-	const calloutMarker = new RegExp(
-		`^>\\s*\\[![\\w-]+\\][+-]?\\s*${TRANSCRIPT_CALLOUT_TITLE}\\s*$`
-	);
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i] ?? "";
-		if (calloutMarker.test(line)) {
+		if (TRANSCRIPT_CALLOUT_MARKER.test(line)) {
 			const body: string[] = [];
 			for (let j = i + 1; j < lines.length && /^>/.test(lines[j] ?? ""); j++) {
 				body.push((lines[j] ?? "").replace(/^>\s?/, ""));

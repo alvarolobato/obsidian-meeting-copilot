@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS, migrateSettings } from "./settings";
+import { DEFAULT_ENRICH_PROMPT, effectiveEnrichPrompt } from "./enrich/prompt";
 
 describe("migrateSettings", () => {
 	it("derives the folder templates from a legacy meetingsFolder", () => {
@@ -84,5 +85,110 @@ describe("migrateSettings", () => {
 	it("keeps a valid oneOffFolderTemplate untouched", () => {
 		const migrated = migrateSettings({ oneOffFolderTemplate: "Custom/{{year}}" });
 		expect(migrated.oneOffFolderTemplate).toBe("Custom/{{year}}");
+	});
+
+	// The prompt is no longer persisted as a full copy of the default; a legacy
+	// stored enrichPrompt is dropped so every non-customizing vault resolves to
+	// the live default (effectiveEnrichPrompt) — the whole point of the toggle.
+	it("drops a legacy persisted enrichPrompt so the live default wins", () => {
+		const migrated = migrateSettings({
+			oneOffFolderTemplate: "Meetings",
+			enrichPrompt: "an old persisted default without actionItems",
+		});
+		expect(migrated).not.toHaveProperty("enrichPrompt");
+		const settings = Object.assign({}, DEFAULT_SETTINGS, migrated);
+		expect(settings.enrichPromptCustomize).toBe(false);
+		expect(
+			effectiveEnrichPrompt(
+				settings.enrichPromptCustomize,
+				settings.enrichPrompt
+			)
+		).toBe(DEFAULT_ENRICH_PROMPT);
+	});
+
+	it("drops the legacy enrichPrompt on the legacy meetingsFolder branch too", () => {
+		const migrated = migrateSettings({
+			meetingsFolder: "Work/Meetings",
+			enrichPrompt: "old default",
+		});
+		expect(migrated.oneOffFolderTemplate).toBe("Work/Meetings");
+		expect(migrated).not.toHaveProperty("enrichPrompt");
+	});
+
+	it("keeps a stored custom prompt when the customize toggle is on", () => {
+		const custom = "Custom prompt with {{notes}} and {{transcript}}.";
+		const migrated = migrateSettings({
+			oneOffFolderTemplate: "Meetings",
+			enrichPromptCustomize: true,
+			enrichPrompt: custom,
+		});
+		expect(migrated.enrichPrompt).toBe(custom);
+		const settings = Object.assign({}, DEFAULT_SETTINGS, migrated);
+		expect(
+			effectiveEnrichPrompt(
+				settings.enrichPromptCustomize,
+				settings.enrichPrompt
+			)
+		).toBe(custom);
+	});
+
+	// New-format vault (the toggle key exists) with customize OFF: the stored
+	// custom text is preserved across reloads — only legacy vaults (no key) are
+	// reset — so toggling off then back on doesn't lose the user's prompt.
+	it("keeps stored custom text when the toggle key exists but is off", () => {
+		const custom = "leftover custom prompt";
+		const migrated = migrateSettings({
+			oneOffFolderTemplate: "Meetings",
+			enrichPromptCustomize: false,
+			enrichPrompt: custom,
+		});
+		expect(migrated.enrichPrompt).toBe(custom);
+		// Still resolves to the default while off…
+		expect(effectiveEnrichPrompt(false, custom)).toBe(DEFAULT_ENRICH_PROMPT);
+		// …and comes back verbatim when re-enabled.
+		expect(effectiveEnrichPrompt(true, custom)).toBe(custom);
+	});
+
+	it("drops legacy noteTemplate / noteTitlePattern on the meetingsFolder branch too", () => {
+		const migrated = migrateSettings({
+			meetingsFolder: "Work/Meetings",
+			noteTemplate: "# old",
+			noteTitlePattern: "old pattern",
+		});
+		expect(migrated.oneOffFolderTemplate).toBe("Work/Meetings");
+		expect(migrated).not.toHaveProperty("noteTemplate");
+		expect(migrated).not.toHaveProperty("noteTitlePattern");
+	});
+
+	it("does not add enrichPrompt when it was not persisted", () => {
+		const migrated = migrateSettings({ oneOffFolderTemplate: "Meetings" });
+		expect(migrated).not.toHaveProperty("enrichPrompt");
+	});
+
+	// Same "live default vs stored custom" model for the note template and
+	// title pattern: a legacy persisted copy is dropped unless the user opted in.
+	it("drops legacy persisted noteTemplate / noteTitlePattern", () => {
+		const migrated = migrateSettings({
+			oneOffFolderTemplate: "Meetings",
+			noteTemplate: "# old template",
+			noteTitlePattern: "old pattern",
+		});
+		expect(migrated).not.toHaveProperty("noteTemplate");
+		expect(migrated).not.toHaveProperty("noteTitlePattern");
+		const settings = Object.assign({}, DEFAULT_SETTINGS, migrated);
+		expect(settings.noteTemplateCustomize).toBe(false);
+		expect(settings.noteTitlePatternCustomize).toBe(false);
+	});
+
+	it("keeps a stored noteTemplate / noteTitlePattern when their toggle is on", () => {
+		const migrated = migrateSettings({
+			oneOffFolderTemplate: "Meetings",
+			noteTemplateCustomize: true,
+			noteTemplate: "# {{title}} custom",
+			noteTitlePatternCustomize: true,
+			noteTitlePattern: "{{title}}",
+		});
+		expect(migrated.noteTemplate).toBe("# {{title}} custom");
+		expect(migrated.noteTitlePattern).toBe("{{title}}");
 	});
 });

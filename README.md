@@ -168,7 +168,7 @@ palette).
 - **AI endpoint (shared)**: OpenAI-compatible base URL + API key used for AI enrichment and for remote transcription (not needed for the local engine).
 - **Transcription**: **Transcription engine** (*Remote (API endpoint)* or *Local (on-device Whisper)*), a transcription model (remote) or **Local model** (local), language, and **Separate my voice from others**. Remote-only: AI post-processing and custom dictionary. Local-only: **Fall back to remote on failure**. Plus **Auto-transcribe when recording stops** (headless — no dialog).
 - **AI enrichment**: enable it, pick a chat model (via **Test connection** + dropdown); optionally enrich automatically after transcription.
-- **Action items as tasks**: lift enriched action items into `## Action items` checkboxes (preserving existing/completed tasks).
+- **Action items as tasks**: lift enriched action items into `## Action items` checkboxes (preserving existing/completed tasks). Action items you type by hand are fed to the model and unified into the list — never dropped, only improved or corrected and enriched with detail from the transcript.
 
 Commands of note: *Clean up old recordings*, *Create/update meetings dashboard*, *Enrich meeting note (AI)*, *Toggle AI notes visibility*.
 

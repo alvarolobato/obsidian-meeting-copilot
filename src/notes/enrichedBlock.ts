@@ -1,3 +1,5 @@
+import { TRANSCRIPT_CALLOUT_MARKER } from "./transcriptCallout";
+
 /** Callout used for the AI-generated (enriched) notes, styled gray via styles.css. */
 export const ENRICH_CALLOUT_TYPE = "ai-notes";
 export const ENRICH_CALLOUT_TITLE = "AI notes";
@@ -64,7 +66,12 @@ export function withEnrichedBlock(content: string, markdown: string): string {
 	return `${head ? `${head}\n` : ""}${body}\n`;
 }
 
-/** Returns the body of a `## <heading>` section (until the next heading), trimmed. */
+/**
+ * Returns the body of a `## <heading>` section, trimmed. The section runs until
+ * the next `#`/`##` heading OR the collapsed transcript callout — the latter has
+ * no heading of its own and is pinned at the note's bottom, so without treating
+ * it as a terminator it would be swallowed into the trailing section (#20).
+ */
 export function extractSection(content: string, heading: string): string {
 	const lines = content.split("\n");
 	const h = heading.trim();
@@ -72,7 +79,8 @@ export function extractSection(content: string, heading: string): string {
 	if (start === -1) return "";
 	let end = lines.length;
 	for (let i = start + 1; i < lines.length; i++) {
-		if (/^#{1,2}\s/.test(lines[i] ?? "")) {
+		const line = lines[i] ?? "";
+		if (/^#{1,2}\s/.test(line) || TRANSCRIPT_CALLOUT_MARKER.test(line)) {
 			end = i;
 			break;
 		}
@@ -86,8 +94,7 @@ export function extractSection(content: string, heading: string): string {
  */
 export function extractTranscript(content: string): string {
 	const lines = content.split("\n");
-	const marker = /^>\s*\[![\w-]+\][+-]?\s*Transcript\s*$/;
-	const start = lines.findIndex((l) => marker.test(l));
+	const start = lines.findIndex((l) => TRANSCRIPT_CALLOUT_MARKER.test(l));
 	if (start !== -1) {
 		const body: string[] = [];
 		for (let i = start + 1; i < lines.length; i++) {

@@ -46,6 +46,8 @@ import {
     ADHOC_ID_PREFIX,
     createMeetingNote,
     dropRecordingLink,
+    effectiveNoteTemplate,
+    effectiveTitlePattern,
     findMeetingNoteForAudio,
     folderOf,
     insertTranscript,
@@ -71,7 +73,11 @@ import {
     HIDE_AI_CLASS,
     withEnrichedBlock,
 } from "./notes/enrichedBlock";
-import { extractActionItems, refreshActionItems } from "./notes/actionItems";
+import {
+    extractActionItems,
+    extractManualActionItems,
+    refreshActionItems,
+} from "./notes/actionItems";
 import { normalizeManualNotes } from "./notes/manualNotes";
 import {
     ACTIONS_BLOCK_LANG,
@@ -133,6 +139,7 @@ import { parseDictionary } from "./transcribe/dictionary";
 import type { TranscriptionModel } from "./transcribe/vendor/ApiSettings";
 import {
     buildTitlePrompt,
+    effectiveEnrichPrompt,
     ENRICH_SYSTEM_PROMPT,
     fillPrompt,
     TITLE_SYSTEM_PROMPT,
@@ -1908,8 +1915,14 @@ export default class SystemRecordingPlugin extends Plugin {
 			oneOnOneSeparately: this.settings.oneOnOneSeparately,
 			oneOnOneFolder: this.settings.oneOnOneFolder,
 			adhocFolder: this.settings.adhocFolder,
-			titlePattern: this.settings.noteTitlePattern,
-			template: this.settings.noteTemplate,
+			titlePattern: effectiveTitlePattern(
+				this.settings.noteTitlePatternCustomize,
+				this.settings.noteTitlePattern
+			),
+			template: effectiveNoteTemplate(
+				this.settings.noteTemplateCustomize,
+				this.settings.noteTemplate
+			),
 		};
 	}
 
@@ -4727,11 +4740,21 @@ export default class SystemRecordingPlugin extends Plugin {
             // Gather manual notes wherever they were written (incl. above the
             // "## Notes" heading), not just the section body.
             const notes = normalizeManualNotes(content).notes;
+            // The participant's own, hand-written action items. Feeding them to
+            // the model lets it produce ONE unified list that honors/improves
+            // each one, so the drop-and-replace merge below can't silently lose
+            // an item the model would otherwise never have re-derived.
+            const manualActionItems = extractManualActionItems(
+                extractSection(content, ACTION_ITEMS_HEADING)
+            );
             const transcript =
                 transcriptOverride && transcriptOverride.trim().length > 0
                     ? transcriptOverride
                     : extractTranscript(content);
-            if (!notes && !transcript) {
+            // Hand-written action items are now enrichment input too, so a note
+            // that only has a "## Action items" list (no notes/transcript) is
+            // still worth enriching — the model can tidy/unify those items.
+            if (!notes && !transcript && manualActionItems.length === 0) {
                 new Notice(t().notices.nothingToEnrich);
                 return;
             }
@@ -4748,6 +4771,7 @@ export default class SystemRecordingPlugin extends Plugin {
                     ? attendeesVal.map((x) => String(x)).join(", ")
                     : "",
                 notes,
+                actionItems: manualActionItems.map((i) => `- ${i}`).join("\n"),
                 transcript,
             };
 
@@ -4758,7 +4782,13 @@ export default class SystemRecordingPlugin extends Plugin {
                 apiKey: apiKey,
                 model: enrichModel,
                 system: ENRICH_SYSTEM_PROMPT,
-                user: fillPrompt(this.settings.enrichPrompt, ctx),
+                user: fillPrompt(
+                    effectiveEnrichPrompt(
+                        this.settings.enrichPromptCustomize,
+                        this.settings.enrichPrompt
+                    ),
+                    ctx
+                ),
             });
             // Re-read in case the note changed during the network call.
             const current = await this.app.vault.read(file);

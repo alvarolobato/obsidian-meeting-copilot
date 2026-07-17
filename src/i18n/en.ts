@@ -303,13 +303,19 @@ export const en = {
 			name: "Recordings subfolder",
 			desc: "Subfolder, relative to each note's own folder, where that meeting's recordings are stored (e.g. 'Recordings' → notes in 'Meetings/' record into 'Meetings/Recordings/'). Leave empty to keep audio beside the note.",
 		},
+		noteTitlePatternCustomize: {
+			name: "Customize note title pattern",
+		},
 		noteTitlePattern: {
 			name: "Note title pattern",
-			desc: "Filename pattern for meeting notes. Placeholders: {{title}}, {{date}}, {{start:FMT}}, {{end:FMT}}.",
+			desc: "Filename pattern for meeting notes. While Customize is off, the plugin uses its built-in pattern (which improves with each update); toggle it on to edit and store your own. Placeholders: {{title}}, {{date}}, {{start:FMT}}, {{end:FMT}}.",
+		},
+		noteTemplateCustomize: {
+			name: "Customize note template",
 		},
 		noteTemplate: {
 			name: "Note template",
-			desc: "Body of new meeting notes. Placeholders: {{title}}, {{date}}, {{start:FMT}}, {{end:FMT}}, {{duration}}, {{location}}, {{meeting_url}}, {{organizer}}, {{attendees}}, {{attendees_list}}, {{attendees_wikilinks}}, {{event_link}}. Frontmatter (attendees, status, recording, …) is managed automatically.",
+			desc: "Body for new meeting notes. While Customize is off, the plugin uses its built-in template (which improves with each update); toggle it on to edit and store your own. Placeholders: {{title}}, {{date}}, {{start:FMT}}, {{end:FMT}}, {{duration}}, {{location}}, {{meeting_url}}, {{organizer}}, {{attendees}}, {{attendees_list}}, {{attendees_wikilinks}}, {{event_link}}. Frontmatter (attendees, status, recording, …) is managed automatically.",
 		},
 		insertTranscript: {
 			name: "Insert transcript into meeting note",
@@ -560,9 +566,12 @@ export const en = {
 			name: "Enrich automatically after transcription",
 			desc: "Run enrichment as soon as a transcript is inserted. On by default; turn it off if you want to trigger enrichment manually.",
 		},
+		enrichPromptCustomize: {
+			name: "Customize enrichment prompt",
+		},
 		enrichPrompt: {
 			name: "Enrichment prompt",
-			desc: "Prompt sent to the model. Placeholders: {{title}}, {{date}}, {{attendees}}, {{notes}}, {{transcript}}.",
+			desc: "Prompt sent to the model. While Customize is off, the plugin uses its built-in prompt (which improves with each update); toggle it on to edit and store your own. Placeholders: {{title}}, {{date}}, {{attendees}}, {{notes}}, {{actionItems}}, {{transcript}}.",
 		},
 	},
 	oauth: {

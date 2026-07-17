@@ -69,7 +69,11 @@ export interface SystemRecordingSettings {
 	 * helper only ever sees the UID).
 	 */
 	micDeviceLabel: string;
+	/** Opt-in to a custom note-title pattern; while off, the live default is used. */
+	noteTitlePatternCustomize: boolean;
 	noteTitlePattern: string;
+	/** Opt-in to a custom note-body template; while off, the live default is used. */
+	noteTemplateCustomize: boolean;
 	noteTemplate: string;
 	retentionDays: number;
 	insertTranscript: boolean;
@@ -149,6 +153,14 @@ export interface SystemRecordingSettings {
 	// Enrichment.
 	enableEnrichment: boolean;
 	enrichModel: string;
+	/**
+	 * Opt-in to a custom enrichment prompt. When off (the default), the plugin
+	 * uses the live {@link DEFAULT_ENRICH_PROMPT} at runtime and `enrichPrompt`
+	 * is ignored — so default improvements reach every non-customizing user with
+	 * no persisted copy to migrate.
+	 */
+	enrichPromptCustomize: boolean;
+	/** The user's custom enrichment prompt; only used when `enrichPromptCustomize` is on. */
 	enrichPrompt: string;
 	enrichOnTranscribe: boolean;
 	hideAiNotes: boolean;
@@ -171,8 +183,10 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	compressedRecordings: true,
 	micDeviceUid: "",
 	micDeviceLabel: "",
-	noteTitlePattern: DEFAULT_TITLE_PATTERN,
-	noteTemplate: DEFAULT_NOTE_TEMPLATE,
+	noteTitlePatternCustomize: false,
+	noteTitlePattern: "",
+	noteTemplateCustomize: false,
+	noteTemplate: "",
 	retentionDays: 90,
 	insertTranscript: true,
 	autoTranscribe: true,
@@ -221,7 +235,8 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	debugLogging: false,
 	enableEnrichment: true,
 	enrichModel: "gpt-4o",
-	enrichPrompt: DEFAULT_ENRICH_PROMPT,
+	enrichPromptCustomize: false,
+	enrichPrompt: "",
 	enrichOnTranscribe: true,
 	hideAiNotes: false,
 	suggestAdhocTitle: true,
@@ -270,21 +285,44 @@ export function migrateSettings(
 	loaded: Record<string, unknown> | null
 ): Partial<SystemRecordingSettings> {
 	if (!loaded) return {};
-	if (loaded["oneOffFolderTemplate"] !== undefined) {
-		return sanitizeMigrated(loaded as Partial<SystemRecordingSettings>);
-	}
-	const legacyFolder = loaded["meetingsFolder"];
-	const base = typeof legacyFolder === "string" && legacyFolder ? legacyFolder : "Meetings";
-	return sanitizeMigrated({
-		...(loaded as Partial<SystemRecordingSettings>),
-		oneOffFolderTemplate: base,
-		seriesFolderTemplate: `${base}/{{series}}`,
-		// Nest ad-hoc notes under an "Ad-hoc" subfolder of the legacy folder,
-		// matching the new default and the sibling `1-1s` nesting, rather than
-		// dropping them loose alongside scheduled meetings.
-		adhocFolder: `${base}/Ad-hoc`,
-		oneOnOneFolder: `${base}/1-1s`,
-	});
+	const migrated =
+		loaded["oneOffFolderTemplate"] !== undefined
+			? sanitizeMigrated(loaded as Partial<SystemRecordingSettings>)
+			: (() => {
+					const legacyFolder = loaded["meetingsFolder"];
+					const base =
+						typeof legacyFolder === "string" && legacyFolder
+							? legacyFolder
+							: "Meetings";
+					return sanitizeMigrated({
+						...(loaded as Partial<SystemRecordingSettings>),
+						oneOffFolderTemplate: base,
+						seriesFolderTemplate: `${base}/{{series}}`,
+						// Nest ad-hoc notes under an "Ad-hoc" subfolder of the legacy
+						// folder, matching the new default and the sibling `1-1s`
+						// nesting, rather than dropping them loose alongside scheduled
+						// meetings.
+						adhocFolder: `${base}/Ad-hoc`,
+						oneOnOneFolder: `${base}/1-1s`,
+					});
+				})();
+	// Default-backed text settings (enrichment prompt, note title pattern, note
+	// template) are no longer persisted as a full copy of their default — a copy
+	// couldn't follow plugin updates (e.g. the prompt's new `{{actionItems}}`).
+	// Each now has a "Customize" toggle (default off); while off the plugin reads
+	// the live built-in default at runtime.
+	//
+	// Drop the persisted text ONLY for *legacy* vaults, detected by the absence
+	// of the matching `*Customize` key: those predate the toggle, so their stored
+	// value is an old default (or edit) we intentionally discard so it can't
+	// resurface. New-format vaults (the key exists, on OR off) keep their text so
+	// toggling off then back on doesn't lose a user's custom prompt across a
+	// reload — the resolver already ignores it while the toggle is off.
+	if (!("enrichPromptCustomize" in migrated)) delete migrated.enrichPrompt;
+	if (!("noteTitlePatternCustomize" in migrated))
+		delete migrated.noteTitlePattern;
+	if (!("noteTemplateCustomize" in migrated)) delete migrated.noteTemplate;
+	return migrated;
 }
 
 export class SystemRecordingSettingTab extends PluginSettingTab {
@@ -771,20 +809,17 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					})
 			);
 
-		new Setting(containerEl)
-			.setName(s.settings.enrichPrompt.name)
-			.setDesc(s.settings.enrichPrompt.desc)
-			.addTextArea((ta) => {
-				ta.setValue(this.plugin.settings.enrichPrompt).onChange(
-					async (value) => {
-						this.plugin.settings.enrichPrompt =
-							value || DEFAULT_ENRICH_PROMPT;
-						await this.plugin.saveSettings();
-					}
-				);
-				ta.inputEl.rows = TEXTAREA_ROWS;
-				ta.inputEl.addClass("meeting-copilot-template-input");
-			});
+		this.addCustomizableText(
+			containerEl,
+			s.settings.enrichPrompt,
+			s.settings.enrichPromptCustomize.name,
+			DEFAULT_ENRICH_PROMPT,
+			true,
+			() => this.plugin.settings.enrichPromptCustomize,
+			(v) => (this.plugin.settings.enrichPromptCustomize = v),
+			() => this.plugin.settings.enrichPrompt,
+			(v) => (this.plugin.settings.enrichPrompt = v)
+		);
 
 		new Setting(containerEl)
 			.setName(s.settings.actionItemsAsTasks.name)
@@ -1295,34 +1330,29 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					})
 			);
 
-		new Setting(containerEl)
-			.setName(s.settings.noteTitlePattern.name)
-			.setDesc(s.settings.noteTitlePattern.desc)
-			.addText((text) =>
-				text
-					.setPlaceholder(DEFAULT_TITLE_PATTERN)
-					.setValue(this.plugin.settings.noteTitlePattern)
-					.onChange(async (value) => {
-						this.plugin.settings.noteTitlePattern =
-							value.trim() || DEFAULT_TITLE_PATTERN;
-						await this.plugin.saveSettings();
-					})
-			);
+		this.addCustomizableText(
+			containerEl,
+			s.settings.noteTitlePattern,
+			s.settings.noteTitlePatternCustomize.name,
+			DEFAULT_TITLE_PATTERN,
+			false,
+			() => this.plugin.settings.noteTitlePatternCustomize,
+			(v) => (this.plugin.settings.noteTitlePatternCustomize = v),
+			() => this.plugin.settings.noteTitlePattern,
+			(v) => (this.plugin.settings.noteTitlePattern = v.trim())
+		);
 
-		new Setting(containerEl)
-			.setName(s.settings.noteTemplate.name)
-			.setDesc(s.settings.noteTemplate.desc)
-			.addTextArea((ta) => {
-				ta.setValue(this.plugin.settings.noteTemplate).onChange(
-					async (value) => {
-						this.plugin.settings.noteTemplate =
-							value || DEFAULT_NOTE_TEMPLATE;
-						await this.plugin.saveSettings();
-					}
-				);
-				ta.inputEl.rows = TEXTAREA_ROWS;
-				ta.inputEl.addClass("meeting-copilot-template-input");
-			});
+		this.addCustomizableText(
+			containerEl,
+			s.settings.noteTemplate,
+			s.settings.noteTemplateCustomize.name,
+			DEFAULT_NOTE_TEMPLATE,
+			true,
+			() => this.plugin.settings.noteTemplateCustomize,
+			(v) => (this.plugin.settings.noteTemplateCustomize = v),
+			() => this.plugin.settings.noteTemplate,
+			(v) => (this.plugin.settings.noteTemplate = v)
+		);
 
 		new Setting(containerEl)
 			.setName(s.settings.retentionDays.name)
@@ -1720,5 +1750,68 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                 })
             );
         }
+    }
+
+    /**
+     * One settings row for a "built-in default vs. custom text" setting: the
+     * name/description and a Customize toggle sit on the header line, with the
+     * editor on its own full-width line below. The editor is always shown but
+     * *disabled* while the toggle is off (the plugin then uses the live built-in
+     * `defaultValue` at runtime). Toggling only flips the editor's disabled state
+     * in place — no `this.display()` — so the tab never scrolls/jumps. Enabling
+     * seeds the editor with the current default the first time (only when blank),
+     * so the user edits from a working base.
+     */
+    private addCustomizableText(
+        containerEl: HTMLElement,
+        labels: { name: string; desc: string },
+        customizeTooltip: string,
+        defaultValue: string,
+        multiline: boolean,
+        isOn: () => boolean,
+        setOn: (value: boolean) => void,
+        getValue: () => string,
+        setValue: (value: string) => void
+    ): void {
+        let editor!: HTMLTextAreaElement | HTMLInputElement;
+        const setting = new Setting(containerEl)
+            .setName(labels.name)
+            .setDesc(labels.desc)
+            .setClass("mc-customizable")
+            .addToggle((toggle) =>
+                toggle
+                    .setTooltip(customizeTooltip)
+                    .setValue(isOn())
+                    .onChange(async (on) => {
+                        setOn(on);
+                        if (on && !getValue().trim()) {
+                            setValue(defaultValue);
+                            editor.value = defaultValue;
+                        }
+                        editor.disabled = !on;
+                        await this.plugin.saveSettings();
+                    })
+            );
+        editor = multiline
+            ? setting.settingEl.createEl("textarea", {
+                  cls: "meeting-copilot-template-input",
+              })
+            : setting.settingEl.createEl("input", {
+                  cls: "meeting-copilot-template-input",
+                  attr: { type: "text" },
+              });
+        if (editor instanceof HTMLTextAreaElement) editor.rows = TEXTAREA_ROWS;
+        // Show the built-in default as a (greyed) placeholder so a disabled/empty
+        // box previews what the plugin will actually use while Customize is off.
+        editor.placeholder = defaultValue;
+        editor.value = getValue();
+        editor.disabled = !isOn();
+        editor.addEventListener("input", () => {
+            // Defensive: a disabled field can't fire `input`, but never persist
+            // edits while Customize is off (the runtime ignores them anyway).
+            if (!isOn()) return;
+            setValue(editor.value);
+            void this.plugin.saveSettings();
+        });
     }
 }

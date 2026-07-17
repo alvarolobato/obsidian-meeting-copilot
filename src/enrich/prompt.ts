@@ -1,9 +1,13 @@
+import { resolveCustomizable } from "../util/customizable";
+
 /** Context assembled from the meeting note and calendar frontmatter. */
 export interface EnrichmentContext {
 	title: string;
 	date: string;
 	attendees: string;
 	notes: string;
+	/** The participant's own, hand-written action items (one per line). */
+	actionItems: string;
 	transcript: string;
 }
 
@@ -25,6 +29,11 @@ The participant's own notes (may be sparse or empty):
 {{notes}}
 """
 
+The participant's own action items, typed by hand (may be empty). These are authoritative: the participant explicitly wrote each one, so treat them as a committed to-do list you must preserve:
+"""
+{{actionItems}}
+"""
+
 Transcript (may be empty):
 """
 {{transcript}}
@@ -38,7 +47,7 @@ Structure:
 - Under each heading use a few terse "- " bullets — sentence fragments, not full sentences. Merge related points into one bullet; never split a single idea across several.
 - Nest a sub-bullet ("  - ") only when a point truly needs one concrete detail (a number, name, or example). Never go deeper than one level, and use nesting sparingly.
 - Fold the participant's own notes into the relevant sections; never drop anything they wrote.
-- Finish with a "### Next steps" section listing ONLY concrete tasks the participant themselves still has to do — things they personally committed to and have not started yet. Format each as "- **Concise task**". The participant is the author of these notes (the "Me" speaker when the transcript is labeled "Me:"/"Them:"); otherwise infer from the notes and context. This section is exclusively the participant's own to-do list, so exclude everything else: work already underway or described as ongoing, anything owned by or delegated to someone else, decisions, status, general follow-ups, and passive "waiting for"/"awaiting X" items. Never phrase a task as continuing, keeping, maintaining, or improving something already in progress (no "Continue …", "Keep …", "Maintain …", "Keep polishing …"); those describe ongoing work — drop them entirely rather than rewording them into tasks. When you cannot tell that the participant personally owns a discrete, not-yet-started task, leave it out. Omit the whole section entirely when there are no such tasks — never pad it.
+- Finish with a "### Next steps" section: the participant's unified to-do list, built in two steps. FIRST, carry over EVERY hand-written action item listed above — never drop, merge away, or omit one, even if it looks incomplete or would not otherwise qualify below; you may only refine its wording for clarity, correct an obvious error, and fold in one concrete detail from the transcript (a name, date, or number). THEN append any ADDITIONAL concrete tasks the participant themselves still has to do — things they personally committed to and have not started yet. Format each as "- **Concise task**". The participant is the author of these notes (the "Me" speaker when the transcript is labeled "Me:"/"Them:"); otherwise infer from the notes and context. The following exclusions apply ONLY to the additional tasks, never to the hand-written items: exclude work already underway or described as ongoing, anything owned by or delegated to someone else, decisions, status, general follow-ups, and passive "waiting for"/"awaiting X" items; and never phrase an added task as continuing, keeping, maintaining, or improving something already in progress (no "Continue …", "Keep …", "Maintain …", "Keep polishing …") — drop those entirely rather than rewording them into tasks. When you cannot tell that the participant personally owns a discrete, not-yet-started task, leave it out. Omit the whole section only when there are neither hand-written action items nor such additional tasks — never pad it.
 
 Keep it tight:
 - Match length to substance: a short meeting yields a short note. Do not pad. As a rough ceiling, keep the whole thing well under one screen of text for a typical 30-minute meeting.
@@ -75,7 +84,7 @@ ${t}
 """`;
 }
 
-const PLACEHOLDER = /\{\{(title|date|attendees|notes|transcript)\}\}/g;
+const PLACEHOLDER = /\{\{(title|date|attendees|notes|actionItems|transcript)\}\}/g;
 
 /** Fills a prompt template with the context, defaulting empty fields to "(none)". */
 export function fillPrompt(template: string, ctx: EnrichmentContext): string {
@@ -83,4 +92,18 @@ export function fillPrompt(template: string, ctx: EnrichmentContext): string {
 		const value = ctx[key];
 		return value && value.trim().length > 0 ? value : "(none)";
 	});
+}
+
+/**
+ * The prompt to send to the model. The default is *never persisted* — it's read
+ * live from {@link DEFAULT_ENRICH_PROMPT} here — so any improvement to the
+ * default automatically reaches everyone who hasn't opted into customizing.
+ * Only when `customize` is on AND a non-empty custom prompt is stored do we use
+ * that instead; a blank custom prompt falls back to the default too.
+ */
+export function effectiveEnrichPrompt(
+	customize: boolean,
+	custom: string | null | undefined
+): string {
+	return resolveCustomizable(customize, custom, DEFAULT_ENRICH_PROMPT);
 }

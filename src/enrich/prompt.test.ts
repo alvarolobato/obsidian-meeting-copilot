@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildTitlePrompt, DEFAULT_ENRICH_PROMPT, fillPrompt } from "./prompt";
+import {
+	buildTitlePrompt,
+	DEFAULT_ENRICH_PROMPT,
+	effectiveEnrichPrompt,
+	fillPrompt,
+} from "./prompt";
 
 describe("fillPrompt", () => {
 	it("substitutes all placeholders", () => {
@@ -8,25 +13,67 @@ describe("fillPrompt", () => {
 			date: "2026-07-10",
 			attendees: "Ann, Bob",
 			notes: "we shipped X",
+			actionItems: "- Follow up with Bob",
 			transcript: "Ann: hi",
 		});
 		expect(out).toContain("Meeting: Sprint sync");
 		expect(out).toContain("Date: 2026-07-10");
 		expect(out).toContain("Attendees: Ann, Bob");
 		expect(out).toContain("we shipped X");
+		expect(out).toContain("- Follow up with Bob");
 		expect(out).toContain("Ann: hi");
 		expect(out).not.toContain("{{");
 	});
 
-	it("defaults empty fields to (none)", () => {
-		const out = fillPrompt("{{notes}}|{{transcript}}", {
+	it("substitutes the action-items placeholder", () => {
+		const out = fillPrompt("{{actionItems}}", {
 			title: "t",
 			date: "d",
 			attendees: "",
 			notes: "",
+			actionItems: "- Ship the release",
+			transcript: "",
+		});
+		expect(out).toBe("- Ship the release");
+	});
+
+	it("defaults empty fields to (none)", () => {
+		const out = fillPrompt("{{notes}}|{{actionItems}}|{{transcript}}", {
+			title: "t",
+			date: "d",
+			attendees: "",
+			notes: "",
+			actionItems: "",
 			transcript: "   ",
 		});
-		expect(out).toBe("(none)|(none)");
+		expect(out).toBe("(none)|(none)|(none)");
+	});
+});
+
+describe("effectiveEnrichPrompt", () => {
+	const custom = "My own prompt with {{notes}} and {{transcript}}.";
+
+	it("uses the live default when not customizing", () => {
+		expect(effectiveEnrichPrompt(false, "")).toBe(DEFAULT_ENRICH_PROMPT);
+		// A stray stored value is ignored while the toggle is off.
+		expect(effectiveEnrichPrompt(false, custom)).toBe(DEFAULT_ENRICH_PROMPT);
+	});
+
+	it("uses the custom prompt when customizing with non-empty text", () => {
+		expect(effectiveEnrichPrompt(true, custom)).toBe(custom);
+	});
+
+	it("falls back to the default when customizing but the prompt is blank", () => {
+		expect(effectiveEnrichPrompt(true, "")).toBe(DEFAULT_ENRICH_PROMPT);
+		expect(effectiveEnrichPrompt(true, "   ")).toBe(DEFAULT_ENRICH_PROMPT);
+		expect(effectiveEnrichPrompt(true, null)).toBe(DEFAULT_ENRICH_PROMPT);
+		expect(effectiveEnrichPrompt(true, undefined)).toBe(
+			DEFAULT_ENRICH_PROMPT
+		);
+	});
+
+	it("keeps the built-in default introducing the actionItems placeholder", () => {
+		expect(DEFAULT_ENRICH_PROMPT).toContain("{{actionItems}}");
 	});
 });
 
