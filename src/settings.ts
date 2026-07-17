@@ -310,11 +310,18 @@ export function migrateSettings(
 	// template) are no longer persisted as a full copy of their default — a copy
 	// couldn't follow plugin updates (e.g. the prompt's new `{{actionItems}}`).
 	// Each now has a "Customize" toggle (default off); while off the plugin reads
-	// the live built-in default at runtime. Drop any legacy persisted value unless
-	// the user opted into customizing, so an old default can't linger and resurface.
-	if (!migrated.enrichPromptCustomize) delete migrated.enrichPrompt;
-	if (!migrated.noteTitlePatternCustomize) delete migrated.noteTitlePattern;
-	if (!migrated.noteTemplateCustomize) delete migrated.noteTemplate;
+	// the live built-in default at runtime.
+	//
+	// Drop the persisted text ONLY for *legacy* vaults, detected by the absence
+	// of the matching `*Customize` key: those predate the toggle, so their stored
+	// value is an old default (or edit) we intentionally discard so it can't
+	// resurface. New-format vaults (the key exists, on OR off) keep their text so
+	// toggling off then back on doesn't lose a user's custom prompt across a
+	// reload — the resolver already ignores it while the toggle is off.
+	if (!("enrichPromptCustomize" in migrated)) delete migrated.enrichPrompt;
+	if (!("noteTitlePatternCustomize" in migrated))
+		delete migrated.noteTitlePattern;
+	if (!("noteTemplateCustomize" in migrated)) delete migrated.noteTemplate;
 	return migrated;
 }
 

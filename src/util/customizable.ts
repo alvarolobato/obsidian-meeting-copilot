@@ -13,6 +13,9 @@ export function resolveCustomizable(
 	custom: string | null | undefined,
 	fallback: string
 ): string {
-	const trimmed = (custom ?? "").trim();
-	return customize && trimmed.length > 0 ? (custom as string) : fallback;
+	// Defensive: a hand-edited/corrupt data.json could store a non-string here,
+	// so coerce anything that isn't a usable string to the fallback rather than
+	// throwing on `.trim()` mid-enrichment.
+	const text = typeof custom === "string" ? custom : "";
+	return customize && text.trim().length > 0 ? text : fallback;
 }

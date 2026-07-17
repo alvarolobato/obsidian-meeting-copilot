@@ -132,6 +132,34 @@ describe("migrateSettings", () => {
 		).toBe(custom);
 	});
 
+	// New-format vault (the toggle key exists) with customize OFF: the stored
+	// custom text is preserved across reloads — only legacy vaults (no key) are
+	// reset — so toggling off then back on doesn't lose the user's prompt.
+	it("keeps stored custom text when the toggle key exists but is off", () => {
+		const custom = "leftover custom prompt";
+		const migrated = migrateSettings({
+			oneOffFolderTemplate: "Meetings",
+			enrichPromptCustomize: false,
+			enrichPrompt: custom,
+		});
+		expect(migrated.enrichPrompt).toBe(custom);
+		// Still resolves to the default while off…
+		expect(effectiveEnrichPrompt(false, custom)).toBe(DEFAULT_ENRICH_PROMPT);
+		// …and comes back verbatim when re-enabled.
+		expect(effectiveEnrichPrompt(true, custom)).toBe(custom);
+	});
+
+	it("drops legacy noteTemplate / noteTitlePattern on the meetingsFolder branch too", () => {
+		const migrated = migrateSettings({
+			meetingsFolder: "Work/Meetings",
+			noteTemplate: "# old",
+			noteTitlePattern: "old pattern",
+		});
+		expect(migrated.oneOffFolderTemplate).toBe("Work/Meetings");
+		expect(migrated).not.toHaveProperty("noteTemplate");
+		expect(migrated).not.toHaveProperty("noteTitlePattern");
+	});
+
 	it("does not add enrichPrompt when it was not persisted", () => {
 		const migrated = migrateSettings({ oneOffFolderTemplate: "Meetings" });
 		expect(migrated).not.toHaveProperty("enrichPrompt");

@@ -26,4 +26,12 @@ describe("resolveCustomizable", () => {
 			"  padded  "
 		);
 	});
+
+	it("falls back (no throw) on a corrupt non-string custom value", () => {
+		for (const bad of [42, {}, [], true]) {
+			expect(
+				resolveCustomizable(true, bad as unknown as string, FALLBACK)
+			).toBe(FALLBACK);
+		}
+	});
 });
