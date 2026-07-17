@@ -176,6 +176,23 @@
     resize: vertical;
 }
 
+/* Customizable "built-in default vs. custom" rows: the Customize toggle stays
+ * on the header line next to the name; the editor wraps to its own full-width
+ * line below and greys out while disabled (toggle off). */
+.meeting-copilot-settings .setting-item.mc-customizable {
+    flex-wrap: wrap;
+}
+
+.meeting-copilot-settings .setting-item.mc-customizable > .meeting-copilot-template-input {
+    flex-basis: 100%;
+    margin-top: var(--size-4-2);
+}
+
+.meeting-copilot-settings .meeting-copilot-template-input:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
 /* =========================================================================
  * Plugin settings tab: widen the text fields.
  * Scoped to this plugin's tab so it can't affect other settings panes.

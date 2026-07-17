@@ -309,7 +309,7 @@ export const en = {
 		},
 		noteTitlePattern: {
 			name: "Note title pattern",
-			desc: "Your custom filename pattern for meeting notes. Placeholders: {{title}}, {{date}}, {{start:FMT}}, {{end:FMT}}. Clear the box to fall back to the built-in default.",
+			desc: "Filename pattern for meeting notes. While Customize is off, the plugin uses its built-in pattern (which improves with each update); toggle it on to edit and store your own. Placeholders: {{title}}, {{date}}, {{start:FMT}}, {{end:FMT}}.",
 		},
 		noteTemplateCustomize: {
 			name: "Customize note template",
@@ -317,7 +317,7 @@ export const en = {
 		},
 		noteTemplate: {
 			name: "Note template",
-			desc: "Your custom body for new meeting notes. Placeholders: {{title}}, {{date}}, {{start:FMT}}, {{end:FMT}}, {{duration}}, {{location}}, {{meeting_url}}, {{organizer}}, {{attendees}}, {{attendees_list}}, {{attendees_wikilinks}}, {{event_link}}. Frontmatter (attendees, status, recording, …) is managed automatically. Clear the box to fall back to the built-in default.",
+			desc: "Body for new meeting notes. While Customize is off, the plugin uses its built-in template (which improves with each update); toggle it on to edit and store your own. Placeholders: {{title}}, {{date}}, {{start:FMT}}, {{end:FMT}}, {{duration}}, {{location}}, {{meeting_url}}, {{organizer}}, {{attendees}}, {{attendees_list}}, {{attendees_wikilinks}}, {{event_link}}. Frontmatter (attendees, status, recording, …) is managed automatically.",
 		},
 		insertTranscript: {
 			name: "Insert transcript into meeting note",
@@ -574,7 +574,7 @@ export const en = {
 		},
 		enrichPrompt: {
 			name: "Enrichment prompt",
-			desc: "Your custom prompt, sent to the model. Placeholders: {{title}}, {{date}}, {{attendees}}, {{notes}}, {{actionItems}}, {{transcript}}. Clear the box to fall back to the built-in default.",
+			desc: "Prompt sent to the model. While Customize is off, the plugin uses its built-in prompt (which improves with each update); toggle it on to edit and store your own. Placeholders: {{title}}, {{date}}, {{attendees}}, {{notes}}, {{actionItems}}, {{transcript}}.",
 		},
 	},
 	oauth: {

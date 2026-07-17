@@ -809,43 +809,17 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					})
 			);
 
-		new Setting(containerEl)
-			.setName(s.settings.enrichPromptCustomize.name)
-			.setDesc(s.settings.enrichPromptCustomize.desc)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.enrichPromptCustomize)
-					.onChange(async (value) => {
-						this.plugin.settings.enrichPromptCustomize = value;
-						// Seed the editor with the current default the first time
-						// the user opts in, so they start from a working base
-						// instead of a blank box.
-						if (value && !this.plugin.settings.enrichPrompt.trim()) {
-							this.plugin.settings.enrichPrompt =
-								DEFAULT_ENRICH_PROMPT;
-						}
-						await this.plugin.saveSettings();
-						this.display();
-					})
-			);
-
-		// Only show the editable prompt when customizing; otherwise the plugin
-		// uses the live DEFAULT_ENRICH_PROMPT and there's nothing to persist.
-		if (this.plugin.settings.enrichPromptCustomize) {
-			new Setting(containerEl)
-				.setName(s.settings.enrichPrompt.name)
-				.setDesc(s.settings.enrichPrompt.desc)
-				.addTextArea((ta) => {
-					ta.setValue(this.plugin.settings.enrichPrompt).onChange(
-						async (value) => {
-							this.plugin.settings.enrichPrompt = value;
-							await this.plugin.saveSettings();
-						}
-					);
-					ta.inputEl.rows = TEXTAREA_ROWS;
-					ta.inputEl.addClass("meeting-copilot-template-input");
-				});
-		}
+		this.addCustomizableText(
+			containerEl,
+			s.settings.enrichPrompt,
+			s.settings.enrichPromptCustomize.name,
+			DEFAULT_ENRICH_PROMPT,
+			true,
+			() => this.plugin.settings.enrichPromptCustomize,
+			(v) => (this.plugin.settings.enrichPromptCustomize = v),
+			() => this.plugin.settings.enrichPrompt,
+			(v) => (this.plugin.settings.enrichPrompt = v)
+		);
 
 		new Setting(containerEl)
 			.setName(s.settings.actionItemsAsTasks.name)
@@ -1356,76 +1330,29 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					})
 			);
 
-		new Setting(containerEl)
-			.setName(s.settings.noteTitlePatternCustomize.name)
-			.setDesc(s.settings.noteTitlePatternCustomize.desc)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.noteTitlePatternCustomize)
-					.onChange(async (value) => {
-						this.plugin.settings.noteTitlePatternCustomize = value;
-						if (
-							value &&
-							!this.plugin.settings.noteTitlePattern.trim()
-						) {
-							this.plugin.settings.noteTitlePattern =
-								DEFAULT_TITLE_PATTERN;
-						}
-						await this.plugin.saveSettings();
-						this.display();
-					})
-			);
+		this.addCustomizableText(
+			containerEl,
+			s.settings.noteTitlePattern,
+			s.settings.noteTitlePatternCustomize.name,
+			DEFAULT_TITLE_PATTERN,
+			false,
+			() => this.plugin.settings.noteTitlePatternCustomize,
+			(v) => (this.plugin.settings.noteTitlePatternCustomize = v),
+			() => this.plugin.settings.noteTitlePattern,
+			(v) => (this.plugin.settings.noteTitlePattern = v.trim())
+		);
 
-		if (this.plugin.settings.noteTitlePatternCustomize) {
-			new Setting(containerEl)
-				.setName(s.settings.noteTitlePattern.name)
-				.setDesc(s.settings.noteTitlePattern.desc)
-				.addText((text) =>
-					text
-						.setPlaceholder(DEFAULT_TITLE_PATTERN)
-						.setValue(this.plugin.settings.noteTitlePattern)
-						.onChange(async (value) => {
-							this.plugin.settings.noteTitlePattern = value.trim();
-							await this.plugin.saveSettings();
-						})
-				);
-		}
-
-		new Setting(containerEl)
-			.setName(s.settings.noteTemplateCustomize.name)
-			.setDesc(s.settings.noteTemplateCustomize.desc)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.noteTemplateCustomize)
-					.onChange(async (value) => {
-						this.plugin.settings.noteTemplateCustomize = value;
-						if (
-							value &&
-							!this.plugin.settings.noteTemplate.trim()
-						) {
-							this.plugin.settings.noteTemplate =
-								DEFAULT_NOTE_TEMPLATE;
-						}
-						await this.plugin.saveSettings();
-						this.display();
-					})
-			);
-
-		if (this.plugin.settings.noteTemplateCustomize) {
-			new Setting(containerEl)
-				.setName(s.settings.noteTemplate.name)
-				.setDesc(s.settings.noteTemplate.desc)
-				.addTextArea((ta) => {
-					ta.setValue(this.plugin.settings.noteTemplate).onChange(
-						async (value) => {
-							this.plugin.settings.noteTemplate = value;
-							await this.plugin.saveSettings();
-						}
-					);
-					ta.inputEl.rows = TEXTAREA_ROWS;
-					ta.inputEl.addClass("meeting-copilot-template-input");
-				});
-		}
+		this.addCustomizableText(
+			containerEl,
+			s.settings.noteTemplate,
+			s.settings.noteTemplateCustomize.name,
+			DEFAULT_NOTE_TEMPLATE,
+			true,
+			() => this.plugin.settings.noteTemplateCustomize,
+			(v) => (this.plugin.settings.noteTemplateCustomize = v),
+			() => this.plugin.settings.noteTemplate,
+			(v) => (this.plugin.settings.noteTemplate = v)
+		);
 
 		new Setting(containerEl)
 			.setName(s.settings.retentionDays.name)
@@ -1823,5 +1750,62 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                 })
             );
         }
+    }
+
+    /**
+     * One settings row for a "built-in default vs. custom text" setting: the
+     * name/description and a Customize toggle sit on the header line, with the
+     * editor on its own full-width line below. The editor is always shown but
+     * *disabled* while the toggle is off (the plugin then uses the live built-in
+     * `defaultValue` at runtime). Toggling only flips the editor's disabled state
+     * in place — no `this.display()` — so the tab never scrolls/jumps. Enabling
+     * seeds the editor with the current default the first time (only when blank),
+     * so the user edits from a working base.
+     */
+    private addCustomizableText(
+        containerEl: HTMLElement,
+        labels: { name: string; desc: string },
+        customizeTooltip: string,
+        defaultValue: string,
+        multiline: boolean,
+        isOn: () => boolean,
+        setOn: (value: boolean) => void,
+        getValue: () => string,
+        setValue: (value: string) => void
+    ): void {
+        let editor!: HTMLTextAreaElement | HTMLInputElement;
+        const setting = new Setting(containerEl)
+            .setName(labels.name)
+            .setDesc(labels.desc)
+            .setClass("mc-customizable")
+            .addToggle((toggle) =>
+                toggle
+                    .setTooltip(customizeTooltip)
+                    .setValue(isOn())
+                    .onChange(async (on) => {
+                        setOn(on);
+                        if (on && !getValue().trim()) {
+                            setValue(defaultValue);
+                            editor.value = defaultValue;
+                        }
+                        editor.disabled = !on;
+                        await this.plugin.saveSettings();
+                    })
+            );
+        editor = multiline
+            ? setting.settingEl.createEl("textarea", {
+                  cls: "meeting-copilot-template-input",
+              })
+            : setting.settingEl.createEl("input", {
+                  cls: "meeting-copilot-template-input",
+                  attr: { type: "text" },
+              });
+        if (editor instanceof HTMLTextAreaElement) editor.rows = TEXTAREA_ROWS;
+        editor.value = getValue();
+        editor.disabled = !isOn();
+        editor.addEventListener("input", () => {
+            setValue(editor.value);
+            void this.plugin.saveSettings();
+        });
     }
 }
