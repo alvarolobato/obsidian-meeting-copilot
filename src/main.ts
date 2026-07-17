@@ -3531,11 +3531,11 @@ export default class SystemRecordingPlugin extends Plugin {
     /**
      * Enqueues an audio file for headless transcription (no modal, no separate
      * transcript file). Transcriptions run one at a time through the visible
-     * {@link TaskQueue}, so a second request waits (and is shown as
-     * queued) rather than fighting the first. The transcription slot is released
-     * as soon as the transcript is inserted; enrichment then runs *outside* the
-     * queue so a slow LLM call doesn't hold up the next transcription (or keep
-     * the recording flagged in-progress, which used to block a re-transcribe).
+     * {@link TaskQueue}, so a second request waits (and is shown as queued)
+     * rather than fighting the first. When enrichment is due (auto-enrich, or
+     * the caller asked), it's chained as a *dependent* enrich task on the same
+     * queue — visible in the popover, independently cancellable, and run only
+     * after the transcription succeeds (a cancelled/failed transcribe drops it).
      *
      * `mode` picks the pass: "auto" respects the speaker-separation setting,
      * "diarized" forces the separated pass (falling back to the joint track when
@@ -3644,10 +3644,12 @@ export default class SystemRecordingPlugin extends Plugin {
         // Single-owner progress: only the running job writes to the shared bar,
         // labelled with the meeting name (and any queued-behind count).
         const onProgress = (pct: number): void => {
-            if (this.taskQueue.snapshot().running?.id !== recording.path) {
+            const snapshot = this.taskQueue.snapshot();
+            if (snapshot.running?.id !== recording.path) {
                 return;
             }
             const rounded = Math.round(pct);
+            const changed = this.runningProgress?.pct !== rounded;
             this.runningProgress = { id: recording.path, pct: rounded };
             this.setActionStatus(
                 this.transcribeStatusText(
@@ -3657,6 +3659,10 @@ export default class SystemRecordingPlugin extends Plugin {
                 ),
                 "busy"
             );
+            // Progress ticks don't emit a queue transition, so an open popover
+            // would freeze on a stale percent between tasks — refresh it here
+            // (only when the rounded value actually moved, to avoid churn).
+            if (changed && this.statusHovered) this.showQueuePopover(snapshot);
         };
         // New job: forget the previous run's percent until its first tick.
         this.runningProgress = null;
@@ -4194,14 +4200,22 @@ export default class SystemRecordingPlugin extends Plugin {
         this.queuePopoverEl = null;
     }
 
-    /** Cancels the running transcription and drops any queued behind it (command-palette action). */
+    /**
+     * Cancels every queued/running *transcription* (command-palette action).
+     * Enrichment tasks are left alone — cancel those individually from the
+     * popover's per-item x. Cancelling a running transcribe transitively drops
+     * any enrichment chained behind it (the queue's dependency handling).
+     */
     private cancelActiveTranscription(): void {
         const snapshot = this.taskQueue.snapshot();
-        if (!snapshot.running && snapshot.waiting.length === 0) {
+        const transcribeIds = [snapshot.running, ...snapshot.waiting]
+            .filter((item): item is QueueItem => item?.kind === "transcribe")
+            .map((item) => item.id);
+        if (transcribeIds.length === 0) {
             new Notice(t().notices.nothingTranscribing);
             return;
         }
-        this.taskQueue.cancelAll();
+        for (const id of transcribeIds) this.taskQueue.cancel(id);
     }
 
     /**
@@ -4824,15 +4838,25 @@ export default class SystemRecordingPlugin extends Plugin {
             new Notice(t().notices.enrichNotConfigured);
             return;
         }
-        // No transcript yet but a recording exists → transcribe first; that
-        // pipeline enqueues the enrichment as a dependent task once it lands.
+        // No transcript yet but a recording exists → transcribe first, then
+        // enrich as a dependent task once it lands.
         const existing = extractTranscript(await this.app.vault.read(file));
         if (!existing.trim()) {
             const recording = this.agendaMeetingFromNote(file).recording;
             if (recording) {
-                await this.launchTranscriber(recording, "auto", {
-                    enrichAfter: true,
-                });
+                if (this.taskQueue.has(recording.path)) {
+                    // That recording is already transcribing (auto-transcribe or
+                    // a manual run): don't kick a second one — just chain the
+                    // enrichment behind it so the user's click isn't dropped.
+                    void this.enqueueEnrichTask(file, {
+                        dependsOn: recording.path,
+                    });
+                } else {
+                    // launchTranscriber enqueues the dependent enrichment itself.
+                    await this.launchTranscriber(recording, "auto", {
+                        enrichAfter: true,
+                    });
+                }
                 return;
             }
         }
@@ -5016,6 +5040,9 @@ export default class SystemRecordingPlugin extends Plugin {
                 t().notices.enrichError(e instanceof Error ? e.message : String(e))
             );
             this.setEnrichStatus(t().statusBar.enrichFailed, "error");
+            // Reject the queue task (its own catch just logs) so a failed enrich
+            // isn't recorded as a success — and skips the title-suggestion step.
+            throw e;
         }
 
         // After the AI summary, offer a generated title for unplanned meetings

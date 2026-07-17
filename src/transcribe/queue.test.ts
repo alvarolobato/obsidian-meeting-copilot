@@ -180,6 +180,40 @@ describe("TaskQueue", () => {
 			expect(q.waitingCount).toBe(0);
 		});
 
+		it("drops a waiting dependent when its running dependency is cancelled", async () => {
+			// The primary pipeline-cancel path: abort the running transcribe from
+			// the popover x → its chained enrich must be dropped, not stranded.
+			const q = new TaskQueue();
+			const dep = deferred();
+			const pDep = q.enqueue(
+				task({
+					id: "t",
+					label: "T",
+					run: (signal) => {
+						signal.addEventListener("abort", () =>
+							dep.reject(new TaskCancelledError())
+						);
+						return dep.promise;
+					},
+				})
+			);
+			const enrichRun = vi.fn(async () => {});
+			const pEnrich = q.enqueue(
+				task({ id: "e", label: "E", kind: "enrich", run: enrichRun, dependsOn: "t" })
+			);
+
+			await Promise.resolve();
+			expect(q.snapshot().running?.id).toBe("t");
+			expect(q.snapshot().waiting.map((w) => w.id)).toEqual(["e"]);
+
+			q.cancel("t");
+			await expect(pDep).rejects.toBeInstanceOf(TaskCancelledError);
+			await expect(pEnrich).rejects.toBeInstanceOf(TaskCancelledError);
+			expect(enrichRun).not.toHaveBeenCalled();
+			expect(q.snapshot().running).toBeNull();
+			expect(q.waitingCount).toBe(0);
+		});
+
 		it("drops a dependent when its dependency is cancelled while waiting", async () => {
 			const q = new TaskQueue();
 			const blocker = deferred();

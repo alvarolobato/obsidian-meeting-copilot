@@ -88,6 +88,10 @@ export async function chatComplete(p: ChatParams): Promise<string> {
 		body: JSON.stringify(payload),
 		throw: false,
 	});
+	// The request may lose the race (timeout/abort wins) yet still reject later
+	// (e.g. a network error) — keep its rejection handled so it can't surface as
+	// an unhandled rejection (mirrors ApiClient.requestWithTimeout).
+	request.catch(() => {});
 	let res;
 	try {
 		res = await Promise.race([request, timeout, aborted]);
