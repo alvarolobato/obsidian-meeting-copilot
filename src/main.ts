@@ -46,6 +46,8 @@ import {
     ADHOC_ID_PREFIX,
     createMeetingNote,
     dropRecordingLink,
+    effectiveNoteTemplate,
+    effectiveTitlePattern,
     findMeetingNoteForAudio,
     folderOf,
     insertTranscript,
@@ -137,6 +139,7 @@ import { parseDictionary } from "./transcribe/dictionary";
 import type { TranscriptionModel } from "./transcribe/vendor/ApiSettings";
 import {
     buildTitlePrompt,
+    effectiveEnrichPrompt,
     ENRICH_SYSTEM_PROMPT,
     fillPrompt,
     TITLE_SYSTEM_PROMPT,
@@ -1912,8 +1915,14 @@ export default class SystemRecordingPlugin extends Plugin {
 			oneOnOneSeparately: this.settings.oneOnOneSeparately,
 			oneOnOneFolder: this.settings.oneOnOneFolder,
 			adhocFolder: this.settings.adhocFolder,
-			titlePattern: this.settings.noteTitlePattern,
-			template: this.settings.noteTemplate,
+			titlePattern: effectiveTitlePattern(
+				this.settings.noteTitlePatternCustomize,
+				this.settings.noteTitlePattern
+			),
+			template: effectiveNoteTemplate(
+				this.settings.noteTemplateCustomize,
+				this.settings.noteTemplate
+			),
 		};
 	}
 
@@ -4770,7 +4779,13 @@ export default class SystemRecordingPlugin extends Plugin {
                 apiKey: apiKey,
                 model: enrichModel,
                 system: ENRICH_SYSTEM_PROMPT,
-                user: fillPrompt(this.settings.enrichPrompt, ctx),
+                user: fillPrompt(
+                    effectiveEnrichPrompt(
+                        this.settings.enrichPromptCustomize,
+                        this.settings.enrichPrompt
+                    ),
+                    ctx
+                ),
             });
             // Re-read in case the note changed during the network call.
             const current = await this.app.vault.read(file);

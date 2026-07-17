@@ -2,10 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
 	buildTitlePrompt,
 	DEFAULT_ENRICH_PROMPT,
+	effectiveEnrichPrompt,
 	fillPrompt,
-	upgradeEnrichPrompt,
 } from "./prompt";
-import { LEGACY_ENRICH_PROMPTS } from "./legacyEnrichPrompts";
 
 describe("fillPrompt", () => {
 	it("substitutes all placeholders", () => {
@@ -51,38 +50,29 @@ describe("fillPrompt", () => {
 	});
 });
 
-describe("upgradeEnrichPrompt", () => {
-	it("upgrades an empty prompt to the current default", () => {
-		expect(upgradeEnrichPrompt("")).toBe(DEFAULT_ENRICH_PROMPT);
-		expect(upgradeEnrichPrompt("   ")).toBe(DEFAULT_ENRICH_PROMPT);
-		expect(upgradeEnrichPrompt(null)).toBe(DEFAULT_ENRICH_PROMPT);
-		expect(upgradeEnrichPrompt(undefined)).toBe(DEFAULT_ENRICH_PROMPT);
+describe("effectiveEnrichPrompt", () => {
+	const custom = "My own prompt with {{notes}} and {{transcript}}.";
+
+	it("uses the live default when not customizing", () => {
+		expect(effectiveEnrichPrompt(false, "")).toBe(DEFAULT_ENRICH_PROMPT);
+		// A stray stored value is ignored while the toggle is off.
+		expect(effectiveEnrichPrompt(false, custom)).toBe(DEFAULT_ENRICH_PROMPT);
 	});
 
-	it("upgrades a previously shipped default to the current default", () => {
-		expect(LEGACY_ENRICH_PROMPTS.length).toBeGreaterThan(0);
-		for (const legacy of LEGACY_ENRICH_PROMPTS) {
-			expect(upgradeEnrichPrompt(legacy)).toBe(DEFAULT_ENRICH_PROMPT);
-		}
+	it("uses the custom prompt when customizing with non-empty text", () => {
+		expect(effectiveEnrichPrompt(true, custom)).toBe(custom);
 	});
 
-	it("returns the current default unchanged", () => {
-		expect(upgradeEnrichPrompt(DEFAULT_ENRICH_PROMPT)).toBe(
+	it("falls back to the default when customizing but the prompt is blank", () => {
+		expect(effectiveEnrichPrompt(true, "")).toBe(DEFAULT_ENRICH_PROMPT);
+		expect(effectiveEnrichPrompt(true, "   ")).toBe(DEFAULT_ENRICH_PROMPT);
+		expect(effectiveEnrichPrompt(true, null)).toBe(DEFAULT_ENRICH_PROMPT);
+		expect(effectiveEnrichPrompt(true, undefined)).toBe(
 			DEFAULT_ENRICH_PROMPT
 		);
 	});
 
-	it("leaves a customized prompt untouched", () => {
-		const custom = "My own prompt with {{notes}} and {{transcript}}.";
-		expect(upgradeEnrichPrompt(custom)).toBe(custom);
-	});
-
-	it("recognizes the legacy default as pre-actionItems", () => {
-		// Guards against a mis-copied legacy constant: the outgoing default must
-		// genuinely lack the placeholder the current default introduces.
-		for (const legacy of LEGACY_ENRICH_PROMPTS) {
-			expect(legacy).not.toContain("{{actionItems}}");
-		}
+	it("keeps the built-in default introducing the actionItems placeholder", () => {
 		expect(DEFAULT_ENRICH_PROMPT).toContain("{{actionItems}}");
 	});
 });

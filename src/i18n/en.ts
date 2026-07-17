@@ -303,13 +303,21 @@ export const en = {
 			name: "Recordings subfolder",
 			desc: "Subfolder, relative to each note's own folder, where that meeting's recordings are stored (e.g. 'Recordings' → notes in 'Meetings/' record into 'Meetings/Recordings/'). Leave empty to keep audio beside the note.",
 		},
+		noteTitlePatternCustomize: {
+			name: "Customize note title pattern",
+			desc: "Off by default: use the plugin's built-in title pattern, which improves with each update. Turn on to edit and store your own.",
+		},
 		noteTitlePattern: {
 			name: "Note title pattern",
-			desc: "Filename pattern for meeting notes. Placeholders: {{title}}, {{date}}, {{start:FMT}}, {{end:FMT}}.",
+			desc: "Your custom filename pattern for meeting notes. Placeholders: {{title}}, {{date}}, {{start:FMT}}, {{end:FMT}}. Clear the box to fall back to the built-in default.",
+		},
+		noteTemplateCustomize: {
+			name: "Customize note template",
+			desc: "Off by default: use the plugin's built-in note template, which improves with each update. Turn on to edit and store your own.",
 		},
 		noteTemplate: {
 			name: "Note template",
-			desc: "Body of new meeting notes. Placeholders: {{title}}, {{date}}, {{start:FMT}}, {{end:FMT}}, {{duration}}, {{location}}, {{meeting_url}}, {{organizer}}, {{attendees}}, {{attendees_list}}, {{attendees_wikilinks}}, {{event_link}}. Frontmatter (attendees, status, recording, …) is managed automatically.",
+			desc: "Your custom body for new meeting notes. Placeholders: {{title}}, {{date}}, {{start:FMT}}, {{end:FMT}}, {{duration}}, {{location}}, {{meeting_url}}, {{organizer}}, {{attendees}}, {{attendees_list}}, {{attendees_wikilinks}}, {{event_link}}. Frontmatter (attendees, status, recording, …) is managed automatically. Clear the box to fall back to the built-in default.",
 		},
 		insertTranscript: {
 			name: "Insert transcript into meeting note",
@@ -560,9 +568,13 @@ export const en = {
 			name: "Enrich automatically after transcription",
 			desc: "Run enrichment as soon as a transcript is inserted. On by default; turn it off if you want to trigger enrichment manually.",
 		},
+		enrichPromptCustomize: {
+			name: "Customize enrichment prompt",
+			desc: "Off by default: use the plugin's built-in prompt, which improves with each update. Turn on to edit and store your own prompt instead.",
+		},
 		enrichPrompt: {
 			name: "Enrichment prompt",
-			desc: "Prompt sent to the model. Placeholders: {{title}}, {{date}}, {{attendees}}, {{notes}}, {{actionItems}}, {{transcript}}.",
+			desc: "Your custom prompt, sent to the model. Placeholders: {{title}}, {{date}}, {{attendees}}, {{notes}}, {{actionItems}}, {{transcript}}. Clear the box to fall back to the built-in default.",
 		},
 	},
 	oauth: {

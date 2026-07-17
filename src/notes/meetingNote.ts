@@ -10,6 +10,7 @@ import {
 	TRANSCRIPT_CALLOUT_MARKER,
 	TRANSCRIPT_CALLOUT_TITLE,
 } from "./transcriptCallout";
+import { resolveCustomizable } from "../util/customizable";
 
 export {
 	normalizeFolderPath,
@@ -159,6 +160,14 @@ export interface MeetingNoteConfig {
 
 export const DEFAULT_TITLE_PATTERN = "{{date}} {{start:HHmm}} {{title}}";
 
+/** The filename pattern to use: the user's custom one when opted in, else the built-in default. */
+export function effectiveTitlePattern(
+	customize: boolean,
+	custom: string | null | undefined
+): string {
+	return resolveCustomizable(customize, custom, DEFAULT_TITLE_PATTERN);
+}
+
 export const DEFAULT_NOTE_TEMPLATE = `# {{title}}
 
 - **When:** {{start:YYYY-MM-DD HH:mm}} – {{end:HH:mm}} ({{duration}} min)
@@ -175,6 +184,14 @@ export const DEFAULT_NOTE_TEMPLATE = `# {{title}}
 ## Action items
 
 `;
+
+/** The new-note body template to use: the user's custom one when opted in, else the built-in default. */
+export function effectiveNoteTemplate(
+	customize: boolean,
+	custom: string | null | undefined
+): string {
+	return resolveCustomizable(customize, custom, DEFAULT_NOTE_TEMPLATE);
+}
 
 export interface MeetingNoteRef {
 	file: TFile;

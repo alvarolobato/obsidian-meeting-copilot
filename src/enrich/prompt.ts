@@ -1,4 +1,4 @@
-import { LEGACY_ENRICH_PROMPTS } from "./legacyEnrichPrompts";
+import { resolveCustomizable } from "../util/customizable";
 
 /** Context assembled from the meeting note and calendar frontmatter. */
 export interface EnrichmentContext {
@@ -95,21 +95,15 @@ export function fillPrompt(template: string, ctx: EnrichmentContext): string {
 }
 
 /**
- * Upgrades a stored enrichment prompt to the current default when it's an
- * *untouched* default — empty, the current default, or any previously shipped
- * default ({@link LEGACY_ENRICH_PROMPTS}). A genuinely customized prompt is
- * returned unchanged, so a user's edits are never clobbered.
- *
- * Without this, a vault that persisted an older default (which `saveSettings`
- * does for essentially every user) would keep it after an update and never pick
- * up new placeholders like `{{actionItems}}`, silently defeating the feature.
+ * The prompt to send to the model. The default is *never persisted* — it's read
+ * live from {@link DEFAULT_ENRICH_PROMPT} here — so any improvement to the
+ * default automatically reaches everyone who hasn't opted into customizing.
+ * Only when `customize` is on AND a non-empty custom prompt is stored do we use
+ * that instead; a blank custom prompt falls back to the default too.
  */
-export function upgradeEnrichPrompt(stored: string | null | undefined): string {
-	const trimmed = (stored ?? "").trim();
-	if (trimmed.length === 0) return DEFAULT_ENRICH_PROMPT;
-	if (trimmed === DEFAULT_ENRICH_PROMPT.trim()) return DEFAULT_ENRICH_PROMPT;
-	if (LEGACY_ENRICH_PROMPTS.some((p) => p.trim() === trimmed)) {
-		return DEFAULT_ENRICH_PROMPT;
-	}
-	return stored ?? DEFAULT_ENRICH_PROMPT;
+export function effectiveEnrichPrompt(
+	customize: boolean,
+	custom: string | null | undefined
+): string {
+	return resolveCustomizable(customize, custom, DEFAULT_ENRICH_PROMPT);
 }

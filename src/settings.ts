@@ -12,7 +12,7 @@ import {
 	DEFAULT_NOTE_TEMPLATE,
 	DEFAULT_TITLE_PATTERN,
 } from "./notes/meetingNote";
-import { DEFAULT_ENRICH_PROMPT, upgradeEnrichPrompt } from "./enrich/prompt";
+import { DEFAULT_ENRICH_PROMPT } from "./enrich/prompt";
 import { listModels } from "./enrich/models";
 import {
 	inferSttApiType,
@@ -69,7 +69,11 @@ export interface SystemRecordingSettings {
 	 * helper only ever sees the UID).
 	 */
 	micDeviceLabel: string;
+	/** Opt-in to a custom note-title pattern; while off, the live default is used. */
+	noteTitlePatternCustomize: boolean;
 	noteTitlePattern: string;
+	/** Opt-in to a custom note-body template; while off, the live default is used. */
+	noteTemplateCustomize: boolean;
 	noteTemplate: string;
 	retentionDays: number;
 	insertTranscript: boolean;
@@ -149,6 +153,14 @@ export interface SystemRecordingSettings {
 	// Enrichment.
 	enableEnrichment: boolean;
 	enrichModel: string;
+	/**
+	 * Opt-in to a custom enrichment prompt. When off (the default), the plugin
+	 * uses the live {@link DEFAULT_ENRICH_PROMPT} at runtime and `enrichPrompt`
+	 * is ignored — so default improvements reach every non-customizing user with
+	 * no persisted copy to migrate.
+	 */
+	enrichPromptCustomize: boolean;
+	/** The user's custom enrichment prompt; only used when `enrichPromptCustomize` is on. */
 	enrichPrompt: string;
 	enrichOnTranscribe: boolean;
 	hideAiNotes: boolean;
@@ -171,8 +183,10 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	compressedRecordings: true,
 	micDeviceUid: "",
 	micDeviceLabel: "",
-	noteTitlePattern: DEFAULT_TITLE_PATTERN,
-	noteTemplate: DEFAULT_NOTE_TEMPLATE,
+	noteTitlePatternCustomize: false,
+	noteTitlePattern: "",
+	noteTemplateCustomize: false,
+	noteTemplate: "",
 	retentionDays: 90,
 	insertTranscript: true,
 	autoTranscribe: true,
@@ -221,7 +235,8 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	debugLogging: false,
 	enableEnrichment: true,
 	enrichModel: "gpt-4o",
-	enrichPrompt: DEFAULT_ENRICH_PROMPT,
+	enrichPromptCustomize: false,
+	enrichPrompt: "",
 	enrichOnTranscribe: true,
 	hideAiNotes: false,
 	suggestAdhocTitle: true,
@@ -291,20 +306,15 @@ export function migrateSettings(
 						oneOnOneFolder: `${base}/1-1s`,
 					});
 				})();
-	// Upgrade an untouched default enrichment prompt so an existing vault (which
-	// persisted a full copy of the prompt) picks up newer placeholders like
-	// `{{actionItems}}`; a customized prompt is left as-is. A present-but-non-string
-	// value (hand-edited/corrupt data.json, e.g. `enrichPrompt: null`) is coerced
-	// to the current default so it can't override DEFAULT_ENRICH_PROMPT and break
-	// enrichment — matching sanitizeMigrated's "drop bad types" contract. An absent
-	// key is left untouched so DEFAULT_SETTINGS supplies it.
-	if ("enrichPrompt" in migrated) {
-		migrated.enrichPrompt = upgradeEnrichPrompt(
-			typeof migrated.enrichPrompt === "string"
-				? migrated.enrichPrompt
-				: undefined
-		);
-	}
+	// Default-backed text settings (enrichment prompt, note title pattern, note
+	// template) are no longer persisted as a full copy of their default — a copy
+	// couldn't follow plugin updates (e.g. the prompt's new `{{actionItems}}`).
+	// Each now has a "Customize" toggle (default off); while off the plugin reads
+	// the live built-in default at runtime. Drop any legacy persisted value unless
+	// the user opted into customizing, so an old default can't linger and resurface.
+	if (!migrated.enrichPromptCustomize) delete migrated.enrichPrompt;
+	if (!migrated.noteTitlePatternCustomize) delete migrated.noteTitlePattern;
+	if (!migrated.noteTemplateCustomize) delete migrated.noteTemplate;
 	return migrated;
 }
 
@@ -793,19 +803,42 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName(s.settings.enrichPrompt.name)
-			.setDesc(s.settings.enrichPrompt.desc)
-			.addTextArea((ta) => {
-				ta.setValue(this.plugin.settings.enrichPrompt).onChange(
-					async (value) => {
-						this.plugin.settings.enrichPrompt =
-							value || DEFAULT_ENRICH_PROMPT;
+			.setName(s.settings.enrichPromptCustomize.name)
+			.setDesc(s.settings.enrichPromptCustomize.desc)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.enrichPromptCustomize)
+					.onChange(async (value) => {
+						this.plugin.settings.enrichPromptCustomize = value;
+						// Seed the editor with the current default the first time
+						// the user opts in, so they start from a working base
+						// instead of a blank box.
+						if (value && !this.plugin.settings.enrichPrompt.trim()) {
+							this.plugin.settings.enrichPrompt =
+								DEFAULT_ENRICH_PROMPT;
+						}
 						await this.plugin.saveSettings();
-					}
-				);
-				ta.inputEl.rows = TEXTAREA_ROWS;
-				ta.inputEl.addClass("meeting-copilot-template-input");
-			});
+						this.display();
+					})
+			);
+
+		// Only show the editable prompt when customizing; otherwise the plugin
+		// uses the live DEFAULT_ENRICH_PROMPT and there's nothing to persist.
+		if (this.plugin.settings.enrichPromptCustomize) {
+			new Setting(containerEl)
+				.setName(s.settings.enrichPrompt.name)
+				.setDesc(s.settings.enrichPrompt.desc)
+				.addTextArea((ta) => {
+					ta.setValue(this.plugin.settings.enrichPrompt).onChange(
+						async (value) => {
+							this.plugin.settings.enrichPrompt = value;
+							await this.plugin.saveSettings();
+						}
+					);
+					ta.inputEl.rows = TEXTAREA_ROWS;
+					ta.inputEl.addClass("meeting-copilot-template-input");
+				});
+		}
 
 		new Setting(containerEl)
 			.setName(s.settings.actionItemsAsTasks.name)
@@ -1317,33 +1350,75 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName(s.settings.noteTitlePattern.name)
-			.setDesc(s.settings.noteTitlePattern.desc)
-			.addText((text) =>
-				text
-					.setPlaceholder(DEFAULT_TITLE_PATTERN)
-					.setValue(this.plugin.settings.noteTitlePattern)
+			.setName(s.settings.noteTitlePatternCustomize.name)
+			.setDesc(s.settings.noteTitlePatternCustomize.desc)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.noteTitlePatternCustomize)
 					.onChange(async (value) => {
-						this.plugin.settings.noteTitlePattern =
-							value.trim() || DEFAULT_TITLE_PATTERN;
+						this.plugin.settings.noteTitlePatternCustomize = value;
+						if (
+							value &&
+							!this.plugin.settings.noteTitlePattern.trim()
+						) {
+							this.plugin.settings.noteTitlePattern =
+								DEFAULT_TITLE_PATTERN;
+						}
 						await this.plugin.saveSettings();
+						this.display();
 					})
 			);
 
-		new Setting(containerEl)
-			.setName(s.settings.noteTemplate.name)
-			.setDesc(s.settings.noteTemplate.desc)
-			.addTextArea((ta) => {
-				ta.setValue(this.plugin.settings.noteTemplate).onChange(
-					async (value) => {
-						this.plugin.settings.noteTemplate =
-							value || DEFAULT_NOTE_TEMPLATE;
-						await this.plugin.saveSettings();
-					}
+		if (this.plugin.settings.noteTitlePatternCustomize) {
+			new Setting(containerEl)
+				.setName(s.settings.noteTitlePattern.name)
+				.setDesc(s.settings.noteTitlePattern.desc)
+				.addText((text) =>
+					text
+						.setPlaceholder(DEFAULT_TITLE_PATTERN)
+						.setValue(this.plugin.settings.noteTitlePattern)
+						.onChange(async (value) => {
+							this.plugin.settings.noteTitlePattern = value.trim();
+							await this.plugin.saveSettings();
+						})
 				);
-				ta.inputEl.rows = TEXTAREA_ROWS;
-				ta.inputEl.addClass("meeting-copilot-template-input");
-			});
+		}
+
+		new Setting(containerEl)
+			.setName(s.settings.noteTemplateCustomize.name)
+			.setDesc(s.settings.noteTemplateCustomize.desc)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.noteTemplateCustomize)
+					.onChange(async (value) => {
+						this.plugin.settings.noteTemplateCustomize = value;
+						if (
+							value &&
+							!this.plugin.settings.noteTemplate.trim()
+						) {
+							this.plugin.settings.noteTemplate =
+								DEFAULT_NOTE_TEMPLATE;
+						}
+						await this.plugin.saveSettings();
+						this.display();
+					})
+			);
+
+		if (this.plugin.settings.noteTemplateCustomize) {
+			new Setting(containerEl)
+				.setName(s.settings.noteTemplate.name)
+				.setDesc(s.settings.noteTemplate.desc)
+				.addTextArea((ta) => {
+					ta.setValue(this.plugin.settings.noteTemplate).onChange(
+						async (value) => {
+							this.plugin.settings.noteTemplate = value;
+							await this.plugin.saveSettings();
+						}
+					);
+					ta.inputEl.rows = TEXTAREA_ROWS;
+					ta.inputEl.addClass("meeting-copilot-template-input");
+				});
+		}
 
 		new Setting(containerEl)
 			.setName(s.settings.retentionDays.name)

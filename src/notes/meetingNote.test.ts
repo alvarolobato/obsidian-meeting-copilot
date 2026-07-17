@@ -8,6 +8,8 @@ import {
 	DEFAULT_NOTE_TEMPLATE,
 	DEFAULT_TITLE_PATTERN,
 	dropRecordingLink,
+	effectiveNoteTemplate,
+	effectiveTitlePattern,
 	extractTranscriptText,
 	findMeetingNoteForAudio,
 	findNoteByEventId,
@@ -432,6 +434,29 @@ describe("transcriptAtBottom (append)", () => {
 		expect(readBack.indexOf("first take")).toBeLessThan(
 			readBack.indexOf("second take")
 		);
+	});
+});
+
+describe("effectiveTitlePattern / effectiveNoteTemplate", () => {
+	it("use the built-in defaults when not customizing", () => {
+		expect(effectiveTitlePattern(false, "custom pattern")).toBe(
+			DEFAULT_TITLE_PATTERN
+		);
+		expect(effectiveNoteTemplate(false, "# custom")).toBe(
+			DEFAULT_NOTE_TEMPLATE
+		);
+	});
+
+	it("use the custom value when customizing with non-empty text", () => {
+		expect(effectiveTitlePattern(true, "{{title}}")).toBe("{{title}}");
+		expect(effectiveNoteTemplate(true, "# {{title}} only")).toBe(
+			"# {{title}} only"
+		);
+	});
+
+	it("fall back to the defaults when customizing but blank", () => {
+		expect(effectiveTitlePattern(true, "  ")).toBe(DEFAULT_TITLE_PATTERN);
+		expect(effectiveNoteTemplate(true, "")).toBe(DEFAULT_NOTE_TEMPLATE);
 	});
 });
 
