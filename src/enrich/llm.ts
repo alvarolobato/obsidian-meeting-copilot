@@ -9,6 +9,21 @@ export interface ChatParams {
 	temperature?: number;
 	/** Abort the request after this many ms (default 120s). */
 	timeoutMs?: number;
+	/**
+	 * Cancels the call: the returned promise rejects promptly with an AbortError
+	 * when this fires. requestUrl itself can't be aborted mid-flight, so the
+	 * in-flight request may still complete in the background, but the caller is
+	 * freed to release its queue slot / UI state (mirrors the timeout race).
+	 */
+	signal?: AbortSignal;
+}
+
+/** Thrown when {@link chatComplete} is cancelled via its `signal`. */
+export class ChatAbortError extends Error {
+	constructor() {
+		super("LLM request cancelled");
+		this.name = "ChatAbortError";
+	}
 }
 
 interface ChatResponse {
@@ -40,6 +55,7 @@ export async function chatComplete(p: ChatParams): Promise<string> {
 	if (typeof p.temperature === "number") {
 		payload.temperature = p.temperature;
 	}
+	if (p.signal?.aborted) throw new ChatAbortError();
 	const timeoutMs = p.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const timeout = new Promise<never>((_, reject) => {
@@ -53,6 +69,15 @@ export async function chatComplete(p: ChatParams): Promise<string> {
 			timeoutMs
 		);
 	});
+	// Reject as soon as the caller cancels, so a queued/running enrich releases
+	// its slot instead of waiting out the whole timeout.
+	let onAbort: (() => void) | undefined;
+	const aborted = new Promise<never>((_, reject) => {
+		const signal = p.signal;
+		if (!signal) return;
+		onAbort = () => reject(new ChatAbortError());
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
 	const request = requestUrl({
 		url,
 		method: "POST",
@@ -65,9 +90,10 @@ export async function chatComplete(p: ChatParams): Promise<string> {
 	});
 	let res;
 	try {
-		res = await Promise.race([request, timeout]);
+		res = await Promise.race([request, timeout, aborted]);
 	} finally {
 		if (timer) clearTimeout(timer);
+		if (onAbort) p.signal?.removeEventListener("abort", onAbort);
 	}
 
 	const data = res.json as ChatResponse | undefined;

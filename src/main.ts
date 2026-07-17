@@ -110,7 +110,7 @@ import { findExpiredRecordings, underFolder } from "./recordings/retention";
 
 /** Note section that holds action-item checkboxes (obsidian-tasks compatible). */
 const ACTION_ITEMS_HEADING = "## Action items";
-import { chatComplete } from "./enrich/llm";
+import { chatComplete, ChatAbortError } from "./enrich/llm";
 import { isPartialTranscript } from "./transcribe/partial";
 import { stripHallucinatedLines } from "./transcribe/hallucination";
 import {
@@ -179,9 +179,11 @@ import { MeetingPromptModal } from "./ui/meetingPromptModal";
 import { notifLog, notifDebugEnabled } from "./util/notifLog";
 import { decideWindowFocused, BrowserWindowState } from "./util/windowFocus";
 import {
+    QueueItem,
     QueueSnapshot,
-    TranscriptionCancelledError,
-    TranscriptionQueue,
+    TaskCancelledError,
+    TaskKind,
+    TaskQueue,
 } from "./transcribe/queue";
 import { MeetingDetector } from "./detect/meetingDetector";
 import { googleMeetActive, zoomInMeeting } from "./detect/probe";
@@ -222,10 +224,17 @@ export default class SystemRecordingPlugin extends Plugin {
     private statusTimeout: number | null = null;
     private durationInterval: number | null = null;
     private recordingStartTime: number | null = null;
-    /** Hover popover listing the transcription queue (running + next few waiting). */
+    /** Hover popover listing the task queue (running + next few waiting), with per-item cancel. */
     private queuePopoverEl: HTMLElement | null = null;
-    /** True while the pointer is over the status bar item (shows the popover). */
+    /** True while the pointer is over the status bar item or the popover (keeps it shown). */
     private statusHovered = false;
+    /**
+     * Deferred popover teardown: leaving the status bar (or the popover) hides it
+     * after a short grace so the pointer can cross the small gap between them —
+     * the popover is interactive now (per-item cancel), so it must survive the
+     * hand-off instead of vanishing mid-reach.
+     */
+    private popoverHideTimer: number | null = null;
     /** The recording timer text span, and the small transcription-count badge beside it. */
     private recTimeEl: HTMLElement | null = null;
     private recQueueEl: HTMLElement | null = null;
@@ -266,10 +275,12 @@ export default class SystemRecordingPlugin extends Plugin {
 	private currentRecordingEventEnd: number | null = null;
 	/** Vault-relative path of the in-progress recording, protected from retention. */
 	private currentRecordingPath: string | null = null;
-	/** Note paths currently being enriched, to prevent overlapping LLM runs. */
-	private enrichingPaths = new Set<string>();
-	/** Visible, serial transcription queue (running + waiting), with cancellation. */
-	private transcriptionQueue = new TranscriptionQueue((s) =>
+	/**
+	 * Visible, serial task queue (running + waiting) for all long-running
+	 * background work — transcription and enrichment — with per-item cancellation
+	 * and a transcribe→enrich dependency pipeline (issue #96).
+	 */
+	private taskQueue = new TaskQueue((s) =>
 		this.renderQueueStatus(s)
 	);
 	/**
@@ -611,7 +622,7 @@ export default class SystemRecordingPlugin extends Plugin {
         this.dashboardBlocks.clear();
 		this.statusHovered = false;
 		this.hideQueuePopover();
-		this.transcriptionQueue.cancelAll();
+		this.taskQueue.cancelAll();
 		this.scheduler?.stop();
 		this.agendaEvents.clear();
 		for (const renderer of this.liveActionRenderers) renderer.unload();
@@ -2031,7 +2042,7 @@ export default class SystemRecordingPlugin extends Plugin {
             onOpenRecording: (m) => void this.openRecording(m),
             onTranscribe: (m, mode) => void this.transcribeRecording(m, mode),
             onEnrich: (m) => {
-                if (m.note) void this.enrichMeetingNote(m.note);
+                if (m.note) void this.enqueueEnrich(m.note);
             },
             onOpenLink: (url) => this.openMeetingLink(url),
             onCopyLink: (url) => void this.copyMeetingLink(url),
@@ -2123,9 +2134,9 @@ export default class SystemRecordingPlugin extends Plugin {
                   )
                 : null;
             const processing =
-                this.enrichingPaths.has(entry.file.path) ||
+                this.taskQueue.has(this.enrichTaskId(entry.file.path)) ||
                 (recDest instanceof TFile &&
-                    this.transcriptionQueue.has(recDest.path));
+                    this.taskQueue.has(recDest.path));
 
             byPath.set(entry.file.path, entry.file);
             inputs.push({
@@ -2208,7 +2219,7 @@ export default class SystemRecordingPlugin extends Plugin {
                 );
             }
             const enBtn = actTd.createEl("button", { text: acts.enrich });
-            enBtn.onclick = (): void => void this.enrichMeetingNote(file);
+            enBtn.onclick = (): void => void this.enqueueEnrich(file);
         }
 
         restoreScroll();
@@ -3086,7 +3097,7 @@ export default class SystemRecordingPlugin extends Plugin {
             onOpenRecording: (m) => void this.openRecording(m),
             onTranscribe: (m, mode) => void this.transcribeRecording(m, mode),
             onEnrich: (m) => {
-                if (m.note) void this.enrichMeetingNote(m.note);
+                if (m.note) void this.enqueueEnrich(m.note);
             },
             onOpenLink: (m) => {
                 if (m.meetingUrl) this.openMeetingLink(m.meetingUrl);
@@ -3520,7 +3531,7 @@ export default class SystemRecordingPlugin extends Plugin {
     /**
      * Enqueues an audio file for headless transcription (no modal, no separate
      * transcript file). Transcriptions run one at a time through the visible
-     * {@link TranscriptionQueue}, so a second request waits (and is shown as
+     * {@link TaskQueue}, so a second request waits (and is shown as
      * queued) rather than fighting the first. The transcription slot is released
      * as soon as the transcript is inserted; enrichment then runs *outside* the
      * queue so a slow LLM call doesn't hold up the next transcription (or keep
@@ -3552,13 +3563,13 @@ export default class SystemRecordingPlugin extends Plugin {
         }
         // Dedupe overlapping runs (double-click, or auto-transcribe racing a
         // manual trigger) — each would cost an API call and write.
-        if (this.transcriptionQueue.has(recording.path)) {
+        if (this.taskQueue.has(recording.path)) {
             new Notice(t().notices.transcribeInProgress);
             return;
         }
         const label = this.transcribeLabelFor(recording);
         // A run already occupies the single slot, so this one will wait; say so.
-        if (this.transcriptionQueue.snapshot().running) {
+        if (this.taskQueue.snapshot().running) {
             new Notice(t().notices.transcribeQueued(label));
         }
 
@@ -3567,41 +3578,51 @@ export default class SystemRecordingPlugin extends Plugin {
         const enrichAfter: { value: { note: TFile; transcript: string } | null } = {
             value: null,
         };
+        const transcribeDone = this.taskQueue.enqueue({
+            id: recording.path,
+            label,
+            kind: "transcribe",
+            run: async (signal) => {
+                enrichAfter.value = await this.transcribeToNote(
+                    recording,
+                    label,
+                    mode,
+                    signal,
+                    fresh
+                );
+            },
+        });
+
+        // Chain enrichment as a dependent queue task (issue #96): it shows in the
+        // same popover, is independently cancellable, and runs only after the
+        // transcription SUCCEEDS — a cancelled/failed transcribe drops it. Enrich
+        // afterwards when auto-transcribe says so, or when the caller asked (the
+        // user clicked Enrich on a not-yet-transcribed note).
+        const shouldEnrich =
+            this.settings.enableEnrichment &&
+            (opts.enrichAfter || this.settings.enrichOnTranscribe);
+        if (shouldEnrich) {
+            const note = findMeetingNoteForAudio(this.app, recording);
+            if (note) {
+                void this.enqueueEnrichTask(note, {
+                    dependsOn: recording.path,
+                    // Pass the fresh transcript so enrichment works even when
+                    // insertTranscript is off and the note has no transcript yet.
+                    // Skip quietly if the run produced none (silence / no note).
+                    resolveTranscript: () => enrichAfter.value?.transcript,
+                    quiet: true,
+                });
+            }
+        }
+
         try {
-            await this.transcriptionQueue.enqueue({
-                id: recording.path,
-                label,
-                run: async (signal) => {
-                    enrichAfter.value = await this.transcribeToNote(
-                        recording,
-                        label,
-                        mode,
-                        signal,
-                        fresh
-                    );
-                },
-            });
+            await transcribeDone;
         } catch (e) {
             // Cancellation is expected; other failures were already surfaced with
             // their own notice/status inside transcribeToNote.
-            if (!(e instanceof TranscriptionCancelledError)) {
+            if (!(e instanceof TaskCancelledError)) {
                 console.warn("[Meeting Copilot] transcription failed", e);
             }
-            return;
-        }
-
-        const pending = enrichAfter.value;
-        // Enrich afterwards when the auto-transcribe setting says so, or when the
-        // caller explicitly asked to (e.g. the user clicked Enrich on a not-yet-
-        // transcribed note — we transcribe first, then resume into enrichment).
-        if (
-            pending &&
-            this.settings.enableEnrichment &&
-            (opts.enrichAfter || this.settings.enrichOnTranscribe)
-        ) {
-            // Pass the fresh transcript so enrichment works even when
-            // insertTranscript is off and the note has no transcript yet.
-            await this.enrichMeetingNote(pending.note, pending.transcript);
         }
     }
 
@@ -3611,7 +3632,7 @@ export default class SystemRecordingPlugin extends Plugin {
      * ({@link transcribeToNote}) and the multi-take rebuild
      * ({@link rebuildTranscriptFromTakes}). Drives the shared progress bar and
      * classifies the outcome (see {@link TranscribeTakeResult}). User
-     * cancellation throws {@link TranscriptionCancelledError} so the queue
+     * cancellation throws {@link TaskCancelledError} so the queue
      * rejects; every other failure returns an "error"/"partial" result.
      */
     private async transcribeTakeToText(
@@ -3623,7 +3644,7 @@ export default class SystemRecordingPlugin extends Plugin {
         // Single-owner progress: only the running job writes to the shared bar,
         // labelled with the meeting name (and any queued-behind count).
         const onProgress = (pct: number): void => {
-            if (this.transcriptionQueue.snapshot().running?.id !== recording.path) {
+            if (this.taskQueue.snapshot().running?.id !== recording.path) {
                 return;
             }
             const rounded = Math.round(pct);
@@ -3632,7 +3653,7 @@ export default class SystemRecordingPlugin extends Plugin {
                 this.transcribeStatusText(
                     label,
                     rounded,
-                    this.transcriptionQueue.waitingCount
+                    this.taskQueue.waitingCount
                 ),
                 "busy"
             );
@@ -3751,7 +3772,7 @@ export default class SystemRecordingPlugin extends Plugin {
                 // Re-throw as the queue's cancellation type so the caller's
                 // guard treats it as an expected cancel (no "failed" log) —
                 // matching the waiting-job path, which rejects with this error.
-                throw new TranscriptionCancelledError();
+                throw new TaskCancelledError();
             }
             const msg = e instanceof Error ? e.message : String(e);
             // The engine throws the partial text (marker-prefixed) for a
@@ -3869,7 +3890,7 @@ export default class SystemRecordingPlugin extends Plugin {
         // Bail if any take is already queued/running (a fresh auto-transcribe,
         // or a double trigger) — rebuilding while one is in flight would
         // interleave writes.
-        if (takes.some((take) => this.transcriptionQueue.has(take.path))) {
+        if (takes.some((take) => this.taskQueue.has(take.path))) {
             new Notice(t().notices.transcribeInProgress);
             return;
         }
@@ -3878,15 +3899,16 @@ export default class SystemRecordingPlugin extends Plugin {
         let allText = true;
         try {
             for (const take of takes) {
-                if (this.transcriptionQueue.snapshot().running) {
+                if (this.taskQueue.snapshot().running) {
                     new Notice(t().notices.transcribeQueued(label));
                 }
                 const outcome: { value: TranscribeTakeResult | null } = {
                     value: null,
                 };
-                await this.transcriptionQueue.enqueue({
+                await this.taskQueue.enqueue({
                     id: take.path,
                     label,
+                    kind: "transcribe",
                     run: async (signal) => {
                         outcome.value = await this.transcribeTakeToText(
                             take,
@@ -3915,7 +3937,7 @@ export default class SystemRecordingPlugin extends Plugin {
         } catch (e) {
             // Cancellation (or an unexpected queue failure) mid-rebuild: leave
             // the existing transcript untouched rather than write a partial one.
-            if (!(e instanceof TranscriptionCancelledError)) {
+            if (!(e instanceof TaskCancelledError)) {
                 console.warn("[Meeting Copilot] transcript rebuild failed", e);
             }
             return;
@@ -3940,7 +3962,9 @@ export default class SystemRecordingPlugin extends Plugin {
         }
         this.agendaEvents.emit("changed", undefined);
         if (this.settings.enableEnrichment && this.settings.enrichOnTranscribe) {
-            await this.enrichMeetingNote(note, combined);
+            // The rebuild already ran through the queue; enqueue enrichment as its
+            // own visible/cancellable task with the freshly combined transcript.
+            void this.enqueueEnrichTask(note, { transcriptOverride: combined, quiet: true });
         }
     }
 
@@ -3973,8 +3997,13 @@ export default class SystemRecordingPlugin extends Plugin {
         }
         // The live recording timer owns the bar; and an idle queue leaves any
         // just-set terminal status (added / failed / cancelled) to settle on its
-        // own rather than clearing it here.
-        if (this.recorder.isRecording || !snapshot.running) return;
+        // own rather than clearing it here. A running *enrich* owns the bar via
+        // its own setEnrichStatus, so only the transcribe line is driven here.
+        if (
+            this.recorder.isRecording ||
+            snapshot.running?.kind !== "transcribe"
+        )
+            return;
         // Preserve the live percentage across queue-change repaints: progress
         // ticks are sparse, so without this the bar would sit on a percent-less
         // label between them whenever a job is queued behind the running one.
@@ -4007,22 +4036,46 @@ export default class SystemRecordingPlugin extends Plugin {
         return waiting > 0 ? base + t().statusBar.queuedSuffix(waiting) : base;
     }
 
-    /** Enter/leave the status bar: reveal or tear down the queue popover. */
+    /**
+     * Enter/leave the status bar (or the popover): reveal or defer-tear-down the
+     * queue popover. Leaving schedules the hide on a short grace so the pointer
+     * can cross into the interactive popover without it vanishing (and back).
+     */
     private setStatusHover(hovering: boolean): void {
-        this.statusHovered = hovering;
-        if (!hovering) {
-            this.hideQueuePopover();
+        if (hovering) {
+            this.cancelPopoverHide();
+            this.statusHovered = true;
+            const snapshot = this.taskQueue.snapshot();
+            if (snapshot.running || snapshot.waiting.length > 0)
+                this.showQueuePopover(snapshot);
             return;
         }
-        const snapshot = this.transcriptionQueue.snapshot();
-        if (snapshot.running || snapshot.waiting.length > 0)
-            this.showQueuePopover(snapshot);
+        this.schedulePopoverHide();
+    }
+
+    /** Cancels a pending popover teardown (pointer re-entered the bar/popover). */
+    private cancelPopoverHide(): void {
+        if (this.popoverHideTimer !== null) {
+            window.clearTimeout(this.popoverHideTimer);
+            this.popoverHideTimer = null;
+        }
+    }
+
+    /** Hides the popover after a short grace, so the bar↔popover hand-off survives. */
+    private schedulePopoverHide(): void {
+        this.cancelPopoverHide();
+        this.popoverHideTimer = window.setTimeout(() => {
+            this.popoverHideTimer = null;
+            this.statusHovered = false;
+            this.hideQueuePopover();
+        }, 200);
     }
 
     /**
      * Shows (or refreshes) the roll-up panel above the status bar listing the
-     * job being transcribed plus the next few waiting behind it. Display-only
-     * (no pointer events) so moving onto it never steals the hover and flickers.
+     * running task plus the next few waiting behind it. Each row carries a cancel
+     * (x) control and the running transcription's live percentage (issue #96);
+     * the panel is interactive, so a short hide grace bridges the bar↔popover gap.
      */
     private showQueuePopover(snapshot: QueueSnapshot): void {
         if (
@@ -4034,6 +4087,14 @@ export default class SystemRecordingPlugin extends Plugin {
             this.queuePopoverEl = document.body.createDiv({
                 cls: "mc-queue-popover",
             });
+            // Keep the panel alive while the pointer is over it (it's clickable),
+            // and defer teardown when the pointer leaves.
+            this.queuePopoverEl.addEventListener("mouseenter", () =>
+                this.setStatusHover(true)
+            );
+            this.queuePopoverEl.addEventListener("mouseleave", () =>
+                this.schedulePopoverHide()
+            );
         }
         const el = this.queuePopoverEl;
         el.empty();
@@ -4042,25 +4103,18 @@ export default class SystemRecordingPlugin extends Plugin {
             text: t().statusBar.queuePopoverTitle,
         });
         const list = el.createDiv({ cls: "mc-queue-popover-list" });
-        // `running` is momentarily null between jobs; still show the queue then.
+        // `running` is momentarily null between tasks; still show the queue then.
         if (snapshot.running) {
-            const running = list.createDiv({
-                cls: "mc-queue-popover-item is-running",
-            });
-            setIcon(
-                running.createSpan({ cls: "mc-queue-popover-icon" }),
-                "loader-2"
-            );
-            running.createSpan({
-                cls: "mc-queue-popover-label",
-                text: snapshot.running.label,
-            });
+            const pct =
+                snapshot.running.kind === "transcribe" &&
+                this.runningProgress?.id === snapshot.running.id
+                    ? this.runningProgress.pct
+                    : null;
+            this.renderPopoverRow(list, snapshot.running, true, pct);
         }
         const limit = SystemRecordingPlugin.QUEUE_POPOVER_LIMIT;
         for (const item of snapshot.waiting.slice(0, limit)) {
-            const row = list.createDiv({ cls: "mc-queue-popover-item" });
-            setIcon(row.createSpan({ cls: "mc-queue-popover-icon" }), "clock");
-            row.createSpan({ cls: "mc-queue-popover-label", text: item.label });
+            this.renderPopoverRow(list, item, false, null);
         }
         const extra = snapshot.waiting.length - limit;
         if (extra > 0) {
@@ -4082,20 +4136,72 @@ export default class SystemRecordingPlugin extends Plugin {
         window.requestAnimationFrame(() => el.addClass("is-visible"));
     }
 
-    /** Removes the queue hover popover. */
+    /**
+     * Renders one popover row: a kind icon (spinner while running), the verb +
+     * meeting label, the running transcription's percentage when known, and a
+     * cancel (x) control wired to {@link TaskQueue.cancel} for this item.
+     */
+    private renderPopoverRow(
+        list: HTMLElement,
+        item: QueueItem,
+        running: boolean,
+        pct: number | null
+    ): void {
+        const row = list.createDiv({
+            cls: running
+                ? "mc-queue-popover-item is-running"
+                : "mc-queue-popover-item",
+        });
+        setIcon(
+            row.createSpan({ cls: "mc-queue-popover-icon" }),
+            running ? "loader-2" : this.queueKindIcon(item.kind)
+        );
+        const verb =
+            item.kind === "transcribe"
+                ? t().statusBar.queueKindTranscribe
+                : t().statusBar.queueKindEnrich;
+        row.createSpan({
+            cls: "mc-queue-popover-label",
+            text: `${verb} · ${item.label}`,
+        });
+        if (pct !== null) {
+            row.createSpan({
+                cls: "mc-queue-popover-pct",
+                text: `${pct}%`,
+            });
+        }
+        const cancel = row.createEl("button", {
+            cls: "mc-queue-popover-cancel",
+            attr: { "aria-label": t().statusBar.queueCancel, type: "button" },
+        });
+        setIcon(cancel, "x");
+        cancel.addEventListener("click", (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            this.taskQueue.cancel(item.id);
+        });
+    }
+
+    /** The lucide icon for a queued task kind (waiting rows; running rows spin a loader). */
+    private queueKindIcon(kind: TaskKind): string {
+        return kind === "enrich" ? "sparkles" : "clock";
+    }
+
+    /** Removes the queue hover popover and cancels any pending teardown. */
     private hideQueuePopover(): void {
+        this.cancelPopoverHide();
         this.queuePopoverEl?.remove();
         this.queuePopoverEl = null;
     }
 
     /** Cancels the running transcription and drops any queued behind it (command-palette action). */
     private cancelActiveTranscription(): void {
-        const snapshot = this.transcriptionQueue.snapshot();
+        const snapshot = this.taskQueue.snapshot();
         if (!snapshot.running && snapshot.waiting.length === 0) {
             new Notice(t().notices.nothingTranscribing);
             return;
         }
-        this.transcriptionQueue.cancelAll();
+        this.taskQueue.cancelAll();
     }
 
     /**
@@ -4356,7 +4462,7 @@ export default class SystemRecordingPlugin extends Plugin {
             // bar. Count waiting even during the brief gap where one job has
             // finished and the next hasn't started (running momentarily null),
             // so the badge doesn't flicker to empty between jobs.
-            const snapshot = this.transcriptionQueue.snapshot();
+            const snapshot = this.taskQueue.snapshot();
             const count =
                 snapshot.waiting.length + (snapshot.running ? 1 : 0);
             this.recQueueEl?.setText(
@@ -4429,16 +4535,17 @@ export default class SystemRecordingPlugin extends Plugin {
         }
     }
 
-    /** True while a transcription is actively running (it owns the status bar). */
+    /** True while a *transcription* task is the running one (it owns the status bar's progress line). */
     private get transcriptionRunning(): boolean {
-        return this.transcriptionQueue.snapshot().running !== null;
+        return this.taskQueue.snapshot().running?.kind === "transcribe";
     }
 
     /**
-     * Enrichment/title status writes yield the status bar to an active
-     * transcription (which now runs concurrently, since enrichment happens after
-     * the queue slot is released). Keeps the bar single-owner: transcription
-     * progress wins; enrichment shows its state only when the queue is idle.
+     * Enrichment/title status writes yield the status bar to a running
+     * transcription task. The queue runs one task at a time, so an enrichment is
+     * only ever the running task when no transcription is — this keeps the bar
+     * single-owner: a transcription's progress wins; enrichment shows its own
+     * state otherwise.
      */
     private setEnrichStatus(
         text: string,
@@ -4690,14 +4797,24 @@ export default class SystemRecordingPlugin extends Plugin {
             new Notice(t().notices.notAMeetingNote);
             return;
         }
-        await this.enrichMeetingNote(file);
+        await this.enqueueEnrich(file);
     }
 
-    /** Generates AI notes from the note's manual notes + transcript and inserts a gray callout. */
-    private async enrichMeetingNote(
-        file: TFile,
-        transcriptOverride?: string
-    ): Promise<void> {
+    /** The task-queue id for enriching a note; namespaced so it can't collide with a recording path. */
+    private enrichTaskId(notePath: string): string {
+        return `enrich:${notePath}`;
+    }
+
+    /**
+     * The single entry point for "enrich this note" (issue #96). Validates the
+     * enrichment config, and — when the note has no transcript yet but owns a
+     * recording — transcribes first via {@link launchTranscriber} (which chains
+     * the enrichment as a dependent queue task). Otherwise it enqueues the
+     * enrichment directly. "Enrich" thus means "produce the enrichment", pulling
+     * transcription in automatically when needed; it only reports "nothing to
+     * enrich" when there's neither transcript/notes nor a recording to work from.
+     */
+    private async enqueueEnrich(file: TFile): Promise<void> {
         if (!this.settings.enableEnrichment) {
             new Notice(t().notices.enrichDisabled);
             return;
@@ -4707,33 +4824,90 @@ export default class SystemRecordingPlugin extends Plugin {
             new Notice(t().notices.enrichNotConfigured);
             return;
         }
-        // Resume the workflow: a recorded-but-not-yet-transcribed note has no
-        // transcript to enrich, so transcribe its recording first — the
-        // transcription pipeline then enriches automatically once the transcript
-        // lands. Skipped when a fresh transcript is handed in (i.e. we were
-        // called *by* that pipeline) to avoid looping.
-        const hasFreshTranscript =
-            transcriptOverride !== undefined &&
-            transcriptOverride.trim().length > 0;
-        if (!hasFreshTranscript) {
-            const existing = extractTranscript(await this.app.vault.read(file));
-            if (!existing.trim()) {
-                const recording = this.agendaMeetingFromNote(file).recording;
-                if (recording) {
-                    await this.launchTranscriber(recording, "auto", {
-                        enrichAfter: true,
-                    });
-                    return;
-                }
+        // No transcript yet but a recording exists → transcribe first; that
+        // pipeline enqueues the enrichment as a dependent task once it lands.
+        const existing = extractTranscript(await this.app.vault.read(file));
+        if (!existing.trim()) {
+            const recording = this.agendaMeetingFromNote(file).recording;
+            if (recording) {
+                await this.launchTranscriber(recording, "auto", {
+                    enrichAfter: true,
+                });
+                return;
             }
         }
-        // Guard against overlapping runs on the same note (double-click, agenda
-        // + command, or auto-enrich racing a manual enrich).
-        if (this.enrichingPaths.has(file.path)) {
+        // A transcript exists (or there's no recording, but there may still be
+        // manual notes / action items worth enriching) — enqueue it. The worker
+        // surfaces "nothing to enrich" if the note is truly empty.
+        void this.enqueueEnrichTask(file, {});
+    }
+
+    /**
+     * Enqueues an enrichment task on the shared queue: visible in the popover,
+     * per-item cancellable, and (optionally) gated behind a transcription via
+     * `dependsOn`. Deduped by the note's enrich id, so a double-trigger runs
+     * once. `resolveTranscript` is read when the task starts (the pipeline uses
+     * it to hand over the transcript the transcription just produced); `quiet`
+     * suppresses the "nothing to enrich" notice for automatic runs.
+     */
+    private enqueueEnrichTask(
+        note: TFile,
+        opts: {
+            dependsOn?: string;
+            transcriptOverride?: string;
+            resolveTranscript?: () => string | undefined;
+            quiet?: boolean;
+        }
+    ): Promise<void> {
+        const id = this.enrichTaskId(note.path);
+        // A manual re-trigger while an enrich for this note is already queued or
+        // running: say so (a dependent pipeline task never shows this).
+        if (opts.dependsOn === undefined && this.taskQueue.has(id)) {
             new Notice(t().notices.enrichInProgress);
+        }
+        const promise = this.taskQueue.enqueue({
+            id,
+            label: this.meetingNoteLabel(note),
+            kind: "enrich",
+            dependsOn: opts.dependsOn,
+            run: async (signal) => {
+                const transcript =
+                    opts.transcriptOverride ?? opts.resolveTranscript?.();
+                await this.runEnrich(note, transcript, signal, opts.quiet ?? false);
+            },
+        });
+        // Cancellation is expected/quiet; log only unexpected failures (runEnrich
+        // surfaces its own error notice, so this is a last-resort net).
+        promise.catch((e) => {
+            if (!(e instanceof TaskCancelledError)) {
+                console.warn("[Meeting Copilot] enrichment failed", e);
+            }
+        });
+        return promise;
+    }
+
+    /**
+     * Generates AI notes from the note's manual notes + transcript and inserts a
+     * gray callout — the worker run by an enrichment queue task. Honors `signal`
+     * (a cancel rejects promptly and skips the write) and, when `quiet`, stays
+     * silent if there's nothing to enrich (an automatic pipeline run).
+     */
+    private async runEnrich(
+        file: TFile,
+        transcriptOverride: string | undefined,
+        signal: AbortSignal,
+        quiet: boolean
+    ): Promise<void> {
+        const { apiBaseUrl, apiKey, enrichModel } = this.settings;
+        // Config can change between enqueue and run; re-check and bail quietly.
+        if (
+            !this.settings.enableEnrichment ||
+            !apiBaseUrl ||
+            !apiKey ||
+            !enrichModel
+        ) {
             return;
         }
-        this.enrichingPaths.add(file.path);
         let enrichedOk = false;
         try {
             const content = await this.app.vault.read(file);
@@ -4755,7 +4929,7 @@ export default class SystemRecordingPlugin extends Plugin {
             // that only has a "## Action items" list (no notes/transcript) is
             // still worth enriching — the model can tidy/unify those items.
             if (!notes && !transcript && manualActionItems.length === 0) {
-                new Notice(t().notices.nothingToEnrich);
+                if (!quiet) new Notice(t().notices.nothingToEnrich);
                 return;
             }
 
@@ -4789,6 +4963,7 @@ export default class SystemRecordingPlugin extends Plugin {
                     ),
                     ctx
                 ),
+                signal,
             });
             // Re-read in case the note changed during the network call.
             const current = await this.app.vault.read(file);
@@ -4830,12 +5005,17 @@ export default class SystemRecordingPlugin extends Plugin {
             this.agendaEvents.emit("changed", undefined);
             enrichedOk = true;
         } catch (e) {
+            // A cancel (via signal) is expected: stay quiet and rethrow as the
+            // queue's cancellation type so it rejects (and drops any dependents)
+            // rather than logging a failure or writing a partial note.
+            if (this.isEnrichCancelled(e, signal)) {
+                if (!this.transcriptionRunning) this.clearActionStatus();
+                throw new TaskCancelledError();
+            }
             new Notice(
                 t().notices.enrichError(e instanceof Error ? e.message : String(e))
             );
             this.setEnrichStatus(t().statusBar.enrichFailed, "error");
-        } finally {
-            this.enrichingPaths.delete(file.path);
         }
 
         // After the AI summary, offer a generated title for unplanned meetings
@@ -4846,8 +5026,13 @@ export default class SystemRecordingPlugin extends Plugin {
             this.isAdhocNote(file) &&
             !this.titleAlreadySuggested(file)
         ) {
-            await this.suggestAdhocTitle(file, transcriptOverride);
+            await this.suggestAdhocTitle(file, transcriptOverride, signal);
         }
+    }
+
+    /** Whether an error from an enrichment LLM call is a user cancellation (queue abort). */
+    private isEnrichCancelled(error: unknown, signal: AbortSignal): boolean {
+        return signal.aborted || error instanceof ChatAbortError;
     }
 
     /** True once we've offered an AI title for this note (flagged in frontmatter). */
@@ -4873,7 +5058,8 @@ export default class SystemRecordingPlugin extends Plugin {
      */
     private async suggestAdhocTitle(
         file: TFile,
-        transcriptOverride?: string
+        transcriptOverride?: string,
+        signal?: AbortSignal
     ): Promise<void> {
         const { apiBaseUrl, apiKey, enrichModel } = this.settings;
         if (!apiBaseUrl || !apiKey || !enrichModel) return;
@@ -4896,6 +5082,7 @@ export default class SystemRecordingPlugin extends Plugin {
                 model: enrichModel,
                 system: TITLE_SYSTEM_PROMPT,
                 user: buildTitlePrompt(notes, transcript),
+                signal,
             });
             // Don't wipe a concurrent transcription's status; we only set ours
             // when the queue was idle.

@@ -382,7 +382,7 @@ describe("transcriptAtBottom", () => {
 			"Alice: hi\nBob: hello"
 		);
 
-		// Mirror enrichMeetingNote: pull the transcript out first, upsert the
+		// Mirror runEnrich: pull the transcript out first, upsert the
 		// action items, then re-pin the transcript to the bottom.
 		const transcript = extractTranscript(withTranscript);
 		expect(transcript.length).toBeGreaterThan(0);

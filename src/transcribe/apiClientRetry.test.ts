@@ -2,7 +2,11 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 import { __setRequestUrl } from "../../test/obsidian-mock";
 
-import { ApiClient, type ApiConfig } from "./vendor/infrastructure/api/ApiClient";
+import {
+	ApiClient,
+	RequestTimeoutError,
+	type ApiConfig,
+} from "./vendor/infrastructure/api/ApiClient";
 
 /**
  * Minimal concrete client to exercise the shared retry logic. `getTimerWindow`
@@ -153,5 +157,95 @@ describe("ApiClient network-error retry", () => {
 
 		await expect(client().run()).resolves.toEqual({ ok: true });
 		expect(calls).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe("ApiClient per-request timeout (issue #96)", () => {
+	/** A request that never settles — the "gateway accepted then stalled" case. */
+	const STALL = (): Promise<never> => new Promise<never>(() => {});
+
+	it("times out a stalled request, retries, then succeeds", async () => {
+		vi.useFakeTimers();
+		try {
+			let n = 0;
+			__setRequestUrl(() => {
+				n++;
+				return n === 1 ? STALL() : OK;
+			});
+			const c = new TestClient({
+				baseUrl: "https://example.test",
+				apiKey: "k",
+				timeout: 100,
+				retryDelay: 1,
+				maxRetries: 3,
+			});
+			const p = c.run();
+			// Past the 100ms timeout (→ RequestTimeoutError) + the tiny backoff,
+			// so the retry fires and the second attempt returns OK.
+			await vi.advanceTimersByTimeAsync(200);
+			await expect(p).resolves.toEqual({ ok: true });
+			expect(n).toBe(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("gives up after maxRetries of repeated timeouts", async () => {
+		vi.useFakeTimers();
+		try {
+			const calls = vi.fn();
+			__setRequestUrl(() => {
+				calls();
+				return STALL();
+			});
+			const c = new TestClient({
+				baseUrl: "https://example.test",
+				apiKey: "k",
+				timeout: 100,
+				retryDelay: 1,
+				maxRetries: 2,
+			});
+			let err: unknown;
+			const p = c.run().catch((e) => {
+				err = e;
+			});
+			await vi.advanceTimersByTimeAsync(1000);
+			await p;
+			expect(err).toBeInstanceOf(RequestTimeoutError);
+			expect(calls).toHaveBeenCalledTimes(3); // initial + 2 retries
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("settles a stalled request promptly on user abort (before the timeout)", async () => {
+		vi.useFakeTimers();
+		try {
+			const calls = vi.fn();
+			__setRequestUrl(() => {
+				calls();
+				return STALL();
+			});
+			const controller = new AbortController();
+			const c = new TestClient({
+				baseUrl: "https://example.test",
+				apiKey: "k",
+				// A long timeout so only the abort — not the timeout — can settle it.
+				timeout: 10 * 60 * 1000,
+				retryDelay: 1,
+				maxRetries: 3,
+			});
+			let err: unknown;
+			const p = c.run(controller.signal).catch((e) => {
+				err = e;
+			});
+			controller.abort();
+			await vi.advanceTimersByTimeAsync(1);
+			await p;
+			expect(String((err as Error)?.message)).toMatch(/cancelled by user/);
+			expect(calls).toHaveBeenCalledTimes(1); // no retry after a user abort
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

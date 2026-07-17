@@ -16,6 +16,7 @@ import { ProgressTracker } from "./vendor/ui/ProgressTracker";
 import { getModelConfig } from "./vendor/config/ModelProcessingConfig";
 import { createSerialQueue } from "../util/serialize";
 import { isDiarizationCancelled } from "./cancellation";
+import { startInactivityWatchdog } from "./watchdog";
 import { runJobsSequentially } from "./backend";
 import type { DiarSegment } from "./diarize";
 import {
@@ -107,6 +108,15 @@ const PREGATE_MIN_CHUNK_SECONDS = 5.0;
 // dropped; only silence is added around the real utterance.
 const PREGATE_MIN_STANDALONE_SECONDS = 3.0;
 
+// Host-level no-progress watchdog (issue #96). ApiClient already bounds each
+// request by its per-call timeout (60s Whisper / 300s GPT-4o), and a stalled
+// chunk can retry up to maxRetries — so one chunk can legitimately take several
+// minutes before it either advances or gives up. This ceiling sits well above
+// that worst case: it fires only when the whole pass makes NO progress for this
+// long, catching a true hang *outside* a single request (which would otherwise
+// wedge the serial queue) without ever interrupting a run that's still moving.
+const WATCHDOG_INACTIVITY_MS = 25 * 60 * 1000;
+
 /** High-resolution clock when available, wall-clock otherwise. */
 function perfNow(): number {
 	return typeof performance !== "undefined" && typeof performance.now === "function"
@@ -165,7 +175,50 @@ export class OpenAICompatibleBackend implements TranscriptionBackend {
 		// One serial slot for the whole request: both diarized passes (me, them)
 		// run back-to-back under a single slot so the process-global endpoint
 		// seam can't be overwritten mid-flight by another transcription.
-		return serial(() => this.runJobs(req));
+		return serial(() => this.runWithWatchdog(req));
+	}
+
+	/**
+	 * Runs the request under a no-progress watchdog (issue #96): a stall that
+	 * makes no progress for {@link WATCHDOG_INACTIVITY_MS} aborts the pass so the
+	 * serial queue can't hang forever. The watchdog's abort is chained with the
+	 * caller's signal into one controller passed down to the engine; each progress
+	 * tick resets the window. A watchdog abort surfaces as a cancellation (the
+	 * timeout *is* an automatic cancel), so the caller treats it like any abort.
+	 */
+	private async runWithWatchdog(req: TranscribeRequest): Promise<JobResult[]> {
+		const controller = new AbortController();
+		const onOuterAbort = (): void => controller.abort();
+		if (req.signal) {
+			if (req.signal.aborted) controller.abort();
+			else req.signal.addEventListener("abort", onOuterAbort, { once: true });
+		}
+		const watchdog = startInactivityWatchdog(WATCHDOG_INACTIVITY_MS, () => {
+			console.warn(
+				`[Meeting Copilot][transcribe] no progress for ${
+					WATCHDOG_INACTIVITY_MS / 1000
+				}s — aborting the pass (watchdog)`
+			);
+			controller.abort();
+		});
+		// Reset the window on every progress tick (and forward it). Always supply
+		// a callback so the engine emits progress even when the caller passed none
+		// — otherwise the watchdog would have nothing to ping and could fire on a
+		// healthy silent run.
+		const onProgress = (percent: number): void => {
+			watchdog.ping();
+			req.onProgress?.(percent);
+		};
+		try {
+			return await this.runJobs({
+				...req,
+				signal: controller.signal,
+				onProgress,
+			});
+		} finally {
+			watchdog.stop();
+			if (req.signal) req.signal.removeEventListener("abort", onOuterAbort);
+		}
 	}
 
 	private async runJobs(req: TranscribeRequest): Promise<JobResult[]> {
