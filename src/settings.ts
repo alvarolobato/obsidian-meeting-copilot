@@ -12,7 +12,7 @@ import {
 	DEFAULT_NOTE_TEMPLATE,
 	DEFAULT_TITLE_PATTERN,
 } from "./notes/meetingNote";
-import { DEFAULT_ENRICH_PROMPT } from "./enrich/prompt";
+import { DEFAULT_ENRICH_PROMPT, upgradeEnrichPrompt } from "./enrich/prompt";
 import { listModels } from "./enrich/models";
 import {
 	inferSttApiType,
@@ -270,21 +270,34 @@ export function migrateSettings(
 	loaded: Record<string, unknown> | null
 ): Partial<SystemRecordingSettings> {
 	if (!loaded) return {};
-	if (loaded["oneOffFolderTemplate"] !== undefined) {
-		return sanitizeMigrated(loaded as Partial<SystemRecordingSettings>);
+	const migrated =
+		loaded["oneOffFolderTemplate"] !== undefined
+			? sanitizeMigrated(loaded as Partial<SystemRecordingSettings>)
+			: (() => {
+					const legacyFolder = loaded["meetingsFolder"];
+					const base =
+						typeof legacyFolder === "string" && legacyFolder
+							? legacyFolder
+							: "Meetings";
+					return sanitizeMigrated({
+						...(loaded as Partial<SystemRecordingSettings>),
+						oneOffFolderTemplate: base,
+						seriesFolderTemplate: `${base}/{{series}}`,
+						// Nest ad-hoc notes under an "Ad-hoc" subfolder of the legacy
+						// folder, matching the new default and the sibling `1-1s`
+						// nesting, rather than dropping them loose alongside scheduled
+						// meetings.
+						adhocFolder: `${base}/Ad-hoc`,
+						oneOnOneFolder: `${base}/1-1s`,
+					});
+				})();
+	// Upgrade an untouched default enrichment prompt so an existing vault (which
+	// persisted a full copy of the prompt) picks up newer placeholders like
+	// `{{actionItems}}`. A customized prompt is left as-is.
+	if (typeof migrated.enrichPrompt === "string") {
+		migrated.enrichPrompt = upgradeEnrichPrompt(migrated.enrichPrompt);
 	}
-	const legacyFolder = loaded["meetingsFolder"];
-	const base = typeof legacyFolder === "string" && legacyFolder ? legacyFolder : "Meetings";
-	return sanitizeMigrated({
-		...(loaded as Partial<SystemRecordingSettings>),
-		oneOffFolderTemplate: base,
-		seriesFolderTemplate: `${base}/{{series}}`,
-		// Nest ad-hoc notes under an "Ad-hoc" subfolder of the legacy folder,
-		// matching the new default and the sibling `1-1s` nesting, rather than
-		// dropping them loose alongside scheduled meetings.
-		adhocFolder: `${base}/Ad-hoc`,
-		oneOnOneFolder: `${base}/1-1s`,
-	});
+	return migrated;
 }
 
 export class SystemRecordingSettingTab extends PluginSettingTab {

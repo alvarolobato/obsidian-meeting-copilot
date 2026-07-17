@@ -34,13 +34,31 @@ describe("extractActionItems", () => {
 
 describe("extractManualActionItems", () => {
 	it("returns top-level unchecked items with markers stripped", () => {
-		const body = ["- [ ] Follow up with Bob", "* [ ] Draft the RFC"].join(
-			"\n"
-		);
+		const body = [
+			"- [ ] Follow up with Bob",
+			"* [ ] Draft the RFC",
+			"1. [ ] File the ticket",
+		].join("\n");
 		expect(extractManualActionItems(body)).toEqual([
 			"Follow up with Bob",
 			"Draft the RFC",
+			"File the ticket",
 		]);
+	});
+
+	it("ignores a transcript callout that trails the section body", () => {
+		// enrichMeetingNote reads manual items before stripping the transcript,
+		// and the transcript callout has no heading so it sits inside the last
+		// section (usually "## Action items"). Its quoted lines must not become
+		// action items.
+		const body = [
+			"- [ ] Real task",
+			"",
+			"> [!quote]- Transcript",
+			"> Me: - [ ] this is speech, not a task",
+			"> Them: hi",
+		].join("\n");
+		expect(extractManualActionItems(body)).toEqual(["Real task"]);
 	});
 
 	it("skips completed items and indented sub-bullets", () => {
@@ -112,5 +130,35 @@ describe("refreshActionItems", () => {
 	it("returns the fresh items when there is no existing section", () => {
 		const merged = refreshActionItems("", ["- [ ] first task"]);
 		expect(merged).toBe("- [ ] first task");
+	});
+});
+
+// Mirrors the merge chain in enrichMeetingNote (extractActionItems ->
+// refreshActionItems) to lock in the #93 fix: when the model returns a unified
+// "Next steps" that carries over the hand-written items, the merge preserves
+// them (improved) instead of dropping them, with no duplication.
+describe("enrichment merge preserves hand-written action items", () => {
+	it("keeps an improved hand-written item and appends new ones", () => {
+		const existingSection = "- [ ] Follow up with Bob";
+		const modelOutput = [
+			"### TL;DR",
+			"- shipped the thing",
+			"",
+			"### Next steps",
+			"- **Follow up with Bob about Q3 pricing**",
+			"- **Draft the launch email**",
+		].join("\n");
+
+		const { items } = extractActionItems(modelOutput);
+		const merged = refreshActionItems(existingSection, items);
+
+		expect(merged).toBe(
+			[
+				"- [ ] **Follow up with Bob about Q3 pricing**",
+				"- [ ] **Draft the launch email**",
+			].join("\n")
+		);
+		// The original, un-improved wording is gone (superseded, not duplicated).
+		expect(merged).not.toContain("Follow up with Bob\n");
 	});
 });

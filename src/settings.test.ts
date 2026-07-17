@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS, migrateSettings } from "./settings";
+import { DEFAULT_ENRICH_PROMPT } from "./enrich/prompt";
+import { LEGACY_ENRICH_PROMPTS } from "./enrich/legacyEnrichPrompts";
 
 describe("migrateSettings", () => {
 	it("derives the folder templates from a legacy meetingsFolder", () => {
@@ -84,5 +86,28 @@ describe("migrateSettings", () => {
 	it("keeps a valid oneOffFolderTemplate untouched", () => {
 		const migrated = migrateSettings({ oneOffFolderTemplate: "Custom/{{year}}" });
 		expect(migrated.oneOffFolderTemplate).toBe("Custom/{{year}}");
+	});
+
+	it("upgrades a persisted legacy default enrichPrompt to the current default", () => {
+		const legacy = LEGACY_ENRICH_PROMPTS[0];
+		const migrated = migrateSettings({
+			oneOffFolderTemplate: "Meetings",
+			enrichPrompt: legacy,
+		});
+		expect(migrated.enrichPrompt).toBe(DEFAULT_ENRICH_PROMPT);
+	});
+
+	it("leaves a customized enrichPrompt untouched", () => {
+		const custom = "Custom prompt with {{notes}} and {{transcript}}.";
+		const migrated = migrateSettings({
+			oneOffFolderTemplate: "Meetings",
+			enrichPrompt: custom,
+		});
+		expect(migrated.enrichPrompt).toBe(custom);
+	});
+
+	it("does not add enrichPrompt when it was not persisted", () => {
+		const migrated = migrateSettings({ oneOffFolderTemplate: "Meetings" });
+		expect(migrated).not.toHaveProperty("enrichPrompt");
 	});
 });

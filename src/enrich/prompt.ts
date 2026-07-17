@@ -1,3 +1,5 @@
+import { LEGACY_ENRICH_PROMPTS } from "./legacyEnrichPrompts";
+
 /** Context assembled from the meeting note and calendar frontmatter. */
 export interface EnrichmentContext {
 	title: string;
@@ -90,4 +92,24 @@ export function fillPrompt(template: string, ctx: EnrichmentContext): string {
 		const value = ctx[key];
 		return value && value.trim().length > 0 ? value : "(none)";
 	});
+}
+
+/**
+ * Upgrades a stored enrichment prompt to the current default when it's an
+ * *untouched* default — empty, the current default, or any previously shipped
+ * default ({@link LEGACY_ENRICH_PROMPTS}). A genuinely customized prompt is
+ * returned unchanged, so a user's edits are never clobbered.
+ *
+ * Without this, a vault that persisted an older default (which `saveSettings`
+ * does for essentially every user) would keep it after an update and never pick
+ * up new placeholders like `{{actionItems}}`, silently defeating the feature.
+ */
+export function upgradeEnrichPrompt(stored: string | null | undefined): string {
+	const trimmed = (stored ?? "").trim();
+	if (trimmed.length === 0) return DEFAULT_ENRICH_PROMPT;
+	if (trimmed === DEFAULT_ENRICH_PROMPT.trim()) return DEFAULT_ENRICH_PROMPT;
+	if (LEGACY_ENRICH_PROMPTS.some((p) => p.trim() === trimmed)) {
+		return DEFAULT_ENRICH_PROMPT;
+	}
+	return stored ?? DEFAULT_ENRICH_PROMPT;
 }

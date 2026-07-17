@@ -53,11 +53,12 @@ export function extractActionItems(markdown: string): ExtractedActions {
 
 /**
  * Pulls the participant's *pending* hand-written action items out of a
- * "## Action items" section body: top-level unchecked task lines (`- [ ] …`
- * or `* [ ] …`), with the checkbox marker stripped. Completed (`- [x]`) items
- * and indented sub-bullets are skipped — completed work is preserved verbatim
- * by {@link refreshActionItems} and must not be re-listed as open, and only
- * the unchecked top-level items are the ones a re-enrich would otherwise drop.
+ * "## Action items" section body: top-level unchecked task lines — unordered
+ * (`- [ ] …`, `* [ ] …`) or ordered (`1. [ ] …`) — with the checkbox marker
+ * stripped. Completed (`- [x]`) items and indented sub-bullets are skipped —
+ * completed work is preserved verbatim by {@link refreshActionItems} and must
+ * not be re-listed as open, and only the unchecked top-level items are the ones
+ * a re-enrich would otherwise drop.
  *
  * Fed into the enrichment prompt so the model folds them into a single unified
  * "Next steps" list (honoring/improving each one) instead of silently
@@ -68,7 +69,7 @@ export function extractManualActionItems(sectionBody: string): string[] {
 	for (const raw of sectionBody.split("\n")) {
 		// Only top-level bullets are items; indented lines are supporting detail.
 		if (/^\s/.test(raw)) continue;
-		const m = raw.match(/^[-*]\s+\[ \]\s+(.*)$/);
+		const m = raw.match(/^(?:[-*]|\d+\.)\s+\[ \]\s+(.*)$/);
 		if (!m) continue;
 		const text = (m[1] ?? "").trim();
 		if (text) items.push(text);
