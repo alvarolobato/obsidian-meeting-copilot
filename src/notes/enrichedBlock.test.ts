@@ -48,6 +48,25 @@ describe("extractSection", () => {
 	it("returns empty string when the section is absent", () => {
 		expect(extractSection("# M\n", "## Notes")).toBe("");
 	});
+
+	// #20: the transcript callout has no heading and is pinned at the bottom, so
+	// it falls inside the trailing section's extent. extractSection must stop at
+	// it, otherwise a caller reading "## Action items" gets the whole transcript.
+	it("stops at the trailing transcript callout", () => {
+		const content = [
+			"# M",
+			"",
+			"## Action items",
+			"",
+			"- [ ] a task",
+			"",
+			"> [!quote]- Transcript",
+			"> Ann: hi",
+			"> Bob: yo",
+			"",
+		].join("\n");
+		expect(extractSection(content, "## Action items")).toBe("- [ ] a task");
+	});
 });
 
 describe("extractTranscript", () => {
