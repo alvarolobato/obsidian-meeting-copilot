@@ -51,30 +51,37 @@ export function extractActionItems(markdown: string): ExtractedActions {
 	return { items, without };
 }
 
+/** Captures the indent width + text of an unchecked list item, else null. */
+const UNCHECKED_ITEM = /^(\s*)(?:[-*]|\d+\.)\s+\[ \]\s+(.*)$/;
+
 /**
  * Pulls the participant's *pending* hand-written action items out of a
- * "## Action items" section body: top-level unchecked task lines — unordered
+ * "## Action items" section body: the top-level unchecked task lines — unordered
  * (`- [ ] …`, `* [ ] …`) or ordered (`1. [ ] …`) — with the checkbox marker
- * stripped. Completed (`- [x]`) items and indented sub-bullets are skipped —
- * completed work is preserved verbatim by {@link refreshActionItems} and must
- * not be re-listed as open, and only the unchecked top-level items are the ones
- * a re-enrich would otherwise drop.
+ * stripped. Completed (`- [x]`) items are skipped: completed work is preserved
+ * verbatim by {@link refreshActionItems} and must not be re-listed as open.
+ *
+ * "Top-level" is the *least-indented* unchecked task in the section, not
+ * strictly column 0 — so a list the user (or their editor) indented uniformly
+ * is still captured, matching `refreshActionItems`, which drops indented
+ * unchecked tasks too; anything more indented than that is a sub-bullet detail
+ * and left out.
  *
  * Fed into the enrichment prompt so the model folds them into a single unified
  * "Next steps" list (honoring/improving each one) instead of silently
  * replacing them. Pure/testable.
  */
 export function extractManualActionItems(sectionBody: string): string[] {
-	const items: string[] = [];
+	const found: { indent: number; text: string }[] = [];
 	for (const raw of sectionBody.split("\n")) {
-		// Only top-level bullets are items; indented lines are supporting detail.
-		if (/^\s/.test(raw)) continue;
-		const m = raw.match(/^(?:[-*]|\d+\.)\s+\[ \]\s+(.*)$/);
+		const m = raw.match(UNCHECKED_ITEM);
 		if (!m) continue;
-		const text = (m[1] ?? "").trim();
-		if (text) items.push(text);
+		const text = (m[2] ?? "").trim();
+		if (text) found.push({ indent: (m[1] ?? "").length, text });
 	}
-	return items;
+	if (found.length === 0) return [];
+	const topLevel = Math.min(...found.map((f) => f.indent));
+	return found.filter((f) => f.indent === topLevel).map((f) => f.text);
 }
 
 /** Matches an *unchecked* task line, e.g. `- [ ] foo`. */

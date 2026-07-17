@@ -46,6 +46,31 @@ describe("extractManualActionItems", () => {
 		]);
 	});
 
+	it("captures a uniformly-indented top-level list", () => {
+		// refreshActionItems drops indented unchecked tasks too, so a list the
+		// user (or their editor) indented as a whole must still be fed to the
+		// model — otherwise it could be dropped without ever being honored.
+		const body = ["  - [ ] Indented task one", "  * [ ] Indented task two"].join(
+			"\n"
+		);
+		expect(extractManualActionItems(body)).toEqual([
+			"Indented task one",
+			"Indented task two",
+		]);
+	});
+
+	it("keeps only the least-indented tasks when nesting is mixed", () => {
+		const body = [
+			"- [ ] Parent task",
+			"  - [ ] nested detail task",
+			"- [ ] Sibling task",
+		].join("\n");
+		expect(extractManualActionItems(body)).toEqual([
+			"Parent task",
+			"Sibling task",
+		]);
+	});
+
 	it("ignores a transcript callout that trails the section body", () => {
 		// enrichMeetingNote reads manual items before stripping the transcript,
 		// and the transcript callout has no heading so it sits inside the last
