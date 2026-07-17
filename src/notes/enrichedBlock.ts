@@ -1,15 +1,4 @@
-import { TRANSCRIPT_CALLOUT_TITLE } from "./meetingNote";
-
-/**
- * Marker line for the collapsed transcript callout. The callout has no heading
- * of its own, so it sits *inside* the trailing section's extent (usually
- * "## Action items") and, without this, `extractSection` scoops it into that
- * section's body — see #20. Built from the shared title so it can't drift from
- * the writer (`formatTranscriptCallout`) in meetingNote.ts.
- */
-const TRANSCRIPT_CALLOUT_MARKER = new RegExp(
-	`^>\\s*\\[![\\w-]+\\][+-]?\\s*${TRANSCRIPT_CALLOUT_TITLE}\\s*$`
-);
+import { TRANSCRIPT_CALLOUT_MARKER } from "./transcriptCallout";
 
 /** Callout used for the AI-generated (enriched) notes, styled gray via styles.css. */
 export const ENRICH_CALLOUT_TYPE = "ai-notes";
