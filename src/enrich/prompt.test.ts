@@ -8,25 +8,40 @@ describe("fillPrompt", () => {
 			date: "2026-07-10",
 			attendees: "Ann, Bob",
 			notes: "we shipped X",
+			actionItems: "- Follow up with Bob",
 			transcript: "Ann: hi",
 		});
 		expect(out).toContain("Meeting: Sprint sync");
 		expect(out).toContain("Date: 2026-07-10");
 		expect(out).toContain("Attendees: Ann, Bob");
 		expect(out).toContain("we shipped X");
+		expect(out).toContain("- Follow up with Bob");
 		expect(out).toContain("Ann: hi");
 		expect(out).not.toContain("{{");
 	});
 
-	it("defaults empty fields to (none)", () => {
-		const out = fillPrompt("{{notes}}|{{transcript}}", {
+	it("substitutes the action-items placeholder", () => {
+		const out = fillPrompt("{{actionItems}}", {
 			title: "t",
 			date: "d",
 			attendees: "",
 			notes: "",
+			actionItems: "- Ship the release",
+			transcript: "",
+		});
+		expect(out).toBe("- Ship the release");
+	});
+
+	it("defaults empty fields to (none)", () => {
+		const out = fillPrompt("{{notes}}|{{actionItems}}|{{transcript}}", {
+			title: "t",
+			date: "d",
+			attendees: "",
+			notes: "",
+			actionItems: "",
 			transcript: "   ",
 		});
-		expect(out).toBe("(none)|(none)");
+		expect(out).toBe("(none)|(none)|(none)");
 	});
 });
 

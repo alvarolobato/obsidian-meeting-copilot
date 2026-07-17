@@ -562,7 +562,7 @@ export const en = {
 		},
 		enrichPrompt: {
 			name: "Enrichment prompt",
-			desc: "Prompt sent to the model. Placeholders: {{title}}, {{date}}, {{attendees}}, {{notes}}, {{transcript}}.",
+			desc: "Prompt sent to the model. Placeholders: {{title}}, {{date}}, {{attendees}}, {{notes}}, {{actionItems}}, {{transcript}}.",
 		},
 	},
 	oauth: {

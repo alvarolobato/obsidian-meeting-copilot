@@ -71,7 +71,11 @@ import {
     HIDE_AI_CLASS,
     withEnrichedBlock,
 } from "./notes/enrichedBlock";
-import { extractActionItems, refreshActionItems } from "./notes/actionItems";
+import {
+    extractActionItems,
+    extractManualActionItems,
+    refreshActionItems,
+} from "./notes/actionItems";
 import { normalizeManualNotes } from "./notes/manualNotes";
 import {
     ACTIONS_BLOCK_LANG,
@@ -4727,6 +4731,13 @@ export default class SystemRecordingPlugin extends Plugin {
             // Gather manual notes wherever they were written (incl. above the
             // "## Notes" heading), not just the section body.
             const notes = normalizeManualNotes(content).notes;
+            // The participant's own, hand-written action items. Feeding them to
+            // the model lets it produce ONE unified list that honors/improves
+            // each one, so the drop-and-replace merge below can't silently lose
+            // an item the model would otherwise never have re-derived.
+            const manualActionItems = extractManualActionItems(
+                extractSection(content, ACTION_ITEMS_HEADING)
+            );
             const transcript =
                 transcriptOverride && transcriptOverride.trim().length > 0
                     ? transcriptOverride
@@ -4748,6 +4759,7 @@ export default class SystemRecordingPlugin extends Plugin {
                     ? attendeesVal.map((x) => String(x)).join(", ")
                     : "",
                 notes,
+                actionItems: manualActionItems.map((i) => `- ${i}`).join("\n"),
                 transcript,
             };
 

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { extractActionItems, refreshActionItems } from "./actionItems";
+import {
+	extractActionItems,
+	extractManualActionItems,
+	refreshActionItems,
+} from "./actionItems";
 
 describe("extractActionItems", () => {
 	it("converts a Next steps section into task lines and strips it", () => {
@@ -25,6 +29,42 @@ describe("extractActionItems", () => {
 		const { items, without } = extractActionItems("### Topic\n- a point");
 		expect(items).toEqual([]);
 		expect(without).toBe("### Topic\n- a point");
+	});
+});
+
+describe("extractManualActionItems", () => {
+	it("returns top-level unchecked items with markers stripped", () => {
+		const body = ["- [ ] Follow up with Bob", "* [ ] Draft the RFC"].join(
+			"\n"
+		);
+		expect(extractManualActionItems(body)).toEqual([
+			"Follow up with Bob",
+			"Draft the RFC",
+		]);
+	});
+
+	it("skips completed items and indented sub-bullets", () => {
+		const body = [
+			"- [x] Already done",
+			"- [ ] Send the recap",
+			"  - context that should be ignored",
+			"  - [ ] nested task ignored",
+		].join("\n");
+		expect(extractManualActionItems(body)).toEqual(["Send the recap"]);
+	});
+
+	it("ignores prose, blank lines, and plain bullets", () => {
+		const body = [
+			"Some manual note",
+			"",
+			"- a plain bullet, not a task",
+			"- [ ] Real task",
+		].join("\n");
+		expect(extractManualActionItems(body)).toEqual(["Real task"]);
+	});
+
+	it("returns nothing for an empty section", () => {
+		expect(extractManualActionItems("")).toEqual([]);
 	});
 });
 
