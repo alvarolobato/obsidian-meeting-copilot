@@ -72,7 +72,7 @@ describe("extractManualActionItems", () => {
 	});
 
 	it("ignores a transcript callout that trails the section body", () => {
-		// enrichMeetingNote reads manual items before stripping the transcript,
+		// runEnrich reads manual items before stripping the transcript,
 		// and the transcript callout has no heading so it sits inside the last
 		// section (usually "## Action items"). Its quoted lines must not become
 		// action items.
@@ -175,7 +175,7 @@ describe("refreshActionItems", () => {
 	});
 });
 
-// Mirrors the merge chain in enrichMeetingNote (extractActionItems ->
+// Mirrors the merge chain in runEnrich (extractActionItems ->
 // refreshActionItems) to lock in the #93 fix: when the model returns a unified
 // "Next steps" that carries over the hand-written items, the merge preserves
 // them (improved) instead of dropping them, with no duplication.

@@ -29,8 +29,8 @@
  * No internal serial queue (the remote backend needs one only to guard a
  * process-global endpoint seam, which this backend doesn't have). Concurrent
  * calls would each spawn their own helper — correct but Metal-contended — so
- * callers run transcriptions one at a time through the TranscriptionQueue, as
- * they already do.
+ * callers run transcriptions one at a time through the TaskQueue, as they
+ * already do.
  */
 import type { Readable } from "stream";
 import type { TFile } from "obsidian";

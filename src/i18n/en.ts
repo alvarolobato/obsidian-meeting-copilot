@@ -131,9 +131,14 @@ export const en = {
 		queuedCount: (name: string, n: number) => `${name}… (+${n} queued)`,
 		/** Appended to the running progress line when jobs wait behind it. */
 		queuedSuffix: (n: number) => ` (+${n} queued)`,
-		queuePopoverTitle: "Transcription queue",
+		queuePopoverTitle: "Background tasks",
 		queueMore: (n: number) => `+${n} more`,
 		transcribingCount: (n: number) => `transcribing ${n}`,
+		/** Verbs shown per task kind in the queue popover rows. */
+		queueKindTranscribe: "Transcribing",
+		queueKindEnrich: "Enriching",
+		/** Accessible label / tooltip for a popover row's cancel (x) control. */
+		queueCancel: "Cancel",
 		transcriptAdded: "Transcript added",
 		transcribeFailed: "Transcription failed",
 		transcribeCancelled: "Transcription cancelled",

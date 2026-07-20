@@ -21,6 +21,20 @@ export class ApiError extends Error {
 	}
 }
 
+/**
+ * MEETING-COPILOT PATCH: thrown when a single `requestUrl` call exceeds the
+ * configured `timeout`. `requestUrl` has no timeout of its own and can't be
+ * aborted mid-flight, so without this a gateway that accepts then stalls would
+ * hang the call (and the serial transcription queue) forever. Treated as
+ * retryable by {@link ApiClient.executeWithRetry}.
+ */
+export class RequestTimeoutError extends Error {
+	constructor(public timeoutMs: number) {
+		super(`Request timed out after ${Math.round(timeoutMs / 1000)}s`);
+		this.name = 'RequestTimeoutError';
+	}
+}
+
 export interface ApiConfig {
 	baseUrl: string;
 	apiKey: string;
@@ -219,7 +233,9 @@ export abstract class ApiClient {
 				throw new Error('Request cancelled by user');
 			}
 
-			const response = await requestUrl(requestParams);
+			// MEETING-COPILOT PATCH: bound the call by config.timeout (and settle
+			// early on a user abort) instead of awaiting requestUrl unbounded.
+			const response = await this.requestWithTimeout(requestParams, options.signal ?? undefined);
 
 
 			if (response.status < 200 || response.status >= 300) {
@@ -258,6 +274,20 @@ export abstract class ApiClient {
 			if (options.signal?.aborted) {
 				throw new Error('Request cancelled by user');
 			}
+			// MEETING-COPILOT PATCH: a per-request timeout is retryable — a fresh
+			// request may reach a now-responsive gateway — with the same
+			// exponential backoff as 5xx/429 and transient network errors.
+			if (error instanceof RequestTimeoutError && retryCount < this.config.maxRetries) {
+				this.logger.warn(
+					`Request timed out after ${Math.round(this.config.timeout / 1000)}s; retrying (${retryCount + 1}/${this.config.maxRetries})`
+				);
+				await this.delay(this.config.retryDelay * Math.pow(2, retryCount));
+				// A cancel during the backoff must abort, not fire another request.
+				if (options.signal?.aborted) {
+					throw new Error('Request cancelled by user');
+				}
+				return this.executeWithRetry<T>(url, options, retryCount + 1);
+			}
 			// requestUrl throws (rather than returning a response) on network-level
 			// failures: connection reset, DNS hiccups, and ERR_NETWORK_IO_SUSPENDED
 			// when the Mac sleeps or a VPN blips mid-transcription. Those are
@@ -280,6 +310,45 @@ export abstract class ApiClient {
 				throw error;
 			}
 			throw new Error('Unknown error occurred');
+		}
+	}
+
+	/**
+	 * MEETING-COPILOT PATCH: run one `requestUrl` call bounded by `config.timeout`
+	 * and the caller's abort signal. `requestUrl` can't be aborted, so on timeout
+	 * or cancel we abandon the in-flight call (swallowing its late settlement) and
+	 * let the race decide: a timeout throws {@link RequestTimeoutError} (retryable
+	 * upstream), a cancel throws the standard "cancelled by user" error. Building
+	 * `req` first means a synchronous throw from `requestUrl` propagates without
+	 * leaving the timeout/abort promises dangling.
+	 */
+	private async requestWithTimeout(
+		params: Parameters<typeof requestUrl>[0],
+		signal?: AbortSignal
+	): Promise<RequestUrlResponse> {
+		const req = requestUrl(params);
+		// A request abandoned by the timeout/abort race may settle later; keep its
+		// rejection handled so it can't surface as an unhandled rejection.
+		req.catch(() => {});
+		const win = this.getTimerWindow();
+		let timer: ReturnType<Window['setTimeout']> | undefined;
+		const timeout = new Promise<never>((_, reject) => {
+			timer = win.setTimeout(
+				() => reject(new RequestTimeoutError(this.config.timeout)),
+				this.config.timeout
+			);
+		});
+		let onAbort: (() => void) | undefined;
+		const aborted = new Promise<never>((_, reject) => {
+			if (!signal) return;
+			onAbort = () => reject(new Error('Request cancelled by user'));
+			signal.addEventListener('abort', onAbort, { once: true });
+		});
+		try {
+			return await Promise.race([req, timeout, aborted]);
+		} finally {
+			if (timer !== undefined) win.clearTimeout(timer);
+			if (onAbort && signal) signal.removeEventListener('abort', onAbort);
 		}
 	}
 

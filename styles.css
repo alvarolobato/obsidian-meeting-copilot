@@ -61,8 +61,10 @@
     box-shadow: var(--shadow-s);
     font-size: var(--font-ui-smaller);
     color: var(--text-normal);
-    /* Display-only: never steal hover from the status bar (avoids flicker). */
-    pointer-events: none;
+    /* Interactive: rows carry a cancel (x) control, so the panel must receive
+       pointer events. A short hide grace (see main.ts) bridges the gap from the
+       status bar so the hand-off doesn't flicker. */
+    pointer-events: auto;
     opacity: 0;
     transform: translateY(6px);
     transition: opacity 120ms ease-out, transform 120ms ease-out;
@@ -116,9 +118,45 @@
 }
 
 .mc-queue-popover-label {
+    flex: 1 1 auto;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+/* Live percentage on the running transcription row. */
+.mc-queue-popover-pct {
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+}
+
+/* Per-item cancel (x) control on each row. */
+.mc-queue-popover-cancel {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px;
+    width: 20px;
+    height: 20px;
+    border: none;
+    border-radius: var(--radius-s);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    box-shadow: none;
+}
+
+.mc-queue-popover-cancel:hover {
+    background-color: var(--background-modifier-hover);
+    color: var(--text-normal);
+}
+
+.mc-queue-popover-cancel svg {
+    width: 13px;
+    height: 13px;
 }
 
 .mc-queue-popover-more {

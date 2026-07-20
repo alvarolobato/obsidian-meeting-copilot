@@ -10,7 +10,14 @@ export interface CurrentMeetingOptions {
 	parent: HTMLElement;
 	meeting: AgendaMeeting;
 	recordingThis: boolean;
-	onPrimary: (m: AgendaMeeting) => void;
+	/** Open the meeting's existing note (used whenever `meeting.note` is set). */
+	onOpenNote: (m: AgendaMeeting) => void;
+	/**
+	 * Create the note (if needed) and start recording. Backs the primary CTA
+	 * when no note exists yet, so its label ("Create note and start recording")
+	 * matches what it does.
+	 */
+	onCreateAndRecord: (m: AgendaMeeting) => void;
 	onStop: () => void;
 	onOpenLink: ((m: AgendaMeeting) => void) | null;
 }
@@ -52,7 +59,7 @@ export function renderCurrentMeeting(opts: CurrentMeetingOptions): void {
 				cls: "meeting-copilot-current-cta",
 				text: a.actions.openNote,
 			});
-			openNote.addEventListener("click", () => opts.onPrimary(meeting));
+			openNote.addEventListener("click", () => opts.onOpenNote(meeting));
 		}
 		const stop = actions.createEl("button", {
 			cls: "meeting-copilot-current-cta meeting-copilot-current-cta-danger",
@@ -64,7 +71,15 @@ export function renderCurrentMeeting(opts: CurrentMeetingOptions): void {
 			cls: "meeting-copilot-current-cta",
 			text: meeting.note ? a.actions.openNote : t().event.createNoteAndRecord,
 		});
-		primary.addEventListener("click", () => opts.onPrimary(meeting));
+		// Keep the action in lockstep with the label above: open the existing
+		// note, or (no note yet) create it and start recording. Wiring both to a
+		// single "open or create" handler was the bug — the CTA said it would
+		// record but only ever created the note.
+		primary.addEventListener("click", () =>
+			meeting.note
+				? opts.onOpenNote(meeting)
+				: opts.onCreateAndRecord(meeting)
+		);
 	}
 
 	if (opts.onOpenLink && meeting.meetingUrl) {
