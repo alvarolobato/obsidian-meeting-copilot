@@ -202,7 +202,8 @@ export class MeetingAgendaView extends ItemView {
 					parent: root,
 					meeting: current,
 					recordingThis: this.host.isRecordingThis(current),
-					onPrimary: (m) => this.host.onOpenOrCreate(m),
+					onOpenNote: (m) => this.host.onOpenOrCreate(m),
+					onCreateAndRecord: (m) => this.host.onCreateAndRecord(m),
 					onStop: () => this.host.onStop(),
 					onOpenLink: current.meetingUrl
 						? (m) => this.openLink(m)
