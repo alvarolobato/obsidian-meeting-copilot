@@ -23,6 +23,7 @@ import {
     whisperDylibUrl,
 } from "./binary";
 import { describeVersion } from "./buildInfo";
+import { awaitIndexedFile } from "./util/awaitIndexedFile";
 import {
     assetNodeDeps,
     nodeDeps,
@@ -313,6 +314,13 @@ export default class SystemRecordingPlugin extends Plugin {
 	private stopWaiters: Array<() => void> = [];
 	/** True while a stopped recording is still being linked/handled in attachRecording. */
 	private attaching = false;
+	/**
+	 * Pending auto-transcribe waits, keyed by the recording's vault path. Each
+	 * waits for Obsidian's index to catch up to a just-written recording (index
+	 * lag; see {@link awaitIndexedFile}). A manual transcribe of the same file —
+	 * or plugin unload — aborts the wait so the take isn't transcribed twice.
+	 */
+	private pendingAutoTranscribe = new Map<string, AbortController>();
 	/** Wall-clock of the previous duration tick, for sleep detection while recording. */
 	private lastDurationTickAt: number | null = null;
 	/** Note paths currently being offered an AI title, to prevent duplicate modals. */
@@ -641,6 +649,10 @@ export default class SystemRecordingPlugin extends Plugin {
 		this.meetingNotices.clear();
 		this.stopPromptNotice?.dispose();
 		this.stopPromptNotice = null;
+		// Settle any in-flight auto-transcribe waits so their listeners/timers
+		// don't outlive the plugin.
+		for (const ac of this.pendingAutoTranscribe.values()) ac.abort();
+		this.pendingAutoTranscribe.clear();
     }
 
     async loadSettings() {
@@ -3194,6 +3206,10 @@ export default class SystemRecordingPlugin extends Plugin {
             new Notice(t().agenda.notices.noRecording);
             return;
         }
+        // A manual transcribe supersedes any auto-wait still pending for this
+        // take — covers the multi-take rebuild path below, which doesn't go
+        // through launchTranscriber (so its own cancellation wouldn't fire).
+        this.cancelPendingAutoTranscribe(m.recording.path);
         // A manual re-transcribe REPLACES the transcript. With several takes,
         // transcribing only the latest and replacing would drop the earlier
         // ones' text, so rebuild the whole transcript from every take in one
@@ -3569,6 +3585,10 @@ export default class SystemRecordingPlugin extends Plugin {
         // result as silence; a manual re-transcribe replaces. A multi-take
         // manual rebuild has its own path (rebuildTranscriptFromTakes).
         const fresh = opts?.fresh ?? false;
+        // A transcribe of this recording from any trigger (manual, or this very
+        // auto run once the wait resolved) supersedes a still-pending auto-wait
+        // for the same take — cancel it so it can't fire a duplicate later.
+        this.cancelPendingAutoTranscribe(recording.path);
         // The remote backend needs an endpoint; the local one provisions its own
         // model/helper, so it can transcribe with no endpoint configured.
         if (
@@ -5505,7 +5525,12 @@ export default class SystemRecordingPlugin extends Plugin {
                     return slash >= 0 ? p.slice(0, slash) : "";
                 };
                 const folder = dirOf(recordingPath ?? notePath);
-                const link = folder ? `${folder}/${fileName}` : fileName;
+                // Normalize so this key matches the recording's TFile.path (which
+                // uniqueRecordingPath already normalized) — the pendingAutoTranscribe
+                // lookup and the index poll both key on it.
+                const link = normalizePath(
+                    folder ? `${folder}/${fileName}` : fileName
+                );
                 try {
                     await linkRecording(this.app, file, link);
                 } catch (e) {
@@ -5519,16 +5544,25 @@ export default class SystemRecordingPlugin extends Plugin {
                 }
                 // Close the loop: hand the fresh recording to the transcriber.
                 if (this.settings.autoTranscribe) {
-                    // The helper writes the recording directly to disk, so
-                    // Obsidian's vault index may not have registered it as a
-                    // TFile yet. Wait for it to appear before auto-transcribing.
-                    void this.resolveFileWithRetry(link)
+                    // The helper writes the recording from a separate process, so
+                    // Obsidian's index may not have registered it as a TFile yet.
+                    // Wait for it to appear — event-driven with a generous cap, so
+                    // a slow watcher (cloud-synced vault, App Nap while the app is
+                    // backgrounded during the meeting) no longer silently drops
+                    // the headline automation (issue #29). Cancellable so a manual
+                    // transcribe of the same take supersedes it.
+                    const ac = new AbortController();
+                    // Supersede any stale wait for this path (implausible with
+                    // unique names, but keeps the map single-writer per path).
+                    this.cancelPendingAutoTranscribe(link);
+                    this.pendingAutoTranscribe.set(link, ac);
+                    void this.resolveIndexedRecording(link, ac.signal)
                         .then((audio) => {
+                            this.pendingAutoTranscribe.delete(link);
+                            // Superseded by a manual transcribe — do nothing (and
+                            // don't cry "not indexed": that take is handled).
+                            if (ac.signal.aborted) return;
                             if (!audio) {
-                                // Losing the race for the whole retry window
-                                // means the watcher likely missed the file; say
-                                // so instead of silently skipping the headline
-                                // automation (issue #29).
                                 console.warn(
                                     "[Meeting Copilot] auto-transcribe: recording not found in vault",
                                     link
@@ -5544,6 +5578,7 @@ export default class SystemRecordingPlugin extends Plugin {
                             });
                         })
                         .catch((e) => {
+                            this.pendingAutoTranscribe.delete(link);
                             console.warn(
                                 "[Meeting Copilot] auto-transcribe failed",
                                 e
@@ -5580,6 +5615,53 @@ export default class SystemRecordingPlugin extends Plugin {
         }
         const f = this.app.vault.getAbstractFileByPath(vaultPath);
         return f instanceof TFile ? f : null;
+    }
+
+    /**
+     * Resolves a just-recorded audio path to a TFile, tolerant of arbitrary
+     * index lag. Unlike {@link resolveFileWithRetry}'s fixed poll, this is
+     * event-driven ({@link awaitIndexedFile}): it waits on the vault `create`
+     * event for the path (with a poll backstop + hard cap), so a slow watcher
+     * (cloud-synced vault, or App Nap throttling while the app is backgrounded
+     * during a meeting) resolves whenever the index finally catches up. `signal`
+     * lets a manual transcribe of the same take cancel the wait.
+     */
+    private resolveIndexedRecording(
+        vaultPath: string,
+        signal: AbortSignal
+    ): Promise<TFile | null> {
+        return awaitIndexedFile<TFile>(
+            vaultPath,
+            {
+                getIndexed: (p) => {
+                    const f = this.app.vault.getAbstractFileByPath(p);
+                    return f instanceof TFile ? f : null;
+                },
+                existsOnDisk: (p) => this.app.vault.adapter.exists(p),
+                onCreate: (cb) => {
+                    // awaitIndexedFile always calls the returned unsubscribe on
+                    // settle (resolve/cap/abort), and onunload aborts every
+                    // pending wait, so the listener is removed on all paths
+                    // without a separate registerEvent.
+                    const ref = this.app.vault.on("create", (file) =>
+                        cb(file.path)
+                    );
+                    return () => this.app.vault.offref(ref);
+                },
+                setTimeout: (fn, ms) => window.setTimeout(fn, ms),
+                clearTimeout: (h) => window.clearTimeout(h),
+            },
+            { signal }
+        );
+    }
+
+    /** Aborts and forgets any pending auto-transcribe wait for a recording path. */
+    private cancelPendingAutoTranscribe(vaultPath: string): void {
+        const ac = this.pendingAutoTranscribe.get(vaultPath);
+        if (ac) {
+            ac.abort();
+            this.pendingAutoTranscribe.delete(vaultPath);
+        }
     }
 
     /**
