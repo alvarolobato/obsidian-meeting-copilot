@@ -2,6 +2,26 @@ import esbuild from "esbuild";
 import process from "process";
 import { builtinModules } from 'node:module';
 import { copyFileSync, existsSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+
+// Build provenance baked into the bundle so the plugin can tell a real release
+// from a local/custom build (see src/buildInfo.ts). `git` may be unavailable
+// (e.g. building from a source tarball) — degrade to null, never fail the build.
+function gitOut(args) {
+	try {
+		return execFileSync("git", args, { encoding: "utf8" }).trim() || null;
+	} catch {
+		return null;
+	}
+}
+const buildInfo = {
+	commit: gitOut(["rev-parse", "--short", "HEAD"]),
+	branch: gitOut(["rev-parse", "--abbrev-ref", "HEAD"]),
+	buildDate: new Date().toISOString().slice(0, 10),
+	// release.yml sets MC_RELEASE=1 for tagged release builds; every other build
+	// (local deploy, plain `npm run build`) is a custom build.
+	isRelease: process.env.MC_RELEASE === "1",
+};
 
 // The local-VAD engine needs the fvad WASM binary sitting next to main.js at
 // runtime (the loader reads it from the plugin dir and hands the bytes to the
@@ -58,6 +78,9 @@ const context = await esbuild.context({
 	treeShaking: true,
 	outfile: "main.js",
 	minify: prod,
+	define: {
+		__MC_BUILD__: JSON.stringify(buildInfo),
+	},
 });
 
 if (prod) {

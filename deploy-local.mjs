@@ -156,6 +156,30 @@ try {
 for (const f of ["main.js", "manifest.json", "styles.css"]) {
 	fs.copyFileSync(f, path.join(DEST, f));
 }
+
+// Stamp the DEPLOYED manifest with a real version so Obsidian's plugin list
+// doesn't show the `main` placeholder (0.1.0). Derive it from git so it tracks
+// the latest tag (+ commit/dirty for work past a tag). Only the vault copy is
+// touched — the source manifest.json stays clean. The plugin builds its
+// asset-download URL from this version, but a local deploy ships the pinned
+// binary/dylib so provisioning is satisfied and never downloads.
+let devVersion = null;
+try {
+	devVersion =
+		execFileSync("git", ["describe", "--tags", "--dirty", "--always"], {
+			encoding: "utf8",
+		}).trim() || null;
+} catch {
+	devVersion = null;
+}
+if (devVersion) {
+	const manifestPath = path.join(DEST, "manifest.json");
+	const m = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+	m.version = devVersion;
+	fs.writeFileSync(manifestPath, JSON.stringify(m, null, "\t") + "\n");
+	console.log(`deploy-local: stamped manifest version = ${devVersion}`);
+}
+
 if (fs.existsSync("fvad.wasm")) {
 	fs.copyFileSync("fvad.wasm", path.join(DEST, "fvad.wasm"));
 }

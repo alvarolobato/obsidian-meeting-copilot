@@ -155,6 +155,10 @@ jobs:
           '
 
       - name: Build plugin
+        # MC_RELEASE marks the bundle as an official release build so the plugin
+        # shows a clean version (no "custom build" provenance); see src/buildInfo.ts.
+        env:
+          MC_RELEASE: "1"
         run: npm run build
 
       - name: Create or update GitHub release

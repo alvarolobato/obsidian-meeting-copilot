@@ -22,6 +22,7 @@ import {
     WHISPER_DYLIB_SIZE,
     whisperDylibUrl,
 } from "./binary";
+import { describeVersion } from "./buildInfo";
 import {
     assetNodeDeps,
     nodeDeps,
@@ -323,6 +324,11 @@ export default class SystemRecordingPlugin extends Plugin {
 	private agendaEvents = new TypedEventBus<AgendaViewEvents>();
 
     async onload() {
+        // Log the version + build provenance once at load (verbose console) so a
+        // support report can tell an official release from a custom build.
+        console.debug(
+            `Meeting Copilot v${describeVersion(this.manifest.version)}`
+        );
         await this.loadSettings();
         // Prime the vendored transcription engine (i18n + plugin dir).
         initTranscribeEngine(this.manifest.dir ?? null);

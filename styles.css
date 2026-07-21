@@ -1243,3 +1243,8 @@ ul.mc-action-tasks {
 .mc-rename-input {
 	width: 100%;
 }
+.meeting-copilot-version {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	margin-bottom: var(--size-4-4);
+}
