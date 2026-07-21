@@ -273,6 +273,9 @@ export const en = {
 		},
 	},
 	settings: {
+		// Version line at the top of the settings tab. Release builds show just
+		// the version; custom/local builds append this marker with provenance.
+		customBuild: "custom build",
 		compressedRecordings: {
 			name: "Compressed recordings (m4a)",
 			desc: "Save recordings as AAC .m4a (~28 MB/hour) instead of WAV (~173 MB/hour). Same mono 24 kHz audio either way; transcription handles both. Only affects new recordings.",

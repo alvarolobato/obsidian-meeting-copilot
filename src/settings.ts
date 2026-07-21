@@ -32,6 +32,7 @@ import {
 	localModelSpec,
 } from "./transcribe/localModels";
 import { t, type Messages } from "./i18n";
+import { describeVersion } from "./buildInfo";
 
 export interface SystemRecordingSettings {
 	/** `{{placeholder}}` folder template for one-off meetings, e.g. "Meetings/{{year}}". */
@@ -363,6 +364,18 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         const s = t();
         containerEl.empty();
         containerEl.addClass("meeting-copilot-settings");
+
+        // Version / build provenance. Release builds show just the version; a
+        // local/custom build also shows commit·branch·date so it's obvious the
+        // vault isn't running an official release.
+        containerEl
+            .createEl("div", { cls: "meeting-copilot-version" })
+            .setText(
+                `${this.plugin.manifest.name} v${describeVersion(
+                    this.plugin.manifest.version,
+                    s.settings.customBuild
+                )}`
+            );
         // Opening (or re-rendering) the tab is a fresh chance to auto-probe:
         // clear the per-session "already probed" guard so a verdict invalidated
         // at runtime (e.g. diarization found no timestamps) is re-checked here
