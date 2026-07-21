@@ -37,7 +37,19 @@ Meeting Copilot handles calendar, recording, transcription, and enrichment on it
 
 ## Installation
 
-**Option A — BRAT (recommended for updates):** install the [BRAT](https://github.com/TfTHacker/obsidian42-brat) community plugin, then *Add beta plugin* with `alvarolobato/obsidian-meeting-copilot`. BRAT installs from the latest [GitHub release](https://github.com/alvarolobato/obsidian-meeting-copilot/releases) and keeps it up to date.
+**Option A — BRAT (recommended for updates):** install via the [BRAT](https://github.com/TfTHacker/obsidian42-brat) community plugin, which pulls from this repo's [GitHub releases](https://github.com/alvarolobato/obsidian-meeting-copilot/releases) and keeps the plugin up to date (this plugin is **not** in the official community store, so Obsidian's built-in browser can't find or update it — use BRAT):
+
+1. **Install BRAT.** In Obsidian, open *Settings → Community plugins*, turn off Restricted mode if prompted, click **Browse**, search for **BRAT** ("Obsidian42 - BRAT"), then **Install** and **Enable** it.
+2. **Add this plugin.** Open the command palette (`Cmd-P`) and run **BRAT: Add a beta plugin for testing** (or go to *Settings → Community plugins → BRAT → Add Beta plugin*). In the dialog, paste the repository into the first field:
+
+   ```
+   alvarolobato/obsidian-meeting-copilot
+   ```
+
+   (the full URL `https://github.com/alvarolobato/obsidian-meeting-copilot` also works.)
+   - **Latest release (recommended):** leave the version selector on **Latest version** so BRAT tracks and auto-updates to each new release.
+   - **A specific release:** set the version selector to a release tag (e.g. `0.4.3`) to pin that exact version instead.
+3. Keep **Enable after installing** checked and click **Add plugin**. BRAT downloads `main.js`, `manifest.json`, and `styles.css` from the chosen release and enables **Meeting Copilot**.
 
 **Option B — manual:**
 
