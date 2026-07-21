@@ -34,16 +34,23 @@ function sha256(file) {
 	return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
-// Replace a Mach-O's *linker-signed* ad-hoc signature (what `swift build`
-// emits) with a plain, location-independent ad-hoc signature. The kernel accepts
-// a linker-signed executable only at the path the linker created it; once copied
-// (into the vault, or here even hashed-then-copied) macOS's code-signing monitor
-// SIGKILLs it at launch with "Code Signature Invalid / Invalid Page" before
-// main(). `codesign --force --sign -` fixes that and launches from anywhere.
-// Only the main executable needs this — dyld still loads a copied linker-signed
-// dylib fine. Done in .build before hashing so the pinned sha matches the
-// deployed binary. (Release assets are downloaded, which re-blesses them, so
-// this is a local-deploy-only fixup.)
+// Give a Mach-O a plain, location-independent ad-hoc signature. Two failure
+// modes this fixes, both surfacing as a "Code Signature Invalid / Invalid Page"
+// SIGKILL at launch (before main(), so no stderr — the process just dies):
+//   1. The main executable: `swift build` emits a *linker-signed* ad-hoc
+//      signature the kernel accepts only at the path the linker created it; once
+//      copied (into the vault, or here even hashed-then-copied) it's rejected.
+//   2. The whisper dylib: the pinned XCFramework ships it UNSIGNED, and recent
+//      macOS's code-signing monitor refuses to map an unsigned dylib's code
+//      pages into the (signed) helper. The old assumption that "dyld loads a
+//      copied linker-signed dylib fine" no longer holds — it isn't even
+//      linker-signed. So we sign it too, and (because signing changes its byte
+//      size) pin WHISPER_DYLIB_SIZE + EXPECTED_WHISPER_SHA256 for this build so
+//      the provisioner's size fast-path trusts the signed dylib instead of
+//      re-downloading the unsigned release copy over it.
+// Done in .build before hashing so the pinned shas match the deployed files.
+// (Release assets are downloaded, which re-blesses them, so this is a
+// local-deploy-only fixup.)
 function adhocSign(file) {
 	execFileSync("codesign", ["--force", "--sign", "-", file], { stdio: "inherit" });
 }
@@ -85,13 +92,56 @@ if (withSwift) {
 }
 console.log(`deploy-local: pinning EXPECTED_SHA256 = ${sha}`);
 
+// 1b. Resolve + ad-hoc sign the whisper dylib we'll deploy, then record its
+// (post-signing) sha + size to pin below. With --swift that's the freshly built
+// dylib in .build (copied into the vault in step 3); without, the dylib already
+// in the vault, signed in place. Skipped only if there's no dylib yet (fresh
+// non-swift deploy) — the plugin will provision it on first use.
+let deployDylibFrom = null; // signed .build dylib to copy into DEST (null in non-swift)
+let whisperSha = null;
+let whisperSize = null;
+if (withSwift) {
+	deployDylibFrom = path.join(
+		path.dirname(deployBinaryFrom),
+		"whisper.framework/Versions/A/whisper"
+	);
+	if (!fs.existsSync(deployDylibFrom)) die(`built whisper dylib not found at ${deployDylibFrom}`);
+	adhocSign(deployDylibFrom);
+	whisperSha = sha256(deployDylibFrom);
+	whisperSize = fs.statSync(deployDylibFrom).size;
+} else {
+	const vaultDylib = path.join(DEST, "whisper.framework/Versions/Current/whisper");
+	if (fs.existsSync(vaultDylib)) {
+		adhocSign(vaultDylib);
+		whisperSha = sha256(vaultDylib);
+		whisperSize = fs.statSync(vaultDylib).size;
+	}
+}
+if (whisperSha) {
+	console.log(
+		`deploy-local: pinning EXPECTED_WHISPER_SHA256 = ${whisperSha} (size ${whisperSize})`
+	);
+}
+
 // 2. Pin the sha for this build only, then always restore src/binary.ts.
 const original = fs.readFileSync(BINARY_TS, "utf8");
-const pinned = original.replace(
+let pinned = original.replace(
 	/EXPECTED_SHA256\s*=\s*"[0-9a-f]*"/,
 	`EXPECTED_SHA256 =\n\t"${sha}"`
 );
 if (pinned === original) die(`could not find EXPECTED_SHA256 assignment in ${BINARY_TS}`);
+if (whisperSha && whisperSize) {
+	const beforeWhisper = pinned;
+	pinned = pinned
+		.replace(
+			/EXPECTED_WHISPER_SHA256\s*=\s*"[0-9a-f]*"/,
+			`EXPECTED_WHISPER_SHA256 =\n\t"${whisperSha}"`
+		)
+		.replace(/WHISPER_DYLIB_SIZE\s*=\s*\d+/, `WHISPER_DYLIB_SIZE = ${whisperSize}`);
+	if (pinned === beforeWhisper) {
+		die(`could not find EXPECTED_WHISPER_SHA256 / WHISPER_DYLIB_SIZE assignment in ${BINARY_TS}`);
+	}
+}
 
 try {
 	fs.writeFileSync(BINARY_TS, pinned);
@@ -123,22 +173,15 @@ if (deployBinaryFrom) {
 	// directory, no symlinks). Copying the built dylib (not the whole framework,
 	// whose Versions/Current is an absolute symlink into this worktree's .build)
 	// keeps the deployed plugin self-contained and validates the product layout.
-	const builtDylib = path.join(
-		path.dirname(deployBinaryFrom),
-		"whisper.framework/Versions/A/whisper"
-	);
-	if (!fs.existsSync(builtDylib)) {
-		die(`built whisper dylib not found at ${builtDylib}`);
-	}
 	const frameworkDest = path.join(DEST, "whisper.framework");
 	fs.rmSync(frameworkDest, { recursive: true, force: true });
 	const dylibDest = path.join(frameworkDest, "Versions", "Current", "whisper");
 	fs.mkdirSync(path.dirname(dylibDest), { recursive: true });
-	// The copied dylib keeps its linker-signed signature: dyld loads it fine
-	// (only the *main executable* is rejected after a copy — see adhocSign), and
-	// leaving it untouched preserves the byte size the plugin's provisioner
-	// checks against WHISPER_DYLIB_SIZE.
-	fs.copyFileSync(builtDylib, dylibDest);
+	// deployDylibFrom was ad-hoc signed above; the ad-hoc signature is embedded
+	// in the Mach-O and path-independent, so the copy stays validly signed — and
+	// its size matches the WHISPER_DYLIB_SIZE we pinned, so the provisioner's
+	// size fast-path trusts it rather than re-fetching the unsigned release copy.
+	fs.copyFileSync(deployDylibFrom, dylibDest);
 }
 
 console.log(`deploy-local: deployed to ${DEST}`);
