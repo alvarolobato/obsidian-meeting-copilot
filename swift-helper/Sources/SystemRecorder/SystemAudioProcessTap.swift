@@ -30,6 +30,24 @@ import AudioToolbox
 /// A default-output change is watched (`installHealthListeners`) and triggers a
 /// rebuild so the aggregate re-hosts on the new device.
 ///
+/// ## Keeping the tap clocked during silence (the real Zoom-hang fix)
+/// Hosting on the default output is necessary but **not** sufficient: a global
+/// tap's IO cycle is driven by the *system mixer*, which only runs while some
+/// process feeds it. When the default output is the always-on built-in, macOS
+/// keeps a mixer stream active continuously and the tap clocks even in silence;
+/// but a USB/Bluetooth default output lets that mixer stream idle in silence, so
+/// the tap stalls — and coreaudiod serializes other apps' (Zoom/Meet) audio init
+/// against ours until something plays (the hang). Driving the output *device*
+/// directly (a raw `AudioDeviceIOProcID`) runs its hardware clock but bypasses
+/// the mixer, so it doesn't help. Instead `startKeepAlive()` renders continuous
+/// silence through the **normal output path** (an `AVAudioEngine`) — what
+/// "playing music unblocks it" does — routed to the built-in output so it never
+/// engages the user's headset. The global tap captures process audio regardless
+/// of destination device, so this keeps its mixdown IO cycle running. For the
+/// same reason the tap does **not** exclude our own process: an excluded
+/// keep-alive stream doesn't wake the tap (verified), and our output is pure
+/// silence so including it in the captured mixdown is harmless.
+///
 /// ## Silence and the IO clock
 /// A global process tap only produces IO cycles **while some process is playing
 /// audio**; a silent system delivers *no* callbacks at all (verified on macOS
@@ -87,6 +105,11 @@ final class SystemAudioProcessTap: @unchecked Sendable {
 
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
+    // Keep-alive engine (see `startKeepAlive()`): renders silence through the
+    // normal output path so the system mixer — the node the tap observes — keeps
+    // clocking during silence. Routed to the built-in output so it never engages
+    // the user's headset. Started in `start()`, stopped in `teardown()`.
+    private var keepAliveEngine: AVAudioEngine?
     private var ioProcID: AudioDeviceIOProcID?
     private var tapFormat: AVAudioFormat?
     private var bytesPerFrame: UInt32 = 0
@@ -117,11 +140,12 @@ final class SystemAudioProcessTap: @unchecked Sendable {
     /// completion before the instance is shared with another thread (it does not
     /// take `stateLock`; only teardown does). A failure unwinds via `teardown()`.
     func start() throws {
-        // Exclude our own process from the global tap, mirroring SCK's
-        // `excludesCurrentProcessAudio`. Best-effort: an unresolved id just
-        // means we also observe our own (silent) output, which is harmless.
-        let excluded = Self.currentProcessAudioObjectID().map { [$0] } ?? []
-        let description = CATapDescription(monoGlobalTapButExcludeProcesses: excluded)
+        // Do NOT exclude our own process. `startKeepAlive()` renders silence
+        // through the system mixer to keep the tap clocking during silence; if
+        // the tap excluded our process it wouldn't wake on that (only) active
+        // stream — verified: with self-exclusion the tap stays at 0 IO cycles in
+        // silence. Our output is pure silence, so observing it is harmless.
+        let description = CATapDescription(monoGlobalTapButExcludeProcesses: [])
         description.name = "Meeting Copilot System Audio"
         description.isPrivate = true
         description.muteBehavior = .unmuted
@@ -149,6 +173,7 @@ final class SystemAudioProcessTap: @unchecked Sendable {
                 outputUID: Self.defaultOutputDeviceUID()
             )
             try startIOProc(format: format)
+            startKeepAlive()
             installHealthListeners()
         } catch {
             // Unwind whatever succeeded so a failed start leaves no orphaned
@@ -184,6 +209,57 @@ final class SystemAudioProcessTap: @unchecked Sendable {
 
         let startStatus = AudioDeviceStart(aggregateID, procID)
         guard startStatus == noErr else { throw TapError.start(startStatus) }
+    }
+
+    // MARK: - Keep-alive
+
+    /// Keep the system mixer's IO cycle alive during silence by rendering silence
+    /// through the normal output path (`AVAudioEngine` → output device). The tap
+    /// observes the mixer's output, which only runs while a process feeds it; a
+    /// silent system with a USB/Bluetooth default output lets that cycle idle,
+    /// stalling the tap and blocking other apps' audio init (the Zoom hang).
+    /// Rendering through the mixer is what "playing music unblocks it" does — a
+    /// raw `AudioDeviceIOProcID` on the hardware clocks the device but bypasses
+    /// the mixer, so it doesn't help.
+    ///
+    /// Routed to the **built-in** output (not the default): the global tap
+    /// captures process audio regardless of destination, and this avoids opening
+    /// an output stream on the user's headset (mic capture + our output on the
+    /// same device would flip a Bluetooth/USB headset into call mode). Falls back
+    /// to the engine's default output if the built-in can't be resolved/assigned.
+    ///
+    /// Best-effort: any failure just restores the old "clocks only during
+    /// playback" behavior, so it never blocks recording. Torn down in `teardown()`.
+    private func startKeepAlive() {
+        let engine = AVAudioEngine()
+        if let builtInID = Self.builtInOutputDeviceID(),
+            let unit = engine.outputNode.audioUnit {
+            var device = builtInID
+            AudioUnitSetProperty(
+                unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global,
+                0, &device, UInt32(MemoryLayout<AudioObjectID>.size))
+        }
+        let format = engine.outputNode.inputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else { return }
+        let source = AVAudioSourceNode(format: format) { isSilence, _, _, ablPtr in
+            let buffers = UnsafeMutableAudioBufferListPointer(ablPtr)
+            for buffer in buffers where buffer.mData != nil {
+                memset(buffer.mData, 0, Int(buffer.mDataByteSize))
+            }
+            // Don't flag the buffer as silence, so the engine keeps its IO cycle
+            // running instead of optimizing an all-silent stream away.
+            isSilence.pointee = false
+            return noErr
+        }
+        engine.attach(source)
+        engine.connect(source, to: engine.mainMixerNode, format: format)
+        engine.prepare()
+        do {
+            try engine.start()
+            keepAliveEngine = engine
+        } catch {
+            // Leave keepAliveEngine nil; recording proceeds without the keep-alive.
+        }
     }
 
     /// One IO cycle. Runs on `ioQueue`. Reconstructs any silent gap that the tap
@@ -411,6 +487,12 @@ final class SystemAudioProcessTap: @unchecked Sendable {
         }
         listeners.removeAll()
 
+        // Stop the keep-alive engine (independent of the aggregate/tap).
+        if let engine = keepAliveEngine {
+            engine.stop()
+            keepAliveEngine = nil
+        }
+
         if let procID = ioProcID {
             // Stop the device, then drain the IO queue so any block already
             // dispatched has finished before we destroy the proc/aggregate/tap —
@@ -550,26 +632,74 @@ final class SystemAudioProcessTap: @unchecked Sendable {
         return cf.takeRetainedValue() as String
     }
 
-    /// Resolve this process's Core Audio process-object id (for the tap's
-    /// exclude list), or nil if the translation isn't available.
-    private static func currentProcessAudioObjectID() -> AudioObjectID? {
+    /// The id of a **built-in** output device (transport type "built-in" with at
+    /// least one output channel), or nil if the machine has none (e.g. a headless
+    /// Mac wired only to external outputs, in which case the keep-alive falls back
+    /// to the default output). Independent of which device is currently the
+    /// default output — we render the keep-alive silence here so it never engages
+    /// the user's (USB/Bluetooth) meeting-audio device.
+    private static func builtInOutputDeviceID() -> AudioObjectID? {
         var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyTranslatePIDToProcessObject,
+            mSelector: kAudioHardwarePropertyDevices,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        var pid = getpid()
-        var object = AudioObjectID(kAudioObjectUnknown)
-        var size = UInt32(MemoryLayout<AudioObjectID>.size)
-        let status = AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &address,
-            UInt32(MemoryLayout<pid_t>.size),
-            &pid,
-            &size,
-            &object
+        var dataSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &dataSize
+        ) == noErr, dataSize > 0 else { return nil }
+        let count = Int(dataSize) / MemoryLayout<AudioObjectID>.size
+        var devices = [AudioObjectID](repeating: AudioObjectID(kAudioObjectUnknown), count: count)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &dataSize, &devices
+        ) == noErr else { return nil }
+
+        for device in devices where device != AudioObjectID(kAudioObjectUnknown) {
+            guard deviceTransportType(device) == kAudioDeviceTransportTypeBuiltIn,
+                deviceHasOutputChannels(device)
+            else { continue }
+            return device
+        }
+        return nil
+    }
+
+    /// A device's transport type (`kAudioDevicePropertyTransportType`), or nil.
+    private static func deviceTransportType(_ device: AudioObjectID) -> UInt32? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyTransportType,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
         )
-        guard status == noErr, object != AudioObjectID(kAudioObjectUnknown) else { return nil }
-        return object
+        var transport: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        let status = AudioObjectGetPropertyData(device, &address, 0, nil, &size, &transport)
+        return status == noErr ? transport : nil
+    }
+
+    /// Whether a device exposes at least one output channel (so we don't pick an
+    /// input-only built-in device as the keep-alive target).
+    private static func deviceHasOutputChannels(_ device: AudioObjectID) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreamConfiguration,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr,
+            size > 0 else { return false }
+        let ablPtr = UnsafeMutableRawPointer.allocate(
+            byteCount: Int(size),
+            alignment: MemoryLayout<AudioBufferList>.alignment
+        )
+        defer { ablPtr.deallocate() }
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, ablPtr) == noErr else {
+            return false
+        }
+        let abl = UnsafeMutableAudioBufferListPointer(
+            ablPtr.assumingMemoryBound(to: AudioBufferList.self)
+        )
+        var channels: UInt32 = 0
+        for buffer in abl { channels += buffer.mNumberChannels }
+        return channels > 0
     }
 }
