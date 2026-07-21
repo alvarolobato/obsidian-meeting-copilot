@@ -162,7 +162,18 @@ a re-download loop every load.
 4. **restoring `src/binary.ts`** (in a `finally`, so the worktree stays clean),
 5. copying `main.js` / `manifest.json` / `styles.css` (and the binary with
    `--swift`) into the vault — **never `data.json`** (it holds the user's
-   settings; OAuth tokens + client secret live in per-vault localStorage).
+   settings; OAuth tokens + client secret live in per-vault localStorage),
+6. stamping the **deployed** `manifest.json` `version` with the nearest git tag
+   (`git describe --tags --abbrev=0`) so Obsidian's plugin list shows a real
+   version instead of the `main` placeholder (`0.1.0`). It's the *nearest tag*,
+   not a full `git describe` string, on purpose: `manifest.version` doubles as
+   the GitHub release tag in `releaseUrl`/`whisperDylibUrl` (`src/binary.ts`), so
+   a non-tag value would 404 if the helper ever re-provisions. Custom-build
+   provenance (branch/commit/date) is baked into the bundle and shown in-app
+   instead (settings tab + load-time log; see `src/buildInfo.ts`, injected by
+   esbuild `define` and marked `isRelease` only when `release.yml` sets
+   `MC_RELEASE=1`). Only the vault copy is stamped — the source `manifest.json`
+   stays clean.
 
 Do **not** commit a locally pinned `EXPECTED_SHA256` — the sha is machine/build
 specific and CI owns that value for releases.

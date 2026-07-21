@@ -43,6 +43,28 @@ describe("describeVersion", () => {
 		).toBe("0.4.3 (custom build)");
 	});
 
+	it("ignores provenance for a release even when fields are present", () => {
+		expect(
+			describeVersion("0.4.3", "custom build", {
+				commit: "a1b2c3d",
+				branch: "feat/x",
+				buildDate: "2026-07-21",
+				isRelease: true,
+			})
+		).toBe("0.4.3");
+	});
+
+	it("handles a commit-only custom build (no branch, no date)", () => {
+		expect(
+			describeVersion("0.4.3", "custom build", {
+				commit: "a1b2c3d",
+				branch: null,
+				buildDate: null,
+				isRelease: false,
+			})
+		).toBe("0.4.3 (custom build: a1b2c3d)");
+	});
+
 	it("uses the provided (localisable) custom-build label", () => {
 		expect(
 			describeVersion("0.4.3", "compilación personalizada", {

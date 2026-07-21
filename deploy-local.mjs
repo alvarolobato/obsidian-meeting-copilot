@@ -158,26 +158,30 @@ for (const f of ["main.js", "manifest.json", "styles.css"]) {
 }
 
 // Stamp the DEPLOYED manifest with a real version so Obsidian's plugin list
-// doesn't show the `main` placeholder (0.1.0). Derive it from git so it tracks
-// the latest tag (+ commit/dirty for work past a tag). Only the vault copy is
-// touched — the source manifest.json stays clean. The plugin builds its
-// asset-download URL from this version, but a local deploy ships the pinned
-// binary/dylib so provisioning is satisfied and never downloads.
-let devVersion = null;
+// doesn't show the `main` placeholder (0.1.0). Use the NEAREST TAG on purpose
+// (not full `git describe`): the plugin builds its GitHub release-asset download
+// URL from `manifest.version` (releaseUrl/whisperDylibUrl in src/binary.ts), so
+// a non-tag string like "0.4.3-dirty" would 404 if the helper ever needs
+// re-provisioning (deleted/corrupt binary or dylib). The nearest tag keeps that
+// recovery path pointing at a real release. Custom-build provenance
+// (branch/commit/date) is shown in-app instead — settings tab + load log, see
+// src/buildInfo.ts. Only the vault copy is stamped; the source manifest.json
+// stays clean.
+let releaseTag = null;
 try {
-	devVersion =
-		execFileSync("git", ["describe", "--tags", "--dirty", "--always"], {
+	releaseTag =
+		execFileSync("git", ["describe", "--tags", "--abbrev=0"], {
 			encoding: "utf8",
 		}).trim() || null;
 } catch {
-	devVersion = null;
+	releaseTag = null;
 }
-if (devVersion) {
+if (releaseTag) {
 	const manifestPath = path.join(DEST, "manifest.json");
 	const m = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-	m.version = devVersion;
+	m.version = releaseTag;
 	fs.writeFileSync(manifestPath, JSON.stringify(m, null, "\t") + "\n");
-	console.log(`deploy-local: stamped manifest version = ${devVersion}`);
+	console.log(`deploy-local: stamped manifest version = ${releaseTag}`);
 }
 
 if (fs.existsSync("fvad.wasm")) {

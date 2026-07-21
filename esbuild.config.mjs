@@ -7,6 +7,9 @@ import { execFileSync } from "node:child_process";
 // Build provenance baked into the bundle so the plugin can tell a real release
 // from a local/custom build (see src/buildInfo.ts). `git` may be unavailable
 // (e.g. building from a source tarball) — degrade to null, never fail the build.
+// Captured once at config load: production builds are one-shot so this is exact;
+// in `--watch` (dev) it reflects the state when the watcher started, which is
+// fine for a dev provenance banner.
 function gitOut(args) {
 	try {
 		return execFileSync("git", args, { encoding: "utf8" }).trim() || null;
