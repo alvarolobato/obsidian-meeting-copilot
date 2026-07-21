@@ -37,9 +37,10 @@ export interface AwaitIndexedFileOptions {
 	/** Backstop poll interval. Default 1 s. */
 	pollMs?: number;
 	/**
-	 * Aborts the wait (e.g. a manual transcribe superseded it). Resolves with the
-	 * currently-indexed file if one exists, else `null` — so the caller MUST check
-	 * `signal.aborted` to distinguish "superseded" from "genuinely not found".
+	 * Aborts the wait (e.g. a manual transcribe superseded it). Always resolves
+	 * `null` — an aborted wait is cancelled, not a lookup result. Callers that
+	 * need to tell "superseded" from "genuinely not found" should check
+	 * `signal.aborted`.
 	 */
 	signal?: AbortSignal;
 }
@@ -64,7 +65,7 @@ export async function awaitIndexedFile<T>(
 	if (!(await deps.existsOnDisk(path))) {
 		return deps.getIndexed(path);
 	}
-	if (signal?.aborted) return deps.getIndexed(path);
+	if (signal?.aborted) return null;
 
 	return new Promise<T | null>((resolve) => {
 		let settled = false;
@@ -108,7 +109,7 @@ export async function awaitIndexedFile<T>(
 		});
 		capHandle = deps.setTimeout(() => finish(deps.getIndexed(path)), capMs);
 		if (signal) {
-			onAbort = () => finish(deps.getIndexed(path));
+			onAbort = () => finish(null);
 			signal.addEventListener("abort", onAbort, { once: true });
 		}
 		schedulePoll();

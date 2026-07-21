@@ -5639,13 +5639,13 @@ export default class SystemRecordingPlugin extends Plugin {
                 },
                 existsOnDisk: (p) => this.app.vault.adapter.exists(p),
                 onCreate: (cb) => {
+                    // awaitIndexedFile always calls the returned unsubscribe on
+                    // settle (resolve/cap/abort), and onunload aborts every
+                    // pending wait, so the listener is removed on all paths
+                    // without a separate registerEvent.
                     const ref = this.app.vault.on("create", (file) =>
                         cb(file.path)
                     );
-                    // registerEvent is the unload backstop; offref (via the
-                    // returned unsubscribe) removes it early the moment the wait
-                    // settles. Double-removal is a no-op in Obsidian.
-                    this.registerEvent(ref);
                     return () => this.app.vault.offref(ref);
                 },
                 setTimeout: (fn, ms) => window.setTimeout(fn, ms),
