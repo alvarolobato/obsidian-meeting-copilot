@@ -155,6 +155,36 @@ describe("awaitIndexedFile", () => {
 		expect(clock.count()).toBe(0);
 	});
 
+	it("ignores an abort that arrives after the wait already resolved", async () => {
+		const clock = makeClock();
+		let indexed: string | null = null;
+		let cb: ((p: string) => void) | null = null;
+		const unsub = vi.fn();
+		const ac = new AbortController();
+		const p = awaitIndexedFile<string>(
+			"p",
+			{
+				getIndexed: () => indexed,
+				existsOnDisk: async () => true,
+				onCreate: (fn) => {
+					cb = fn;
+					return unsub;
+				},
+				setTimeout: clock.setTimeout,
+				clearTimeout: clock.clearTimeout,
+			},
+			{ capMs: 100_000, pollMs: 100_000, signal: ac.signal }
+		);
+		await tick();
+		indexed = "FILE";
+		cb!("p"); // resolves with the file
+		await expect(p).resolves.toBe("FILE");
+		// A late abort must not flip the already-settled result or re-run cleanup.
+		ac.abort();
+		expect(unsub).toHaveBeenCalledTimes(1);
+		expect(clock.count()).toBe(0);
+	});
+
 	it("returns null immediately when the signal is already aborted", async () => {
 		const ac = new AbortController();
 		ac.abort();

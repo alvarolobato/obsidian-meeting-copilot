@@ -36,7 +36,11 @@ export interface AwaitIndexedFileOptions {
 	capMs?: number;
 	/** Backstop poll interval. Default 1 s. */
 	pollMs?: number;
-	/** Aborts the wait (e.g. a manual transcribe superseded it). Resolves `null`. */
+	/**
+	 * Aborts the wait (e.g. a manual transcribe superseded it). Resolves with the
+	 * currently-indexed file if one exists, else `null` — so the caller MUST check
+	 * `signal.aborted` to distinguish "superseded" from "genuinely not found".
+	 */
 	signal?: AbortSignal;
 }
 

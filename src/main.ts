@@ -3206,6 +3206,10 @@ export default class SystemRecordingPlugin extends Plugin {
             new Notice(t().agenda.notices.noRecording);
             return;
         }
+        // A manual transcribe supersedes any auto-wait still pending for this
+        // take — covers the multi-take rebuild path below, which doesn't go
+        // through launchTranscriber (so its own cancellation wouldn't fire).
+        this.cancelPendingAutoTranscribe(m.recording.path);
         // A manual re-transcribe REPLACES the transcript. With several takes,
         // transcribing only the latest and replacing would drop the earlier
         // ones' text, so rebuild the whole transcript from every take in one
@@ -3584,11 +3588,7 @@ export default class SystemRecordingPlugin extends Plugin {
         // A transcribe of this recording from any trigger (manual, or this very
         // auto run once the wait resolved) supersedes a still-pending auto-wait
         // for the same take — cancel it so it can't fire a duplicate later.
-        const pendingWait = this.pendingAutoTranscribe.get(recording.path);
-        if (pendingWait) {
-            pendingWait.abort();
-            this.pendingAutoTranscribe.delete(recording.path);
-        }
+        this.cancelPendingAutoTranscribe(recording.path);
         // The remote backend needs an endpoint; the local one provisions its own
         // model/helper, so it can transcribe with no endpoint configured.
         if (
@@ -5525,7 +5525,12 @@ export default class SystemRecordingPlugin extends Plugin {
                     return slash >= 0 ? p.slice(0, slash) : "";
                 };
                 const folder = dirOf(recordingPath ?? notePath);
-                const link = folder ? `${folder}/${fileName}` : fileName;
+                // Normalize so this key matches the recording's TFile.path (which
+                // uniqueRecordingPath already normalized) — the pendingAutoTranscribe
+                // lookup and the index poll both key on it.
+                const link = normalizePath(
+                    folder ? `${folder}/${fileName}` : fileName
+                );
                 try {
                     await linkRecording(this.app, file, link);
                 } catch (e) {
@@ -5547,6 +5552,9 @@ export default class SystemRecordingPlugin extends Plugin {
                     // the headline automation (issue #29). Cancellable so a manual
                     // transcribe of the same take supersedes it.
                     const ac = new AbortController();
+                    // Supersede any stale wait for this path (implausible with
+                    // unique names, but keeps the map single-writer per path).
+                    this.cancelPendingAutoTranscribe(link);
                     this.pendingAutoTranscribe.set(link, ac);
                     void this.resolveIndexedRecording(link, ac.signal)
                         .then((audio) => {
@@ -5634,6 +5642,9 @@ export default class SystemRecordingPlugin extends Plugin {
                     const ref = this.app.vault.on("create", (file) =>
                         cb(file.path)
                     );
+                    // registerEvent is the unload backstop; offref (via the
+                    // returned unsubscribe) removes it early the moment the wait
+                    // settles. Double-removal is a no-op in Obsidian.
                     this.registerEvent(ref);
                     return () => this.app.vault.offref(ref);
                 },
@@ -5642,6 +5653,15 @@ export default class SystemRecordingPlugin extends Plugin {
             },
             { signal }
         );
+    }
+
+    /** Aborts and forgets any pending auto-transcribe wait for a recording path. */
+    private cancelPendingAutoTranscribe(vaultPath: string): void {
+        const ac = this.pendingAutoTranscribe.get(vaultPath);
+        if (ac) {
+            ac.abort();
+            this.pendingAutoTranscribe.delete(vaultPath);
+        }
     }
 
     /**
