@@ -235,9 +235,18 @@ final class SystemAudioProcessTap: @unchecked Sendable {
         if let builtInID = Self.builtInOutputDeviceID(),
             let unit = engine.outputNode.audioUnit {
             var device = builtInID
-            AudioUnitSetProperty(
+            let status = AudioUnitSetProperty(
                 unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global,
                 0, &device, UInt32(MemoryLayout<AudioObjectID>.size))
+            if status != noErr {
+                // Assignment failed, so the engine keeps the default output. The
+                // keep-alive still works (the global tap captures regardless of
+                // destination), but the default may be the user's headset, so
+                // surface it. stderr only — stdout is the plugin's NDJSON channel.
+                let msg = "system-recorder: keep-alive could not target built-in "
+                    + "output (AudioUnitSetProperty status=\(status)); using default\n"
+                FileHandle.standardError.write(Data(msg.utf8))
+            }
         }
         let format = engine.outputNode.inputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { return }
