@@ -11,12 +11,15 @@ export function releaseUrl(version: string): string {
 
 /**
  * SHA-256 (hex) and byte size of the `whisper.framework` dylib the recorder
- * helper links for on-device transcription (issue #34). Unlike the recorder
- * binary's per-release hash, this is a CONSTANT: the dylib comes from the
- * whisper.cpp XCFramework pinned in `swift-helper/Package.swift`, so every
- * release ships the exact same bytes. The universal (x86_64+arm64) slice from
- * v1.7.5. `release.yml` asserts the shipped dylib matches this before upload —
- * if the pinned XCFramework version changes, both values must be refreshed.
+ * helper links for on-device transcription (issue #34), used by the provisioner
+ * to verify the downloaded dylib. Like {@link EXPECTED_SHA256}, these are
+ * **re-pinned per release** by `release.yml`: the XCFramework ships the dylib
+ * UNSIGNED, and recent macOS SIGKILLs a process that loads unsigned dylib pages
+ * at launch, so the release job ad-hoc signs the dylib (which changes its bytes
+ * and size) and pins the *signed* sha/size here before building `main.js`. The
+ * values below are placeholders for local/dev builds; `deploy-local.mjs` pins
+ * them the same way for a local deploy. (Upstream-drift of the underlying
+ * XCFramework is guarded separately by its URL + checksum in `Package.swift`.)
  */
 export const EXPECTED_WHISPER_SHA256 =
 	"e6c2b3c065d06ed04ee70f3dbe7479b62ff69d71a20311b07397df8c282aeb03";

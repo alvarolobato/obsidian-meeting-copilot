@@ -86,35 +86,51 @@ jobs:
         run: |
           cp swift-helper/.build/release/SystemRecorder system-recorder
           chmod +x system-recorder
+          # Replace swift's *linker-signed* ad-hoc signature with a plain,
+          # location-independent one. The kernel accepts a linker-signed
+          # executable only at the path the linker created it; once copied here
+          # (and downloaded by users) recent macOS SIGKILLs it at launch with
+          # "Code Signature Invalid" before main(). Sign before hashing so the
+          # pinned sha matches the binary we actually ship.
+          codesign --force --sign - system-recorder
           SHA=$(shasum -a 256 system-recorder | cut -d' ' -f1)
           echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
           echo "Helper SHA-256: ${SHA}"
 
       # Ship the whisper.cpp dylib the helper links for on-device transcription
-      # (issue #34). It's constant across releases (pinned XCFramework), so we
-      # DON'T re-pin it — we assert the freshly built bytes still match the
-      # EXPECTED_WHISPER_SHA256 baked into main.js, failing loudly if the pinned
-      # framework version drifted from the constant in src/binary.ts.
-      - name: Stage whisper dylib + verify pinned checksum
+      # (issue #34). The XCFramework ships it UNSIGNED, and recent macOS (the
+      # code-signing monitor) SIGKILLs a process that loads unsigned dylib pages
+      # ("CODESIGNING / Invalid Page") before main() — so we ad-hoc sign it, then
+      # pin its (post-signing) sha + size into main.js like we do the binary. The
+      # pin is done in-job so the shipped dylib and the embedded checksum always
+      # agree regardless of the runner's codesign version. Upstream-drift is
+      # already guarded by the XCFramework URL + checksum in Package.swift, so no
+      # separate unsigned-bytes assertion is needed here.
+      - name: Stage + sign whisper dylib, pin checksum
         run: |
           cp swift-helper/.build/release/whisper.framework/Versions/A/whisper whisper
+          codesign --force --sign - whisper
           BUILT_SHA=$(shasum -a 256 whisper | cut -d' ' -f1)
           BUILT_SIZE=$(wc -c < whisper | tr -d ' ')
-          PINNED_SHA=$(node -e 'const fs=require("fs");const m=fs.readFileSync("src/binary.ts","utf8").match(/EXPECTED_WHISPER_SHA256\s*=\s*"([0-9a-f]+)"/);process.stdout.write(m?m[1]:"")')
-          PINNED_SIZE=$(node -e 'const fs=require("fs");const m=fs.readFileSync("src/binary.ts","utf8").match(/WHISPER_DYLIB_SIZE\s*=\s*(\d+)/);process.stdout.write(m?m[1]:"")')
-          echo "whisper dylib: sha=${BUILT_SHA} size=${BUILT_SIZE} (pinned sha=${PINNED_SHA} size=${PINNED_SIZE})"
-          # Guard a regex miss (constant renamed/reformatted) so we don't compare
-          # against an empty string and ship an unverified dylib.
-          if [ -z "${PINNED_SHA}" ] || [ -z "${PINNED_SIZE}" ]; then
-            echo "::error::Could not parse EXPECTED_WHISPER_SHA256 / WHISPER_DYLIB_SIZE from src/binary.ts"
-            exit 1
-          fi
-          # Both must match: an XCFramework bump that refreshed only one constant
-          # would otherwise pass here but break AssetProvisioner for end users.
-          if [ "${BUILT_SHA}" != "${PINNED_SHA}" ] || [ "${BUILT_SIZE}" != "${PINNED_SIZE}" ]; then
-            echo "::error::Shipped whisper dylib (sha=${BUILT_SHA}, size=${BUILT_SIZE}) != pinned (sha=${PINNED_SHA}, size=${PINNED_SIZE}). Refresh EXPECTED_WHISPER_SHA256 + WHISPER_DYLIB_SIZE in src/binary.ts for the new XCFramework."
-            exit 1
-          fi
+          echo "signed whisper dylib: sha=${BUILT_SHA} size=${BUILT_SIZE}"
+          export BUILT_SHA BUILT_SIZE
+          node -e '
+            const fs = require("fs");
+            const p = "src/binary.ts";
+            const sha = process.env.BUILT_SHA;
+            const size = process.env.BUILT_SIZE;
+            let s = fs.readFileSync(p, "utf8")
+              .replace(/EXPECTED_WHISPER_SHA256\s*=\s*"[0-9a-f]*"/, `EXPECTED_WHISPER_SHA256 =\n\t"${sha}"`)
+              .replace(/WHISPER_DYLIB_SIZE\s*=\s*\d+/, `WHISPER_DYLIB_SIZE = ${size}`);
+            // Fail loudly if either pattern stopped matching: otherwise we would
+            // ship a main.js whose whisper checksum/size does not match the
+            // attached dylib, breaking AssetProvisioner for every user.
+            if (!s.includes(`"${sha}"`) || !s.includes(`WHISPER_DYLIB_SIZE = ${size}`)) {
+              console.error("Failed to pin EXPECTED_WHISPER_SHA256 / WHISPER_DYLIB_SIZE in src/binary.ts");
+              process.exit(1);
+            }
+            fs.writeFileSync(p, s);
+          '
 
       - name: Pin helper checksum into the plugin build
         env:

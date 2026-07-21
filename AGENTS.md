@@ -174,13 +174,18 @@ dylib into the **exact release layout** —
 build's absolute symlink) — so the deployed plugin is self-contained and matches
 what `AssetProvisioner` writes for shipped users. The helper resolves it via an
 `@loader_path` rpath at launch, so a missing/misplaced dylib fails dyld **before
-`main()`** — breaking recording, not just transcription. Unlike the binary's
-`EXPECTED_SHA256` (a `main` placeholder that `release.yml` **re-pins** at tag
-time), `EXPECTED_WHISPER_SHA256` / `WHISPER_DYLIB_SIZE` in `src/binary.ts` are
-**fixed committed constants** for the pinned XCFramework: `release.yml` only
-*verifies* the freshly built dylib against them and fails loudly on a mismatch,
-so refresh both by hand when you bump the XCFramework (never a `deploy-local`
-placeholder). Local Whisper **models** are downloaded on demand into the
+`main()`** — breaking recording, not just transcription. The XCFramework ships
+this dylib **unsigned**, and recent macOS (the code-signing monitor) SIGKILLs a
+process that maps unsigned dylib pages **before `main()`** (`CODESIGNING /
+Invalid Page`) — so both `deploy-local.mjs` and `release.yml` **ad-hoc sign** it
+(`codesign --force --sign -`), just like the helper binary. Because signing
+changes the bytes, `EXPECTED_WHISPER_SHA256` / `WHISPER_DYLIB_SIZE` in
+`src/binary.ts` are **re-pinned per build from the *signed* dylib**, exactly
+like the binary's `EXPECTED_SHA256`: `release.yml` pins them at tag time and
+`deploy-local.mjs` pins them for a local deploy, so the committed values are
+just placeholders — don't hand-maintain them. Upstream-XCFramework drift is
+guarded separately by the `binaryTarget` URL + checksum in
+`swift-helper/Package.swift`. Local Whisper **models** are downloaded on demand into the
 plugin's `models/` dir and pinned by SHA-256 in `localModels.ts`; they're never
 bundled or deployed.
 
@@ -199,10 +204,10 @@ Security → Screen Recording and restart Obsidian.
 ## Releases
 
 Releases are cut by pushing a semver tag; `release.yml` builds everything on a
-macOS runner, pins the freshly built binary's sha into the bundle, verifies the
-built `whisper` dylib against the pinned `EXPECTED_WHISPER_SHA256` **and**
-`WHISPER_DYLIB_SIZE` (an XCFramework bump that refreshes only one would fail the
-build rather than ship an unverified dylib), and publishes a GitHub Release with
+macOS runner, **ad-hoc signs** the freshly built binary **and** the `whisper`
+dylib and pins each one's sha (plus the dylib's byte size) into the bundle from
+the *signed* artifact — so `main.js` and the uploaded assets always agree and
+both load on strict-codesigning macOS — and publishes a GitHub Release with
 `main.js`, `manifest.json`, `styles.css`, `system-recorder`, `whisper`, and
 `fvad.wasm` (the bundled WebRTC-VAD module — a missing copy degrades gracefully).
 
