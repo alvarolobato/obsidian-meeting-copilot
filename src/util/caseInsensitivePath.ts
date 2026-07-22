@@ -22,8 +22,16 @@ export function findByPathCaseInsensitive<T extends { path: string }>(
 	let ciMatch: T | null = null;
 	const lower = target.toLowerCase();
 	for (const item of items) {
-		if (item.path === target) return item;
-		if (ciMatch === null && item.path.toLowerCase() === lower) {
+		const p = item.path;
+		if (p === target) return item;
+		// Case-only differences preserve length, so a length mismatch rules out
+		// a case-insensitive match without allocating a lowercased copy — skips
+		// the toLowerCase() for the vast majority of a large vault.getFiles().
+		if (
+			ciMatch === null &&
+			p.length === lower.length &&
+			p.toLowerCase() === lower
+		) {
 			ciMatch = item;
 		}
 	}
