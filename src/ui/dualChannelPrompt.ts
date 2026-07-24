@@ -1,20 +1,13 @@
 /**
- * Coordinates a meeting prompt across two channels so it's **never silently
- * lost**:
+ * Coordinates a meeting prompt across **exclusive** channels so surfaces never
+ * stack:
  *
- *  - The in-app Obsidian `Notice` is **always** shown. It's the reliable
- *    channel and it stays in Obsidian until dismissed, so even if the user is
- *    away when it fires, the prompt is waiting when they come back.
- *  - A native OS notification is shown **additionally, only when Obsidian isn't
- *    frontmost** — an in-app notice can't be seen there. When Obsidian is
- *    frontmost the native banner would just duplicate the in-app notice, so it's
- *    skipped.
- *
- * (This deliberately replaced an earlier design that posted the OS notification
- * first and used its `show` event to suppress the in-app notice. That event is
- * an unreliable "was it seen?" signal — macOS fires it even when it routes the
- * notification silently to Notification Center under Focus/DND — which could
- * leave the prompt invisible on every channel.)
+ *  - **Focused** → in-app Obsidian `Notice` only (no OS banner).
+ *  - **Unfocused** → native OS notification only (no in-app Notice yet).
+ *  - **Becomes focused** → close the OS handle and show the in-app Notice so
+ *    the prompt is waiting with its full action set.
+ *  - **OS failed** → fall back to the in-app Notice immediately so the prompt
+ *    isn't lost when the system notification can't be shown.
  *
  * `dispose()` tears the prompt down. It closes the OS notification by default
  * (supersede / user action), but callers doing housekeeping sweeps can pass
@@ -46,6 +39,11 @@ export interface DualChannelController {
 	 * user action) use the default `dispose()` to close the OS notification.
 	 */
 	dispose(opts?: { keepOs?: boolean }): void;
+	/**
+	 * Obsidian became frontmost: close any OS notification and ensure the in-app
+	 * Notice is showing. No-op if already disposed or the in-app notice is up.
+	 */
+	onBecameFocused(): void;
 }
 
 export interface DualChannelOptions {
@@ -53,22 +51,41 @@ export interface DualChannelOptions {
 	focused: boolean;
 	/** Creates and shows the in-app notice, returning a handle to hide it. */
 	showInApp: () => InAppHandle;
-	/** Posts the native OS notification (called only when unfocused), returning a handle to close it. */
-	showOs: () => OsHandle;
+	/**
+	 * Posts the native OS notification (called only when unfocused). Receives a
+	 * `fallbackToInApp` callback to invoke if the OS notification can't be shown.
+	 */
+	showOs: (fallbackToInApp: () => void) => OsHandle;
 }
 
 /**
  * Starts the coordination and returns a controller. See the module doc for the
- * policy: in-app always, native OS additive when unfocused.
+ * policy: exclusive channels, with a focus swap from OS → in-app.
  */
 export function startDualChannelPrompt(
 	opts: DualChannelOptions
 ): DualChannelController {
-	// The in-app notice always goes up — it's reliable and waits in Obsidian.
-	let inApp: InAppHandle | null = opts.showInApp();
-	// The native OS notification is additive, only when Obsidian isn't frontmost.
-	let os: OsHandle | null = opts.focused ? null : opts.showOs();
+	let inApp: InAppHandle | null = null;
+	let os: OsHandle | null = null;
 	let disposed = false;
+
+	const ensureInApp = (): void => {
+		if (disposed || inApp) return;
+		inApp = opts.showInApp();
+	};
+
+	if (opts.focused) {
+		inApp = opts.showInApp();
+	} else {
+		os = opts.showOs(() => {
+			// OS couldn't show — don't leave the prompt invisible.
+			if (os) {
+				os.close();
+				os = null;
+			}
+			ensureInApp();
+		});
+	}
 
 	return {
 		dispose(o?: { keepOs?: boolean }): void {
@@ -84,6 +101,14 @@ export function startDualChannelPrompt(
 				os.close();
 				os = null;
 			}
+		},
+		onBecameFocused(): void {
+			if (disposed) return;
+			if (os) {
+				os.close();
+				os = null;
+			}
+			ensureInApp();
 		},
 	};
 }
