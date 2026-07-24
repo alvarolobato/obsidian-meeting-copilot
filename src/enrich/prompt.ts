@@ -8,6 +8,8 @@ export interface EnrichmentContext {
 	notes: string;
 	/** The participant's own, hand-written action items (one per line). */
 	actionItems: string;
+	/** Meeting-wide hand-written follow-ups (one per line). */
+	followUps: string;
 	transcript: string;
 }
 
@@ -34,6 +36,11 @@ The participant's own action items, typed by hand (may be empty). These are auth
 {{actionItems}}
 """
 
+Meeting-wide follow-ups already typed by hand under the Follow-ups section (may be empty). These are authoritative shared commitments — preserve every one (you may only refine wording / fold in a concrete detail):
+"""
+{{followUps}}
+"""
+
 Transcript (may be empty):
 """
 {{transcript}}
@@ -47,7 +54,9 @@ Structure:
 - Under each heading use a few terse "- " bullets — sentence fragments, not full sentences. Merge related points into one bullet; never split a single idea across several.
 - Nest a sub-bullet ("  - ") only when a point truly needs one concrete detail (a number, name, or example). Never go deeper than one level, and use nesting sparingly.
 - Fold the participant's own notes into the relevant sections; never drop anything they wrote.
-- Finish with a "### Next steps" section: the participant's unified to-do list, built in two steps. FIRST, carry over EVERY hand-written action item listed above — never drop, merge away, or omit one, even if it looks incomplete or would not otherwise qualify below; you may only refine its wording for clarity, correct an obvious error, and fold in one concrete detail from the transcript (a name, date, or number). THEN append any ADDITIONAL concrete tasks the participant themselves still has to do — things they personally committed to and have not started yet. Format each as "- **Concise task**". The participant is the author of these notes (the "Me" speaker when the transcript is labeled "Me:"/"Them:"); otherwise infer from the notes and context. The following exclusions apply ONLY to the additional tasks, never to the hand-written items: exclude work already underway or described as ongoing, anything owned by or delegated to someone else, decisions, status, general follow-ups, and passive "waiting for"/"awaiting X" items; and never phrase an added task as continuing, keeping, maintaining, or improving something already in progress (no "Continue …", "Keep …", "Maintain …", "Keep polishing …") — drop those entirely rather than rewording them into tasks. When you cannot tell that the participant personally owns a discrete, not-yet-started task, leave it out. Omit the whole section only when there are neither hand-written action items nor such additional tasks — never pad it.
+- Finish with TWO closing sections, in this order:
+  1. "### Next steps" — the participant's unified personal to-do list, built in two steps. FIRST, carry over EVERY hand-written action item listed above — never drop, merge away, or omit one, even if it looks incomplete or would not otherwise qualify below; you may only refine its wording for clarity, correct an obvious error, and fold in one concrete detail from the transcript (a name, date, or number). THEN append any ADDITIONAL concrete tasks the participant themselves still has to do — things they personally committed to and have not started yet. Format each as "- **Concise task**". The participant is the author of these notes (the "Me" speaker when the transcript is labeled "Me:"/"Them:"); otherwise infer from the notes and context. The following exclusions apply ONLY to the additional tasks, never to the hand-written items: exclude work already underway or described as ongoing, anything owned by or delegated to someone else, decisions, status, general follow-ups, and passive "waiting for"/"awaiting X" items; and never phrase an added task as continuing, keeping, maintaining, or improving something already in progress (no "Continue …", "Keep …", "Maintain …", "Keep polishing …") — drop those entirely rather than rewording them into tasks. When you cannot tell that the participant personally owns a discrete, not-yet-started task, leave it out. Omit the whole section only when there are neither hand-written action items nor such additional tasks — never pad it.
+  2. "### Follow-ups" — meeting-wide commitments that are NOT the participant's personal Next steps. FIRST, carry over EVERY hand-written follow-up listed above (same refine-only rule). THEN append additional concrete, not-yet-started commitments owned by someone else or by the group. Format each as "- **Owner:** concise task" when the owner is clear from the notes, transcript, or attendees list; otherwise "- concise task" with no owner. Use a short given name or how they appear in Attendees — never invent people. Exclude the participant's own tasks (those belong only in Next steps), decisions, status updates, and passive "waiting for" items. Omit the whole section when there are neither hand-written follow-ups nor such commitments — never pad it.
 
 Keep it tight:
 - Match length to substance: a short meeting yields a short note. Do not pad. As a rough ceiling, keep the whole thing well under one screen of text for a typical 30-minute meeting.
@@ -84,7 +93,8 @@ ${t}
 """`;
 }
 
-const PLACEHOLDER = /\{\{(title|date|attendees|notes|actionItems|transcript)\}\}/g;
+const PLACEHOLDER =
+	/\{\{(title|date|attendees|notes|actionItems|followUps|transcript)\}\}/g;
 
 /** Fills a prompt template with the context, defaulting empty fields to "(none)". */
 export function fillPrompt(template: string, ctx: EnrichmentContext): string {

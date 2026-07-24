@@ -271,6 +271,20 @@ export const en = {
 			taskMoved: "That task has changed in its note; refreshing.",
 			taskError: (msg: string) => `Couldn't complete the task: ${msg}`,
 		},
+		followups: {
+			count: (n: number) =>
+				`${n} open follow-up${n === 1 ? "" : "s"}`,
+			empty: "No open meeting follow-ups.",
+			emptyRecent: "No recent follow-ups.",
+			loading: "Scanning notes…",
+			showOlder: (n: number) =>
+				`Show older (${n})`,
+			hideOlder: "Hide older",
+			ageDays: (n: number) => (n === 1 ? "1 day old" : `${n} days old`),
+			taskMoved: "That follow-up has changed in its note; refreshing.",
+			taskError: (msg: string) =>
+				`Couldn't complete the follow-up: ${msg}`,
+		},
 	},
 	settings: {
 		// Version line at the top of the settings tab. Release builds show just
@@ -343,7 +357,11 @@ export const en = {
 		},
 		actionItemsAsTasks: {
 			name: "Action items as tasks",
-			desc: "When enriching, lift the AI's action items into checkboxes under '## Action items' so the obsidian-tasks plugin can track them. Existing and completed tasks are preserved.",
+			desc: "When enriching, lift the AI's Next steps into checkboxes under '## Action items' and meeting-wide Follow-ups under '## Follow-ups' so the obsidian-tasks plugin can track them. Existing and completed tasks are preserved. Fresh tasks are stamped with a creation date (➕).",
+		},
+		followUpHorizonDays: {
+			name: "Follow-up horizon (days)",
+			desc: "On the dashboard, hide open meeting follow-ups older than this many days by default (reveal with Show older). Keeps the list from growing without bound. 0 shows all follow-ups.",
 		},
 		suggestAdhocTitle: {
 			name: "Suggest a title for unplanned meetings",
@@ -579,7 +597,7 @@ export const en = {
 		},
 		enrichPrompt: {
 			name: "Enrichment prompt",
-			desc: "Prompt sent to the model. While Customize is off, the plugin uses its built-in prompt (which improves with each update); toggle it on to edit and store your own. Placeholders: {{title}}, {{date}}, {{attendees}}, {{notes}}, {{actionItems}}, {{transcript}}.",
+			desc: "Prompt sent to the model. While Customize is off, the plugin uses its built-in prompt (which improves with each update); toggle it on to edit and store your own. Placeholders: {{title}}, {{date}}, {{attendees}}, {{notes}}, {{actionItems}}, {{followUps}}, {{transcript}}.",
 		},
 	},
 	oauth: {

@@ -546,6 +546,27 @@ ul.mc-action-tasks {
     font-weight: var(--font-normal);
 }
 
+/* Meeting follow-ups: keep the **Owner:** prefix bold so you can scan who to ping. */
+.mc-followups-list .mc-action-task-text strong,
+.mc-followups-list .mc-action-task-text b {
+    font-weight: var(--font-bold);
+}
+
+.mc-action-task-age {
+    flex-shrink: 0;
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: var(--font-ui-smaller);
+}
+
+.mc-actions-older {
+    margin: var(--size-2-2) 0 0;
+}
+
+.mc-actions-older-btn {
+    font-size: var(--font-ui-smaller);
+}
+
 /* Shared bottom toolbar: count on the left, controls + pagination on the right. */
 .mc-dash-toolbar {
     display: flex;

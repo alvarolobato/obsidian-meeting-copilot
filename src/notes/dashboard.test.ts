@@ -4,6 +4,7 @@ import {
 	buildDashboardBlock,
 	DASHBOARD_END,
 	DASHBOARD_START,
+	FOLLOWUPS_BLOCK_LANG,
 	PAST_BLOCK_LANG,
 	UPCOMING_BLOCK_LANG,
 	withDashboardBlock,
@@ -15,6 +16,7 @@ describe("buildDashboardBlock", () => {
 		expect(block).toContain("## Upcoming meetings");
 		expect(block).toContain("## Past meetings");
 		expect(block).toContain("## Open action items");
+		expect(block).toContain("## Meeting follow-ups");
 		expect(block).toContain("## Needs attention");
 		expect(block.startsWith(DASHBOARD_START)).toBe(true);
 		expect(block.endsWith(DASHBOARD_END)).toBe(true);
@@ -25,6 +27,7 @@ describe("buildDashboardBlock", () => {
 		expect(block).toContain("```" + UPCOMING_BLOCK_LANG);
 		expect(block).toContain("```" + PAST_BLOCK_LANG);
 		expect(block).toContain("```" + ACTIONS_BLOCK_LANG);
+		expect(block).toContain("```" + FOLLOWUPS_BLOCK_LANG);
 		// No Dataview left: no FROM/TASK query, no date-split predicates/sorts.
 		expect(block).not.toContain("```dataview");
 		expect(block).not.toContain("TASK WHERE");

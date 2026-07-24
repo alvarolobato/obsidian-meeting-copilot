@@ -183,6 +183,8 @@ export const DEFAULT_NOTE_TEMPLATE = `# {{title}}
 
 ## Action items
 
+## Follow-ups
+
 `;
 
 /** The new-note body template to use: the user's custom one when opted in, else the built-in default. */
