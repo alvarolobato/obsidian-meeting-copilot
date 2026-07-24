@@ -188,14 +188,22 @@ describe("startDualChannelPrompt", () => {
 		expect(inApp.shows()).toBe(1);
 	});
 
+<<<<<<< HEAD
 	it("synchronous OS failure does not retain a stale OS handle", () => {
+=======
+	it("synchronous OS failure does not keep a live OS handle", () => {
+>>>>>>> a78ce02 (fix: close OS handle when dual-channel fallback runs synchronously)
 		const inApp = trackedInApp();
 		let closes = 0;
 		const ctrl = startDualChannelPrompt({
 			focused: false,
 			showInApp: inApp.make,
 			showOs: (fallbackToInApp) => {
+<<<<<<< HEAD
 				fallbackToInApp();
+=======
+				fallbackToInApp(); // sync, before return
+>>>>>>> a78ce02 (fix: close OS handle when dual-channel fallback runs synchronously)
 				return {
 					close: (): void => {
 						closes++;
@@ -204,8 +212,17 @@ describe("startDualChannelPrompt", () => {
 			},
 		});
 		expect(inApp.shows()).toBe(1);
+<<<<<<< HEAD
 		expect(closes).toBe(1);
 		ctrl.dispose();
 		expect(closes).toBe(1);
+=======
+		// The returned handle was closed immediately after the sync fallback.
+		expect(closes).toBe(1);
+		ctrl.dispose();
+		// dispose must not close again (handle already dropped).
+		expect(closes).toBe(1);
+		expect(inApp.hides()).toBe(1);
+>>>>>>> a78ce02 (fix: close OS handle when dual-channel fallback runs synchronously)
 	});
 });

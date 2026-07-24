@@ -5484,8 +5484,8 @@ export default class SystemRecordingPlugin extends Plugin {
         try {
             const prefix = this.datePrefixOf(file);
             const suggested = prefix ? `${prefix} ${title}` : title;
-            // Mark settled only when the modal closes (Rename / Keep / dismiss),
-            // so Esc-without-action can still re-offer on a later enrich.
+            // Flag only on Rename/Keep — Esc/click-away leaves room to re-offer
+            // on a later enrich (issue #110).
             new RenameModal(this.app, {
                 heading: t().adhoc.titleModal.heading,
                 desc: t().adhoc.titleModal.desc,

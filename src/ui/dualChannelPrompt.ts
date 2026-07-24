@@ -68,29 +68,35 @@ export function startDualChannelPrompt(
 	let inApp: InAppHandle | null = null;
 	let os: OsHandle | null = null;
 	let disposed = false;
-	let fellBackToInApp = false;
 
 	const ensureInApp = (): void => {
 		if (disposed || inApp) return;
 		inApp = opts.showInApp();
 	};
 
+	const dropOs = (): void => {
+		if (!os) return;
+		os.close();
+		os = null;
+	};
+
 	if (opts.focused) {
 		inApp = opts.showInApp();
 	} else {
-		const pendingOs = opts.showOs(() => {
-			// OS couldn't show — don't leave the prompt invisible.
-			fellBackToInApp = true;
-			if (os) {
-				os.close();
-				os = null;
-			}
+		// `showOs` may invoke the fallback *synchronously* (e.g. permission
+		// denied before returning a handle). Track that so we don't keep a
+		// dead OS handle that never delivered.
+		let fallbackUsed = false;
+		const handle = opts.showOs(() => {
+			fallbackUsed = true;
+			dropOs();
 			ensureInApp();
 		});
-		if (fellBackToInApp) {
-			pendingOs.close();
+		if (fallbackUsed) {
+			handle.close();
+			os = null;
 		} else {
-			os = pendingOs;
+			os = handle;
 		}
 	}
 
@@ -104,17 +110,13 @@ export function startDualChannelPrompt(
 			}
 			// keepOs: intentionally leave the OS notification in Notification
 			// Center so a missed prompt stays recoverable there.
-			if (!o?.keepOs && os) {
-				os.close();
-				os = null;
+			if (!o?.keepOs) {
+				dropOs();
 			}
 		},
 		onBecameFocused(): void {
 			if (disposed) return;
-			if (os) {
-				os.close();
-				os = null;
-			}
+			dropOs();
 			ensureInApp();
 		},
 	};
