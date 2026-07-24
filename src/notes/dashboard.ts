@@ -14,6 +14,9 @@ export const PAST_BLOCK_LANG = "meeting-copilot-past";
 /** Fenced code-block language rendered by the plugin's paginated "Open action items" processor. */
 export const ACTIONS_BLOCK_LANG = "meeting-copilot-actions";
 
+/** Fenced code-block language rendered by the plugin's paginated "Meeting follow-ups" processor. */
+export const FOLLOWUPS_BLOCK_LANG = "meeting-copilot-followups";
+
 /**
  * `cssclasses` value the Create-dashboard command stamps on the dashboard note
  * so `styles.css` can let it use the full editor width (readable line length
@@ -28,7 +31,8 @@ export const DASHBOARD_CSS_CLASS = "meeting-copilot-dashboard";
  * layout than a `TABLE`/`TASK` query allows. "Upcoming"/"Past meetings" merge
  * the vault's meeting notes with the calendar events the agenda already loads
  * (meetings with no note yet still appear, with a "create note" action). "Open
- * action items" lists every note's open tasks vault-wide, newest note first.
+ * action items" lists personal tasks from `## Action items`. "Meeting
+ * follow-ups" lists shared commitments from `## Follow-ups` (horizon-filtered).
  * "Needs attention" surfaces recorded meetings that still need transcription
  * or enrichment (plus notes with a broken/missing date) — scheduled meetings
  * with no recording, and ones already transcribing/enriching, are skipped.
@@ -50,9 +54,15 @@ export function buildDashboardBlock(): string {
 		"```",
 		"",
 		"## Open action items",
-		// Rendered by the plugin: open tasks from every note in the vault,
+		// Rendered by the plugin: personal open tasks from ## Action items,
 		// grouped by note (newest first), dense and paginated.
 		"```" + ACTIONS_BLOCK_LANG,
+		"```",
+		"",
+		"## Meeting follow-ups",
+		// Rendered by the plugin: shared commitments from ## Follow-ups,
+		// horizon-filtered so the list stays bounded; reveal older on demand.
+		"```" + FOLLOWUPS_BLOCK_LANG,
 		"```",
 		"",
 		"## Needs attention",

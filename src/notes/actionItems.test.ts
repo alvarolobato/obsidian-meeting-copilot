@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
 	extractActionItems,
+	extractFollowUps,
 	extractManualActionItems,
 	refreshActionItems,
+	stampCreatedDate,
 } from "./actionItems";
 
 describe("extractActionItems", () => {
@@ -25,10 +27,71 @@ describe("extractActionItems", () => {
 		expect(without).not.toContain("Next steps");
 	});
 
+	it("does not treat Follow-ups as personal action items", () => {
+		const md = [
+			"### Next steps",
+			"- **Ship the release**",
+			"",
+			"### Follow-ups",
+			"- **Kate:** Send the doc",
+		].join("\n");
+		const { items, without } = extractActionItems(md);
+		expect(items).toEqual(["- [ ] **Ship the release**"]);
+		expect(without).toContain("### Follow-ups");
+		expect(without).toContain("**Kate:** Send the doc");
+	});
+
 	it("returns no items when there is no action section", () => {
 		const { items, without } = extractActionItems("### Topic\n- a point");
 		expect(items).toEqual([]);
 		expect(without).toBe("### Topic\n- a point");
+	});
+});
+
+describe("extractFollowUps", () => {
+	it("converts a Follow-ups section into task lines and strips it", () => {
+		const md = [
+			"### Next steps",
+			"- **My task**",
+			"",
+			"### Follow-ups",
+			"- **Kate:** Send the architecture doc",
+			"  - she promised Friday",
+			"- Book the kickoff room",
+		].join("\n");
+		const { items, without } = extractFollowUps(md);
+		expect(items).toEqual([
+			"- [ ] **Kate:** Send the architecture doc",
+			"- [ ] Book the kickoff room",
+		]);
+		expect(without).toContain("### Next steps");
+		expect(without).not.toContain("Follow-ups");
+	});
+
+	it("returns no items when there is no follow-ups section", () => {
+		const { items, without } = extractFollowUps("### Next steps\n- a");
+		expect(items).toEqual([]);
+		expect(without).toBe("### Next steps\n- a");
+	});
+});
+
+describe("stampCreatedDate", () => {
+	it("appends a creation stamp to fresh items", () => {
+		expect(stampCreatedDate(["- [ ] Ship it"], "2026-07-24")).toEqual([
+			"- [ ] Ship it ➕ 2026-07-24",
+		]);
+	});
+
+	it("does not double-stamp", () => {
+		expect(
+			stampCreatedDate(["- [ ] Ship it ➕ 2026-07-01"], "2026-07-24")
+		).toEqual(["- [ ] Ship it ➕ 2026-07-01"]);
+	});
+
+	it("keeps a trailing block ref after the stamp", () => {
+		expect(
+			stampCreatedDate(["- [ ] Ship it ^abc"], "2026-07-24")
+		).toEqual(["- [ ] Ship it ➕ 2026-07-24 ^abc"]);
 	});
 });
 
@@ -47,9 +110,6 @@ describe("extractManualActionItems", () => {
 	});
 
 	it("captures a uniformly-indented top-level list", () => {
-		// refreshActionItems drops indented unchecked tasks too, so a list the
-		// user (or their editor) indented as a whole must still be fed to the
-		// model — otherwise it could be dropped without ever being honored.
 		const body = ["  - [ ] Indented task one", "  * [ ] Indented task two"].join(
 			"\n"
 		);
@@ -72,10 +132,6 @@ describe("extractManualActionItems", () => {
 	});
 
 	it("ignores a transcript callout that trails the section body", () => {
-		// runEnrich reads manual items before stripping the transcript,
-		// and the transcript callout has no heading so it sits inside the last
-		// section (usually "## Action items"). Its quoted lines must not become
-		// action items.
 		const body = [
 			"- [ ] Real task",
 			"",
@@ -128,8 +184,6 @@ describe("refreshActionItems", () => {
 	});
 
 	it("does not pile up reworded duplicates on re-enrich", () => {
-		// The previous run's unchecked wording is dropped, so the same task
-		// phrased differently doesn't accumulate.
 		const existing = "- [ ] Schedule a meeting with Luca and Julian";
 		const merged = refreshActionItems(existing, [
 			"- [ ] Schedule a discussion with Luca and Julian on ownership",
@@ -158,9 +212,6 @@ describe("refreshActionItems", () => {
 	});
 
 	it("replaces an ordered unchecked task without duplicating it", () => {
-		// A hand-written `1. [ ] …` must be treated as an unchecked task (dropped
-		// and replaced by the model's unified `- [ ] …`), not kept as prose — which
-		// would leave both the numbered original and the new dash version.
 		const merged = refreshActionItems("1. [ ] Follow up with Bob", [
 			"- [ ] Follow up with Bob about pricing",
 		]);
@@ -175,10 +226,6 @@ describe("refreshActionItems", () => {
 	});
 });
 
-// Mirrors the merge chain in runEnrich (extractActionItems ->
-// refreshActionItems) to lock in the #93 fix: when the model returns a unified
-// "Next steps" that carries over the hand-written items, the merge preserves
-// them (improved) instead of dropping them, with no duplication.
 describe("enrichment merge preserves hand-written action items", () => {
 	it("keeps an improved hand-written item and appends new ones", () => {
 		const existingSection = "- [ ] Follow up with Bob";
@@ -200,7 +247,35 @@ describe("enrichment merge preserves hand-written action items", () => {
 				"- [ ] **Draft the launch email**",
 			].join("\n")
 		);
-		// The original, un-improved wording is gone (superseded, not duplicated).
 		expect(merged).not.toContain("Follow up with Bob\n");
+	});
+});
+
+describe("enrichment merge preserves hand-written follow-ups", () => {
+	it("unifies follow-ups separately from next steps", () => {
+		const existing = "- [ ] **Kate:** Send doc";
+		const modelOutput = [
+			"### Next steps",
+			"- **My personal task**",
+			"",
+			"### Follow-ups",
+			"- **Kate:** Send the architecture doc",
+			"- Book the room",
+		].join("\n");
+
+		const actions = extractActionItems(modelOutput);
+		const followUps = extractFollowUps(actions.without);
+		const mergedFollowUps = refreshActionItems(
+			existing,
+			stampCreatedDate(followUps.items, "2026-07-24")
+		);
+
+		expect(actions.items).toEqual(["- [ ] **My personal task**"]);
+		expect(mergedFollowUps).toBe(
+			[
+				"- [ ] **Kate:** Send the architecture doc ➕ 2026-07-24",
+				"- [ ] Book the room ➕ 2026-07-24",
+			].join("\n")
+		);
 	});
 });

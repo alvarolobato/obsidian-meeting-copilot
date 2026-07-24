@@ -14,6 +14,7 @@ describe("fillPrompt", () => {
 			attendees: "Ann, Bob",
 			notes: "we shipped X",
 			actionItems: "- Follow up with Bob",
+			followUps: "- **Kate:** Send the doc",
 			transcript: "Ann: hi",
 		});
 		expect(out).toContain("Meeting: Sprint sync");
@@ -21,32 +22,38 @@ describe("fillPrompt", () => {
 		expect(out).toContain("Attendees: Ann, Bob");
 		expect(out).toContain("we shipped X");
 		expect(out).toContain("- Follow up with Bob");
+		expect(out).toContain("- **Kate:** Send the doc");
 		expect(out).toContain("Ann: hi");
 		expect(out).not.toContain("{{");
 	});
 
-	it("substitutes the action-items placeholder", () => {
-		const out = fillPrompt("{{actionItems}}", {
+	it("substitutes the action-items and follow-ups placeholders", () => {
+		const out = fillPrompt("{{actionItems}}|{{followUps}}", {
 			title: "t",
 			date: "d",
 			attendees: "",
 			notes: "",
 			actionItems: "- Ship the release",
+			followUps: "- **Bob:** Review PR",
 			transcript: "",
 		});
-		expect(out).toBe("- Ship the release");
+		expect(out).toBe("- Ship the release|- **Bob:** Review PR");
 	});
 
 	it("defaults empty fields to (none)", () => {
-		const out = fillPrompt("{{notes}}|{{actionItems}}|{{transcript}}", {
-			title: "t",
-			date: "d",
-			attendees: "",
-			notes: "",
-			actionItems: "",
-			transcript: "   ",
-		});
-		expect(out).toBe("(none)|(none)|(none)");
+		const out = fillPrompt(
+			"{{notes}}|{{actionItems}}|{{followUps}}|{{transcript}}",
+			{
+				title: "t",
+				date: "d",
+				attendees: "",
+				notes: "",
+				actionItems: "",
+				followUps: "",
+				transcript: "   ",
+			}
+		);
+		expect(out).toBe("(none)|(none)|(none)|(none)");
 	});
 });
 
@@ -55,7 +62,6 @@ describe("effectiveEnrichPrompt", () => {
 
 	it("uses the live default when not customizing", () => {
 		expect(effectiveEnrichPrompt(false, "")).toBe(DEFAULT_ENRICH_PROMPT);
-		// A stray stored value is ignored while the toggle is off.
 		expect(effectiveEnrichPrompt(false, custom)).toBe(DEFAULT_ENRICH_PROMPT);
 	});
 
@@ -72,8 +78,11 @@ describe("effectiveEnrichPrompt", () => {
 		);
 	});
 
-	it("keeps the built-in default introducing the actionItems placeholder", () => {
+	it("keeps the built-in default introducing actionItems and followUps", () => {
 		expect(DEFAULT_ENRICH_PROMPT).toContain("{{actionItems}}");
+		expect(DEFAULT_ENRICH_PROMPT).toContain("{{followUps}}");
+		expect(DEFAULT_ENRICH_PROMPT).toContain("### Follow-ups");
+		expect(DEFAULT_ENRICH_PROMPT).toContain("### Next steps");
 	});
 });
 

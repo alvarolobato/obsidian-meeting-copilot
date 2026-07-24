@@ -82,6 +82,12 @@ export interface SystemRecordingSettings {
 	/** Auto-discard a just-stopped recording that had no speech (needs auto-transcribe). */
 	discardSilentRecordings: boolean;
 	actionItemsAsTasks: boolean;
+	/**
+	 * How many days of open meeting follow-ups the dashboard shows by default.
+	 * Older items stay in their notes and can be revealed with "Show older".
+	 * `0` disables the horizon (show all).
+	 */
+	followUpHorizonDays: number;
 	googleClientId: string;
 	googleClientSecret: string;
 	googleTokens: StoredTokens | null;
@@ -121,6 +127,8 @@ export interface SystemRecordingSettings {
 	dashboardPastPageSize: number;
 	/** How many notes-with-open-tasks the dashboard's action-items list shows per page (10/20/50/100). Set via the dashboard's own dropdown. */
 	dashboardActionsPageSize: number;
+	/** How many notes-with-open-follow-ups the dashboard's follow-ups list shows per page (10/20/50/100). Set via the dashboard's own dropdown. */
+	dashboardFollowupsPageSize: number;
 	// Shared OpenAI-compatible endpoint + credentials (transcription + enrichment).
 	apiBaseUrl: string;
 	apiKey: string;
@@ -193,6 +201,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	autoTranscribe: true,
 	discardSilentRecordings: true,
 	actionItemsAsTasks: true,
+	followUpHorizonDays: 45,
 	googleClientId: "",
 	googleClientSecret: "",
 	googleTokens: null,
@@ -213,6 +222,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	dashboardUpcomingPageSize: 10,
 	dashboardPastPageSize: 10,
 	dashboardActionsPageSize: 10,
+	dashboardFollowupsPageSize: 10,
 	apiBaseUrl: "https://api.openai.com/v1",
 	apiKey: "",
 	transcriptionBackend: "remote",
@@ -842,6 +852,21 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.actionItemsAsTasks)
 					.onChange(async (value) => {
 						this.plugin.settings.actionItemsAsTasks = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName(s.settings.followUpHorizonDays.name)
+			.setDesc(s.settings.followUpHorizonDays.desc)
+			.addText((text) =>
+				text
+					.setPlaceholder("45")
+					.setValue(String(this.plugin.settings.followUpHorizonDays))
+					.onChange(async (value) => {
+						const n = Number.parseInt(value.trim(), 10);
+						if (!Number.isFinite(n) || n < 0) return;
+						this.plugin.settings.followUpHorizonDays = n;
 						await this.plugin.saveSettings();
 					})
 			);

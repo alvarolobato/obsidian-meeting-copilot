@@ -19,9 +19,9 @@ A Granola-style meeting workflow for Obsidian on macOS. Meeting Copilot reads yo
 - **Transcript → note automation** — when a recording stops it can transcribe automatically and drop a collapsible transcript at the bottom of the note.
 - **Local on-device transcription** — optionally transcribe with a local Whisper model (downloaded once) that runs on Apple-Silicon GPUs (Metal); audio never leaves your Mac and there's no per-minute API cost. Falls back to your remote endpoint on failure if you enable it.
 - **Granola-style AI enrichment** — generates a summary, key points, decisions, and action items into a gray, collapsible AI-notes callout you can toggle on/off; your manual notes stay untouched.
-- **Action items → tasks** — enrichment lifts action items into `## Action items` checkboxes the [Tasks](https://github.com/obsidian-tasks-group/obsidian-tasks) plugin can track.
+- **Action items → tasks** — enrichment lifts your personal Next steps into `## Action items` checkboxes and meeting-wide commitments into `## Follow-ups` (with an owner when identifiable) the [Tasks](https://github.com/obsidian-tasks-group/obsidian-tasks) plugin can track.
 - **Recording retention** — recordings older than a configurable number of days are moved to the trash automatically; the transcript stays in the note.
-- **Meetings dashboard** — one command builds a [Dataview](https://github.com/blacksmithgu/obsidian-dataview) dashboard of upcoming/past meetings and open action items.
+- **Meetings dashboard** — one command builds a dashboard of upcoming/past meetings, your open action items, and meeting follow-ups (horizon-filtered so the list stays bounded).
 - **Status feedback** — ribbon button / command palette control, plus elapsed-time and action (recording / transcribing / enriching) indicators in the status bar.
 
 ## Required & optional plugins
@@ -31,7 +31,7 @@ Meeting Copilot handles calendar, recording, transcription, and enrichment on it
 | Plugin | Needed for | Required? |
 | --- | --- | --- |
 | [Dataview](https://github.com/blacksmithgu/obsidian-dataview) | The Meetings dashboard command | Optional |
-| [Tasks](https://github.com/obsidian-tasks-group/obsidian-tasks) | Tracking the `## Action items` checkboxes | Optional (checkboxes work without it) |
+| [Tasks](https://github.com/obsidian-tasks-group/obsidian-tasks) | Tracking the `## Action items` / `## Follow-ups` checkboxes | Optional (checkboxes work without it) |
 
 > **Remote** transcription and AI enrichment share one OpenAI-compatible endpoint configured in Meeting Copilot's own settings: remote transcription needs `/audio/transcriptions` and enrichment needs `/chat/completions`. OpenAI and a LiteLLM proxy serve both. Ollama works for enrichment only (no `/audio/transcriptions`). Azure works only via the newer OpenAI-compatible surface (`/openai/v1`), not the classic deployment-path format. If you switch to the **local** transcription engine, no endpoint is needed for transcription (only for enrichment, when enabled). The remote transcription engine is bundled (vendored from [AI Transcriber](https://github.com/mssoftjp/obsidian-ai-transcriber), MIT); AI Transcriber does **not** need to be installed.
 
@@ -180,7 +180,7 @@ palette).
 - **AI endpoint (shared)**: OpenAI-compatible base URL + API key used for AI enrichment and for remote transcription (not needed for the local engine).
 - **Transcription**: **Transcription engine** (*Remote (API endpoint)* or *Local (on-device Whisper)*), a transcription model (remote) or **Local model** (local), language, and **Separate my voice from others**. Remote-only: AI post-processing and custom dictionary. Local-only: **Fall back to remote on failure**. Plus **Auto-transcribe when recording stops** (headless — no dialog).
 - **AI enrichment**: enable it, pick a chat model (via **Test connection** + dropdown); optionally enrich automatically after transcription.
-- **Action items as tasks**: lift enriched action items into `## Action items` checkboxes (preserving existing/completed tasks). Action items you type by hand are fed to the model and unified into the list — never dropped, only improved or corrected and enriched with detail from the transcript.
+- **Action items as tasks**: lift enriched Next steps into `## Action items` and meeting-wide Follow-ups into `## Follow-ups` checkboxes (preserving existing/completed tasks; fresh items stamped with `➕` creation dates). Hand-written items in either section are fed to the model and unified — never dropped. The dashboard's Meeting follow-ups section hides items older than the Follow-up horizon (default 45 days) with a Show older control.
 
 Commands of note: *Clean up old recordings*, *Create/update meetings dashboard*, *Enrich meeting note (AI)*, *Toggle AI notes visibility*.
 

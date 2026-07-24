@@ -3,16 +3,31 @@ import {
 	cleanTaskText,
 	countTasks,
 	parseNoteTasks,
+	parseTaskOwner,
 	sortActionNoteGroups,
+	splitByHorizon,
+	taskAgeDays,
 	type ActionNoteGroup,
+	type ActionTask,
 } from "./dashboardActions";
+
+function task(over: Partial<ActionTask> & Pick<ActionTask, "text">): ActionTask {
+	return {
+		raw: `- [ ] ${over.text}`,
+		line: 1,
+		done: false,
+		owner: null,
+		created: null,
+		...over,
+	};
+}
 
 function group(over: Partial<ActionNoteGroup>): ActionNoteGroup {
 	return {
 		path: "Meetings/x.md",
 		title: "x",
 		date: new Date("2026-07-10T10:00:00"),
-		tasks: [{ text: "do it", raw: "- [ ] do it", line: 1, done: false }],
+		tasks: [task({ text: "do it" })],
 		...over,
 	};
 }
@@ -53,7 +68,11 @@ describe("sortActionNoteGroups", () => {
 			group({
 				path: "done.md",
 				tasks: [
-					{ text: "d", raw: "- [x] d ✅ 2026-07-10", line: 1, done: true },
+					task({
+						text: "d",
+						raw: "- [x] d ✅ 2026-07-10",
+						done: true,
+					}),
 				],
 			}),
 		]);
@@ -67,13 +86,13 @@ describe("countTasks", () => {
 			countTasks([
 				group({
 					tasks: [
-						{ text: "a", raw: "- [ ] a", line: 1, done: false },
-						{ text: "b", raw: "- [ ] b", line: 2, done: false },
-						{ text: "c", raw: "- [x] c", line: 3, done: true },
+						task({ text: "a", line: 1 }),
+						task({ text: "b", line: 2 }),
+						task({ text: "c", line: 3, done: true, raw: "- [x] c" }),
 					],
 				}),
 				group({
-					tasks: [{ text: "d", raw: "- [ ] d", line: 1, done: false }],
+					tasks: [task({ text: "d" })],
 				}),
 			])
 		).toBe(3);
@@ -90,8 +109,11 @@ describe("cleanTaskText", () => {
 		expect(cleanTaskText("- [x] ship it ✅ 2026-07-15")).toBe("ship it");
 	});
 
+	it("strips a creation stamp", () => {
+		expect(cleanTaskText("- [ ] ship it ➕ 2026-07-15")).toBe("ship it");
+	});
+
 	it("strips a completion date even when a block ref follows it", () => {
-		// appendCompletionDate inserts the date *before* a trailing `^id`.
 		expect(cleanTaskText("- [x] ship it ✅ 2026-07-15 ^abc123")).toBe(
 			"ship it"
 		);
@@ -108,6 +130,26 @@ describe("cleanTaskText", () => {
 	});
 });
 
+describe("parseTaskOwner", () => {
+	it("parses a bold owner prefix", () => {
+		expect(parseTaskOwner("**Kate:** Send the doc")).toEqual({
+			owner: "Kate",
+			body: "Send the doc",
+		});
+		expect(parseTaskOwner("**Kate**: Send the doc")).toEqual({
+			owner: "Kate",
+			body: "Send the doc",
+		});
+	});
+
+	it("returns null owner when unassigned", () => {
+		expect(parseTaskOwner("Book the room")).toEqual({
+			owner: null,
+			body: "Book the room",
+		});
+	});
+});
+
 describe("parseNoteTasks", () => {
 	const today = "2026-07-15";
 
@@ -117,8 +159,22 @@ describe("parseNoteTasks", () => {
 		);
 		const tasks = parseNoteTasks(body, today);
 		expect(tasks).toEqual([
-			{ line: 1, raw: "- [ ] first", text: "first", done: false },
-			{ line: 3, raw: "- [ ] second", text: "second", done: false },
+			{
+				line: 1,
+				raw: "- [ ] first",
+				text: "first",
+				done: false,
+				owner: null,
+				created: null,
+			},
+			{
+				line: 3,
+				raw: "- [ ] second",
+				text: "second",
+				done: false,
+				owner: null,
+				created: null,
+			},
 		]);
 	});
 
@@ -135,11 +191,115 @@ describe("parseNoteTasks", () => {
 				raw: "- [x] today ✅ 2026-07-15",
 				text: "today",
 				done: true,
+				owner: null,
+				created: null,
 			},
 		]);
 	});
 
 	it("returns nothing for a note without checkbox tasks", () => {
 		expect(parseNoteTasks("# just prose\n- a bullet", today)).toEqual([]);
+	});
+
+	it("scopes to a section and preserves absolute line indexes", () => {
+		const body = [
+			"## Action items",
+			"- [ ] mine",
+			"",
+			"## Follow-ups",
+			"- [ ] **Kate:** theirs ➕ 2026-07-10",
+			"- [ ] unassigned",
+		].join("\n");
+		const mine = parseNoteTasks(body, today, "## Action items");
+		expect(mine).toEqual([
+			{
+				line: 1,
+				raw: "- [ ] mine",
+				text: "mine",
+				done: false,
+				owner: null,
+				created: null,
+			},
+		]);
+		const followUps = parseNoteTasks(body, today, "## Follow-ups");
+		expect(followUps.map((t) => ({ line: t.line, text: t.text, owner: t.owner }))).toEqual([
+			{ line: 4, text: "**Kate:** theirs", owner: "Kate" },
+			{ line: 5, text: "unassigned", owner: null },
+		]);
+		expect(followUps[0]!.created?.getFullYear()).toBe(2026);
+		expect(followUps[0]!.created?.getMonth()).toBe(6);
+		expect(followUps[0]!.created?.getDate()).toBe(10);
+	});
+
+	it("returns nothing when the section heading is absent", () => {
+		expect(
+			parseNoteTasks("- [ ] orphan", today, "## Follow-ups")
+		).toEqual([]);
+	});
+});
+
+describe("taskAgeDays / splitByHorizon", () => {
+	const today = new Date(2026, 6, 24); // local Jul 24
+
+	it("prefers the creation stamp over the note date", () => {
+		const age = taskAgeDays(
+			task({
+				text: "x",
+				created: new Date(2026, 6, 10),
+			}),
+			new Date(2026, 0, 1),
+			today
+		);
+		expect(age).toBe(14);
+	});
+
+	it("falls back to the note date when unstamped", () => {
+		expect(
+			taskAgeDays(task({ text: "x" }), new Date(2026, 6, 20), today)
+		).toBe(4);
+	});
+
+	it("splits groups by horizon and keeps unknown-age tasks recent", () => {
+		const groups = [
+			group({
+				path: "old.md",
+				date: new Date(2026, 4, 1),
+				tasks: [
+					task({
+						text: "stale",
+						created: new Date(2026, 4, 1),
+					}),
+				],
+			}),
+			group({
+				path: "undated.md",
+				date: null,
+				tasks: [task({ text: "no dates" })],
+			}),
+			group({
+				path: "fresh.md",
+				date: new Date(2026, 6, 20),
+				tasks: [task({ text: "new", created: new Date(2026, 6, 20) })],
+			}),
+		];
+		const split = splitByHorizon(groups, 45, today);
+		expect(split.recent.map((g) => g.path)).toEqual([
+			"undated.md",
+			"fresh.md",
+		]);
+		expect(split.older.map((g) => g.path)).toEqual(["old.md"]);
+	});
+
+	it("disables filtering when horizon is 0", () => {
+		const groups = [
+			group({
+				tasks: [
+					task({ text: "old", created: new Date(2020, 0, 1) }),
+				],
+			}),
+		];
+		const split = splitByHorizon(groups, 0, today);
+		expect(split.recent).toEqual(groups);
+		expect(split.older).toEqual([]);
 	});
 });

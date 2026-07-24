@@ -83,8 +83,10 @@ import {
 } from "./notes/enrichedBlock";
 import {
     extractActionItems,
+    extractFollowUps,
     extractManualActionItems,
     refreshActionItems,
+    stampCreatedDate,
 } from "./notes/actionItems";
 import { normalizeManualNotes } from "./notes/manualNotes";
 import {
@@ -92,6 +94,7 @@ import {
     ATTENTION_BLOCK_LANG,
     buildDashboardBlock,
     DASHBOARD_CSS_CLASS,
+    FOLLOWUPS_BLOCK_LANG,
     PAST_BLOCK_LANG,
     UPCOMING_BLOCK_LANG,
     withDashboardBlock,
@@ -110,14 +113,18 @@ import {
     countTasks,
     parseNoteTasks,
     sortActionNoteGroups,
+    splitByHorizon,
+    taskAgeDays,
     type ActionNoteGroup,
     type ActionTask,
 } from "./notes/dashboardActions";
 import type { GCalEvent } from "./calendar/googleCalendar";
 import { findExpiredRecordings, underFolder } from "./recordings/retention";
 
-/** Note section that holds action-item checkboxes (obsidian-tasks compatible). */
+/** Note section that holds personal action-item checkboxes (obsidian-tasks compatible). */
 const ACTION_ITEMS_HEADING = "## Action items";
+/** Note section that holds meeting-wide follow-up checkboxes. */
+const FOLLOW_UPS_HEADING = "## Follow-ups";
 import { chatComplete, ChatAbortError } from "./enrich/llm";
 import { isPartialTranscript } from "./transcribe/partial";
 import { stripHallucinatedLines } from "./transcribe/hallucination";
@@ -437,8 +444,8 @@ export default class SystemRecordingPlugin extends Plugin {
             }
         );
 
-        // "Open action items" dashboard section: open tasks from every note in
-        // the vault, grouped by note (newest first), dense and paginated.
+        // "Open action items" dashboard section: personal open tasks from
+        // ## Action items, grouped by note (newest first), dense and paginated.
         this.registerMarkdownCodeBlockProcessor(
             ACTIONS_BLOCK_LANG,
             (_src, el) => {
@@ -446,6 +453,18 @@ export default class SystemRecordingPlugin extends Plugin {
                     void this.renderActionItems(el, this.blockPage(el), true)
                 );
                 void this.renderActionItems(el);
+            }
+        );
+
+        // "Meeting follow-ups" dashboard section: shared commitments from
+        // ## Follow-ups, horizon-filtered so the list stays bounded.
+        this.registerMarkdownCodeBlockProcessor(
+            FOLLOWUPS_BLOCK_LANG,
+            (_src, el) => {
+                this.trackDashboardBlock(el, () =>
+                    void this.renderFollowUps(el, this.blockPage(el), true)
+                );
+                void this.renderFollowUps(el);
             }
         );
 
@@ -2725,63 +2744,125 @@ export default class SystemRecordingPlugin extends Plugin {
     /**
      * Short-lived cache of the (whole-vault, disk-read) action-items scan so
      * paging/page-size changes reuse it instead of re-reading every task note.
-     * A tick or Refresh forces a fresh scan (`force`).
+     * A tick or Refresh forces a fresh scan (`force`). Keyed by section heading.
      */
-    private actionScanCache: { at: number; groups: ActionNoteGroup[] } | null =
-        null;
+    private actionScanCache: Map<
+        string,
+        { at: number; groups: ActionNoteGroup[] }
+    > = new Map();
 
-    /** Runs (or reuses, within a short TTL) the action-items scan. */
-    private async scanActionGroups(force: boolean): Promise<ActionNoteGroup[]> {
+    /** Runs (or reuses, within a short TTL) a section-scoped task scan. */
+    private async scanActionGroups(
+        sectionHeading: string,
+        force: boolean
+    ): Promise<ActionNoteGroup[]> {
         const TTL_MS = 15_000;
-        if (
-            !force &&
-            this.actionScanCache &&
-            Date.now() - this.actionScanCache.at < TTL_MS
-        ) {
-            return this.actionScanCache.groups;
+        const cached = this.actionScanCache.get(sectionHeading);
+        if (!force && cached && Date.now() - cached.at < TTL_MS) {
+            return cached.groups;
         }
-        const groups = sortActionNoteGroups(await this.scanOpenTaskNotes());
-        this.actionScanCache = { at: Date.now(), groups };
+        const groups = sortActionNoteGroups(
+            await this.scanOpenTaskNotes(sectionHeading)
+        );
+        this.actionScanCache.set(sectionHeading, {
+            at: Date.now(),
+            groups,
+        });
         return groups;
     }
 
     /**
-     * Renders the dashboard's "Open action items" section: every note in the
-     * vault that still has open (`- [ ]`) tasks, grouped by note and ordered
-     * newest note first, kept dense and paginated (by note). Each group shows a
-     * small linked title + date and its open tasks; ticking a task marks it
-     * done in the source note and re-renders. `page` is 1-based (by note).
+     * Renders the dashboard's "Open action items" section: notes with open
+     * tasks under `## Action items`, grouped by note and ordered newest note
+     * first, kept dense and paginated (by note). Each group shows a small
+     * linked title + date and its open tasks; ticking a task marks it done in
+     * the source note and re-renders. `page` is 1-based (by note).
      */
     private async renderActionItems(
         el: HTMLElement,
         page = 1,
         force = false
     ): Promise<void> {
-        const a = t().dashboard.actions;
+        await this.renderTaskSection(el, {
+            heading: ACTION_ITEMS_HEADING,
+            strings: t().dashboard.actions,
+            pageSizeKey: "dashboardActionsPageSize",
+            page,
+            force,
+            showAge: false,
+            horizonDays: 0,
+        });
+    }
+
+    /**
+     * Renders the dashboard's "Meeting follow-ups" section: open tasks under
+     * `## Follow-ups`, horizon-filtered so the list stays bounded. "Show older"
+     * reveals items past the horizon without permanently bloating the view.
+     */
+    private async renderFollowUps(
+        el: HTMLElement,
+        page = 1,
+        force = false
+    ): Promise<void> {
+        await this.renderTaskSection(el, {
+            heading: FOLLOW_UPS_HEADING,
+            strings: t().dashboard.followups,
+            pageSizeKey: "dashboardFollowupsPageSize",
+            page,
+            force,
+            showAge: true,
+            horizonDays: this.settings.followUpHorizonDays,
+        });
+    }
+
+    /**
+     * Shared renderer for the action-items and follow-ups dashboard sections.
+     * `strings` is the i18n block (`actions` or `followups`); horizon filtering
+     * only applies when `horizonDays > 0`.
+     */
+    private async renderTaskSection(
+        el: HTMLElement,
+        opts: {
+            heading: string;
+            strings: {
+                count: (n: number) => string;
+                empty: string;
+                loading: string;
+                taskMoved: string;
+                taskError: (msg: string) => string;
+                showOlder?: (n: number) => string;
+                hideOlder?: string;
+                ageDays?: (n: number) => string;
+            };
+            pageSizeKey: "dashboardActionsPageSize" | "dashboardFollowupsPageSize";
+            page: number;
+            force: boolean;
+            showAge: boolean;
+            horizonDays: number;
+        }
+    ): Promise<void> {
+        const a = opts.strings;
         const seq = this.nextRenderSeq(el);
         const restoreScroll = this.preserveScroll(el);
-        // Keep the current list visible while (re)scanning; only show the
-        // loading line on first paint. Emptying up front would collapse the
-        // section and jump the view on a tick or Refresh.
         if (el.childElementCount === 0) {
             el.createEl("p", { text: a.loading, cls: "mc-actions-loading" });
         }
 
-        const groups = await this.scanActionGroups(force);
-        // A newer render started while scanning — let it win.
+        const allGroups = await this.scanActionGroups(opts.heading, opts.force);
         if (this.renderSeq.get(el) !== seq) return;
-        const pageSize = normalizePageSize(
-            this.settings.dashboardActionsPageSize
-        );
-        const view = paginate(groups, pageSize, page);
-        // Remember the page so an auto-refresh re-renders where the user is.
+
+        const today = new Date();
+        const split = splitByHorizon(allGroups, opts.horizonDays, today);
+        const showOlder = el.dataset.mcShowOlder === "1";
+        const groups = showOlder
+            ? sortActionNoteGroups([...split.recent, ...split.older])
+            : split.recent;
+        const olderCount = countTasks(split.older);
+
+        const pageSize = normalizePageSize(this.settings[opts.pageSizeKey]);
+        const view = paginate(groups, pageSize, opts.page);
         el.dataset.mcPage = String(view.page);
 
-        // A short-lived child owns the tasks' rendered markdown so its
-        // sub-views are torn down on the next render (or when the dashboard
-        // closes), rather than piling up on the long-lived plugin instance.
-        // Swapped in only now, right before rebuilding, so the previous
-        // content stayed put during the scan above.
         const prevRenderer = this.actionRenderers.get(el);
         if (prevRenderer) {
             prevRenderer.unload();
@@ -2794,13 +2875,39 @@ export default class SystemRecordingPlugin extends Plugin {
 
         el.empty();
 
-        if (view.total === 0) {
+        if (view.total === 0 && olderCount === 0) {
+            el.createEl("p", { text: a.empty, cls: "mc-actions-empty" });
+        } else if (view.total === 0 && olderCount > 0 && !showOlder) {
             el.createEl("p", { text: a.empty, cls: "mc-actions-empty" });
         } else {
-            const list = el.createDiv({ cls: "mc-actions-list" });
+            const list = el.createDiv({
+                cls: opts.showAge
+                    ? "mc-actions-list mc-followups-list"
+                    : "mc-actions-list",
+            });
             for (const group of view.rows) {
-                this.renderActionNote(list, group, el, view.page, renderer);
+                this.renderActionNote(
+                    list,
+                    group,
+                    el,
+                    view.page,
+                    renderer,
+                    opts,
+                    today
+                );
             }
+        }
+
+        if (olderCount > 0 && a.showOlder && a.hideOlder) {
+            const olderBar = el.createDiv({ cls: "mc-actions-older" });
+            const btn = olderBar.createEl("button", {
+                cls: "mc-actions-older-btn",
+                text: showOlder ? a.hideOlder : a.showOlder(olderCount),
+            });
+            btn.onclick = (): void => {
+                el.dataset.mcShowOlder = showOlder ? "0" : "1";
+                void this.renderTaskSection(el, { ...opts, page: 1, force: false });
+            };
         }
 
         this.renderDashToolbar(el, {
@@ -2808,13 +2915,18 @@ export default class SystemRecordingPlugin extends Plugin {
             pageSize,
             view,
             onPageSize: (n): void => {
-                this.settings.dashboardActionsPageSize = n;
+                this.settings[opts.pageSizeKey] = n;
                 void this.saveSettings();
-                void this.renderActionItems(el, 1);
+                void this.renderTaskSection(el, { ...opts, page: 1, force: false });
             },
-            onGoTo: (p): void => void this.renderActionItems(el, p),
+            onGoTo: (p): void =>
+                void this.renderTaskSection(el, { ...opts, page: p, force: false }),
             onRefresh: (): void =>
-                void this.renderActionItems(el, view.page, true),
+                void this.renderTaskSection(el, {
+                    ...opts,
+                    page: view.page,
+                    force: true,
+                }),
         });
 
         restoreScroll();
@@ -2826,7 +2938,26 @@ export default class SystemRecordingPlugin extends Plugin {
         group: ActionNoteGroup,
         sectionEl: HTMLElement,
         page: number,
-        renderer: Component
+        renderer: Component,
+        opts: {
+            heading: string;
+            strings: {
+                count: (n: number) => string;
+                empty: string;
+                loading: string;
+                taskMoved: string;
+                taskError: (msg: string) => string;
+                showOlder?: (n: number) => string;
+                hideOlder?: string;
+                ageDays?: (n: number) => string;
+            };
+            pageSizeKey: "dashboardActionsPageSize" | "dashboardFollowupsPageSize";
+            page: number;
+            force: boolean;
+            showAge: boolean;
+            horizonDays: number;
+        },
+        today: Date
     ): void {
         const note = parent.createDiv({ cls: "mc-action-note" });
         const header = note.createDiv({ cls: "mc-action-note-header" });
@@ -2862,8 +2993,6 @@ export default class SystemRecordingPlugin extends Plugin {
                 type: "checkbox",
             });
             if (task.done) {
-                // Recently completed: shown checked/struck through its grace
-                // period, not re-tickable.
                 cb.checked = true;
                 cb.disabled = true;
             } else {
@@ -2873,23 +3002,24 @@ export default class SystemRecordingPlugin extends Plugin {
                         try {
                             await this.completeTask(group.path, task);
                         } catch (e) {
-                            // Re-enable so the user can retry; the write failed
-                            // so the item is still open.
                             cb.disabled = false;
                             cb.checked = false;
                             new Notice(
-                                t().dashboard.actions.taskError(
+                                opts.strings.taskError(
                                     e instanceof Error ? e.message : String(e)
                                 )
                             );
                             return;
                         }
-                        await this.renderActionItems(sectionEl, page, true);
+                        await this.renderTaskSection(sectionEl, {
+                            ...opts,
+                            page,
+                            force: true,
+                        });
                     })();
                 };
             }
             const text = li.createSpan({ cls: "mc-action-task-text" });
-            // Render the task's markdown (bold owners, links) inline.
             void MarkdownRenderer.render(
                 this.app,
                 task.text,
@@ -2897,14 +3027,24 @@ export default class SystemRecordingPlugin extends Plugin {
                 group.path,
                 renderer
             );
+            if (opts.showAge && opts.strings.ageDays) {
+                const age = taskAgeDays(task, group.date, today);
+                if (age !== null && age > 0) {
+                    li.createSpan({
+                        cls: "mc-action-task-age",
+                        text: opts.strings.ageDays(age),
+                    });
+                }
+            }
         }
     }
 
     /**
-     * Scans every note in the vault for open (`- [ ]`) tasks, returning a group
-     * per note with its title, origin date, and task lines. Kept whole-vault on
-     * purpose: action items live in meeting notes wherever they came from
-     * (including Granola-synced notes, which carry no `event_id`).
+     * Scans every note in the vault for open (`- [ ]`) tasks under
+     * `sectionHeading`, returning a group per note with its title, origin
+     * date, and task lines. Kept whole-vault on purpose: action items live in
+     * meeting notes wherever they came from (including Granola-synced notes,
+     * which carry no `event_id`).
      *
      * The metadata cache only *pre-filters* to files that (may) have an open
      * task — cheap, and avoids reading files with none — but the tasks
@@ -2914,14 +3054,13 @@ export default class SystemRecordingPlugin extends Plugin {
      * Obsidian hasn't fully re-indexed) fails the read and is dropped, instead
      * of lingering with tasks pointing at a folder that no longer exists.
      */
-    private async scanOpenTaskNotes(): Promise<ActionNoteGroup[]> {
+    private async scanOpenTaskNotes(
+        sectionHeading: string
+    ): Promise<ActionNoteGroup[]> {
         const today = this.todayStamp();
         const groups: ActionNoteGroup[] = [];
         for (const file of this.app.vault.getMarkdownFiles()) {
             const cache = this.app.metadataCache.getFileCache(file);
-            // Pre-filter to files that carry *any* checkbox task (open or done)
-            // — done ones matter too, so a task completed today stays in its
-            // grace period even after the cache marks it done.
             const mayHaveTasks = (cache?.listItems ?? []).some(
                 (it) => it.task !== undefined
             );
@@ -2933,7 +3072,7 @@ export default class SystemRecordingPlugin extends Plugin {
             } catch {
                 continue;
             }
-            const tasks = parseNoteTasks(content, today);
+            const tasks = parseNoteTasks(content, today, sectionHeading);
             if (tasks.length === 0) continue;
 
             const fm = cache?.frontmatter as
@@ -5055,14 +5194,22 @@ export default class SystemRecordingPlugin extends Plugin {
             const manualActionItems = extractManualActionItems(
                 extractSection(content, ACTION_ITEMS_HEADING)
             );
+            const manualFollowUps = extractManualActionItems(
+                extractSection(content, FOLLOW_UPS_HEADING)
+            );
             const transcript =
                 transcriptOverride && transcriptOverride.trim().length > 0
                     ? transcriptOverride
                     : extractTranscript(content);
-            // Hand-written action items are now enrichment input too, so a note
-            // that only has a "## Action items" list (no notes/transcript) is
+            // Hand-written action items / follow-ups are enrichment input too,
+            // so a note that only has those lists (no notes/transcript) is
             // still worth enriching — the model can tidy/unify those items.
-            if (!notes && !transcript && manualActionItems.length === 0) {
+            if (
+                !notes &&
+                !transcript &&
+                manualActionItems.length === 0 &&
+                manualFollowUps.length === 0
+            ) {
                 if (!quiet) new Notice(t().notices.nothingToEnrich);
                 return;
             }
@@ -5080,6 +5227,7 @@ export default class SystemRecordingPlugin extends Plugin {
                     : "",
                 notes,
                 actionItems: manualActionItems.map((i) => `- ${i}`).join("\n"),
+                followUps: manualFollowUps.map((i) => `- ${i}`).join("\n"),
                 transcript,
             };
 
@@ -5102,10 +5250,11 @@ export default class SystemRecordingPlugin extends Plugin {
             // Re-read in case the note changed during the network call.
             const current = await this.app.vault.read(file);
             // The transcript callout has no heading of its own, so it lives
-            // inside whatever section precedes it (usually "## Action items").
-            // Pull it out before any section edits — otherwise extractSection
-            // would scoop it up and merged action items would land *after* it —
-            // and re-pin it to the very bottom once everything else is placed.
+            // inside whatever section precedes it (usually "## Follow-ups" or
+            // "## Action items"). Pull it out before any section edits —
+            // otherwise extractSection would scoop it up and merged items
+            // would land *after* it — and re-pin it to the very bottom once
+            // everything else is placed.
             const bottomTranscript = extractTranscript(current);
             let updated = bottomTranscript.trim().length
                 ? stripTranscript(current)
@@ -5114,15 +5263,44 @@ export default class SystemRecordingPlugin extends Plugin {
             // missing) so they're preserved in place rather than orphaned.
             updated = normalizeManualNotes(updated).content;
             let calloutBody = output;
-            // Lift action items out of the summary into real obsidian-tasks
-            // checkboxes under "## Action items" (merged, never duplicated).
+            // Lift Next steps / Follow-ups out of the summary into real
+            // obsidian-tasks checkboxes under the matching ## sections
+            // (merged, never duplicated). Stamp fresh items with ➕ today.
             if (this.settings.actionItemsAsTasks) {
-                const { items, without } = extractActionItems(output);
-                if (items.length > 0) {
-                    const existing = extractSection(updated, ACTION_ITEMS_HEADING);
-                    const merged = refreshActionItems(existing, items);
-                    updated = upsertSection(updated, ACTION_ITEMS_HEADING, merged);
-                    calloutBody = without;
+                const created = this.todayStamp();
+                const actions = extractActionItems(calloutBody);
+                calloutBody = actions.without;
+                const followUps = extractFollowUps(calloutBody);
+                calloutBody = followUps.without;
+                if (actions.items.length > 0) {
+                    const existing = extractSection(
+                        updated,
+                        ACTION_ITEMS_HEADING
+                    );
+                    const merged = refreshActionItems(
+                        existing,
+                        stampCreatedDate(actions.items, created)
+                    );
+                    updated = upsertSection(
+                        updated,
+                        ACTION_ITEMS_HEADING,
+                        merged
+                    );
+                }
+                if (followUps.items.length > 0) {
+                    const existing = extractSection(
+                        updated,
+                        FOLLOW_UPS_HEADING
+                    );
+                    const merged = refreshActionItems(
+                        existing,
+                        stampCreatedDate(followUps.items, created)
+                    );
+                    updated = upsertSection(
+                        updated,
+                        FOLLOW_UPS_HEADING,
+                        merged
+                    );
                 }
             }
             updated = withEnrichedBlock(updated, calloutBody);
