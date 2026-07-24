@@ -275,12 +275,12 @@ export const en = {
 			count: (n: number) =>
 				`${n} open follow-up${n === 1 ? "" : "s"}`,
 			empty: "No open meeting follow-ups.",
+			emptyRecent: "No recent follow-ups.",
 			loading: "Scanning notes…",
 			showOlder: (n: number) =>
 				`Show older (${n})`,
 			hideOlder: "Hide older",
 			ageDays: (n: number) => (n === 1 ? "1 day old" : `${n} days old`),
-			unassigned: "Unassigned",
 			taskMoved: "That follow-up has changed in its note; refreshing.",
 			taskError: (msg: string) =>
 				`Couldn't complete the follow-up: ${msg}`,

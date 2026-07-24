@@ -88,10 +88,40 @@ describe("stampCreatedDate", () => {
 		).toEqual(["- [ ] Ship it ➕ 2026-07-01"]);
 	});
 
+	it("leaves completed tasks and prose untouched", () => {
+		expect(
+			stampCreatedDate(
+				["- [x] done", "Some note", "- [ ] open"],
+				"2026-07-24"
+			)
+		).toEqual(["- [x] done", "Some note", "- [ ] open ➕ 2026-07-24"]);
+	});
+
 	it("keeps a trailing block ref after the stamp", () => {
 		expect(
 			stampCreatedDate(["- [ ] Ship it ^abc"], "2026-07-24")
 		).toEqual(["- [ ] Ship it ➕ 2026-07-24 ^abc"]);
+	});
+});
+
+describe("refreshActionItems stamp carry-forward", () => {
+	it("keeps a prior ➕ when the model returns the same task text", () => {
+		const merged = refreshActionItems(
+			"- [ ] **Kate:** Send doc ➕ 2026-07-01",
+			["- [ ] **Kate:** Send doc"]
+		);
+		expect(merged).toBe("- [ ] **Kate:** Send doc ➕ 2026-07-01");
+	});
+
+	it("then stampCreatedDate does not overwrite the carried stamp", () => {
+		const merged = stampCreatedDate(
+			refreshActionItems(
+				"- [ ] **Kate:** Send doc ➕ 2026-07-01",
+				["- [ ] **Kate:** Send doc"]
+			).split("\n"),
+			"2026-07-24"
+		).join("\n");
+		expect(merged).toBe("- [ ] **Kate:** Send doc ➕ 2026-07-01");
 	});
 });
 

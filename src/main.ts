@@ -87,6 +87,7 @@ import {
     extractManualActionItems,
     refreshActionItems,
     stampCreatedDate,
+    stripTaskMeta,
 } from "./notes/actionItems";
 import { normalizeManualNotes } from "./notes/manualNotes";
 import {
@@ -111,6 +112,7 @@ import {
 } from "./notes/dashboardMeetings";
 import {
     countTasks,
+    mergeGroupsByPath,
     parseNoteTasks,
     sortActionNoteGroups,
     splitByHorizon,
@@ -2827,6 +2829,7 @@ export default class SystemRecordingPlugin extends Plugin {
             strings: {
                 count: (n: number) => string;
                 empty: string;
+                emptyRecent?: string;
                 loading: string;
                 taskMoved: string;
                 taskError: (msg: string) => string;
@@ -2855,7 +2858,9 @@ export default class SystemRecordingPlugin extends Plugin {
         const split = splitByHorizon(allGroups, opts.horizonDays, today);
         const showOlder = el.dataset.mcShowOlder === "1";
         const groups = showOlder
-            ? sortActionNoteGroups([...split.recent, ...split.older])
+            ? sortActionNoteGroups(
+                  mergeGroupsByPath([...split.recent, ...split.older])
+              )
             : split.recent;
         const olderCount = countTasks(split.older);
 
@@ -2878,7 +2883,10 @@ export default class SystemRecordingPlugin extends Plugin {
         if (view.total === 0 && olderCount === 0) {
             el.createEl("p", { text: a.empty, cls: "mc-actions-empty" });
         } else if (view.total === 0 && olderCount > 0 && !showOlder) {
-            el.createEl("p", { text: a.empty, cls: "mc-actions-empty" });
+            el.createEl("p", {
+                text: a.emptyRecent ?? a.empty,
+                cls: "mc-actions-empty",
+            });
         } else {
             const list = el.createDiv({
                 cls: opts.showAge
@@ -2944,6 +2952,7 @@ export default class SystemRecordingPlugin extends Plugin {
             strings: {
                 count: (n: number) => string;
                 empty: string;
+                emptyRecent?: string;
                 loading: string;
                 taskMoved: string;
                 taskError: (msg: string) => string;
@@ -3000,7 +3009,11 @@ export default class SystemRecordingPlugin extends Plugin {
                     cb.disabled = true;
                     void (async (): Promise<void> => {
                         try {
-                            await this.completeTask(group.path, task);
+                            await this.completeTask(
+                                group.path,
+                                task,
+                                opts.strings.taskMoved
+                            );
                         } catch (e) {
                             cb.disabled = false;
                             cb.checked = false;
@@ -3136,7 +3149,11 @@ export default class SystemRecordingPlugin extends Plugin {
      * date (today) is appended — Obsidian-Tasks compatible, and what the
      * dashboard reads to keep the item visible until that day is over.
      */
-    private async completeTask(path: string, task: ActionTask): Promise<void> {
+    private async completeTask(
+        path: string,
+        task: ActionTask,
+        movedNotice = t().dashboard.actions.taskMoved
+    ): Promise<void> {
         const file = this.app.vault.getAbstractFileByPath(path);
         if (!(file instanceof TFile)) return;
         const lines = (await this.app.vault.read(file)).split("\n");
@@ -3145,7 +3162,7 @@ export default class SystemRecordingPlugin extends Plugin {
             idx = lines.findIndex((l) => l === task.raw);
         }
         if (idx < 0) {
-            new Notice(t().dashboard.actions.taskMoved);
+            new Notice(movedNotice);
             return;
         }
         const checked = lines[idx]!.replace(/\[[^\]]\]/, "[x]");
@@ -5193,10 +5210,10 @@ export default class SystemRecordingPlugin extends Plugin {
             // an item the model would otherwise never have re-derived.
             const manualActionItems = extractManualActionItems(
                 extractSection(content, ACTION_ITEMS_HEADING)
-            );
+            ).map(stripTaskMeta);
             const manualFollowUps = extractManualActionItems(
                 extractSection(content, FOLLOW_UPS_HEADING)
-            );
+            ).map(stripTaskMeta);
             const transcript =
                 transcriptOverride && transcriptOverride.trim().length > 0
                     ? transcriptOverride
@@ -5277,10 +5294,12 @@ export default class SystemRecordingPlugin extends Plugin {
                         updated,
                         ACTION_ITEMS_HEADING
                     );
-                    const merged = refreshActionItems(
-                        existing,
-                        stampCreatedDate(actions.items, created)
-                    );
+                    // Merge first (carries prior ➕ onto normalized matches),
+                    // then stamp only lines still missing a creation date.
+                    const merged = stampCreatedDate(
+                        refreshActionItems(existing, actions.items).split("\n"),
+                        created
+                    ).join("\n");
                     updated = upsertSection(
                         updated,
                         ACTION_ITEMS_HEADING,
@@ -5292,10 +5311,12 @@ export default class SystemRecordingPlugin extends Plugin {
                         updated,
                         FOLLOW_UPS_HEADING
                     );
-                    const merged = refreshActionItems(
-                        existing,
-                        stampCreatedDate(followUps.items, created)
-                    );
+                    const merged = stampCreatedDate(
+                        refreshActionItems(existing, followUps.items).split(
+                            "\n"
+                        ),
+                        created
+                    ).join("\n");
                     updated = upsertSection(
                         updated,
                         FOLLOW_UPS_HEADING,

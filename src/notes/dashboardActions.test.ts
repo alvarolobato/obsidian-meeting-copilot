@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	cleanTaskText,
 	countTasks,
+	mergeGroupsByPath,
 	parseNoteTasks,
 	parseTaskOwner,
 	sortActionNoteGroups,
@@ -301,5 +302,38 @@ describe("taskAgeDays / splitByHorizon", () => {
 		const split = splitByHorizon(groups, 0, today);
 		expect(split.recent).toEqual(groups);
 		expect(split.older).toEqual([]);
+	});
+});
+
+describe("mergeGroupsByPath", () => {
+	it("unions tasks from the same note so Show older is not duplicated", () => {
+		const split = splitByHorizon(
+			[
+				group({
+					path: "Meetings/sync.md",
+					date: new Date(2026, 6, 1),
+					tasks: [
+						task({
+							text: "fresh",
+							created: new Date(2026, 6, 20),
+						}),
+						task({
+							text: "stale",
+							created: new Date(2026, 4, 1),
+						}),
+					],
+				}),
+			],
+			45,
+			new Date(2026, 6, 24)
+		);
+		expect(split.recent).toHaveLength(1);
+		expect(split.older).toHaveLength(1);
+		const merged = mergeGroupsByPath([...split.recent, ...split.older]);
+		expect(merged).toHaveLength(1);
+		expect(merged[0]!.tasks.map((t) => t.text).sort()).toEqual([
+			"fresh",
+			"stale",
+		]);
 	});
 });

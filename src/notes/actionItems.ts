@@ -112,14 +112,31 @@ export function extractManualActionItems(sectionBody: string): string[] {
 	return found.filter((f) => f.indent === topLevel).map((f) => f.text);
 }
 
+/**
+ * Strips Tasks-plugin date stamps and trailing block refs from a hand-written
+ * task's display text before feeding it to the enrichment prompt, so the model
+ * doesn't echo or garble `➕`/`✅` metadata.
+ */
+export function stripTaskMeta(text: string): string {
+	return text
+		.replace(/\s*➕\s*\d{4}-\d{2}-\d{2}\s*/g, " ")
+		.replace(/\s*✅\s*\d{4}-\d{2}-\d{2}\s*/g, " ")
+		.replace(/\s*\^[A-Za-z0-9-]+\s*$/, "")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
 /** Matches an *unchecked* task line, e.g. `- [ ] foo` or `1. [ ] foo`. */
 const UNCHECKED_TASK = /^\s*(?:[-*]|\d+\.)\s+\[ \]\s+/;
 
-/** Normalizes a task line for duplicate detection (drops checkbox, bold, casing). */
+/** Normalizes a task line for duplicate detection (drops checkbox, bold, dates, casing). */
 function normalizeTask(line: string): string {
 	return line
 		.replace(TASK_LINE, "")
 		.replace(/\*\*/g, "")
+		.replace(/\s*➕\s*\d{4}-\d{2}-\d{2}\s*/g, " ")
+		.replace(/\s*✅\s*\d{4}-\d{2}-\d{2}\s*/g, " ")
+		.replace(/\s*\^[A-Za-z0-9-]+\s*$/, "")
 		.replace(/\s+/g, " ")
 		.trim()
 		.toLowerCase();
@@ -135,17 +152,30 @@ function normalizeTask(line: string): string {
  * dedupe couldn't catch "Schedule a meeting with Luca" vs. "Schedule a
  * discussion with Luca"). Freshly generated items that duplicate a kept
  * (completed) task are skipped.
+ *
+ * Creation stamps (`➕ YYYY-MM-DD`) from the previous unchecked set are carried
+ * onto a matching fresh item (by normalized text, dates stripped) so
+ * re-enrichment doesn't reset age / horizon filtering when the model keeps
+ * the same task wording. Truly reworded tasks get a fresh stamp from the
+ * caller via {@link stampCreatedDate}.
  */
 export function refreshActionItems(
 	existingSection: string,
 	newItems: string[]
 ): string {
-	const kept = existingSection
-		.replace(/\s+$/, "")
-		.split("\n")
-		.filter((l) => !UNCHECKED_TASK.test(l));
+	const lines = existingSection.replace(/\s+$/, "").split("\n");
+	const prevUnchecked = lines.filter((l) => UNCHECKED_TASK.test(l));
+	const kept = lines.filter((l) => !UNCHECKED_TASK.test(l));
 	while (kept.length && (kept[0] ?? "").trim() === "") kept.shift();
 	while (kept.length && (kept[kept.length - 1] ?? "").trim() === "") kept.pop();
+
+	// normalizeTask(text) → prior ➕ stamp (YYYY-MM-DD), for carry-forward.
+	const priorCreated = new Map<string, string>();
+	for (const line of prevUnchecked) {
+		const key = normalizeTask(line);
+		const m = line.match(/➕\s*(\d{4}-\d{2}-\d{2})/);
+		if (key && m?.[1] && !priorCreated.has(key)) priorCreated.set(key, m[1]);
+	}
 
 	const seen = new Set(
 		kept.filter((l) => TASK_LINE.test(l)).map(normalizeTask)
@@ -153,8 +183,12 @@ export function refreshActionItems(
 	const fresh: string[] = [];
 	for (const item of newItems) {
 		const key = normalizeTask(item);
-		if (key && !seen.has(key)) {
-			seen.add(key);
+		if (!key || seen.has(key)) continue;
+		seen.add(key);
+		const prior = priorCreated.get(key);
+		if (prior && !CREATED_DATE_RE.test(item)) {
+			fresh.push(...stampCreatedDate([item], prior));
+		} else {
 			fresh.push(item);
 		}
 	}
@@ -162,13 +196,15 @@ export function refreshActionItems(
 }
 
 /**
- * Appends a Tasks-plugin creation stamp (`➕ YYYY-MM-DD`) to each task line that
- * doesn't already have one. A trailing block reference (` ^id`) stays at the
+ * Appends a Tasks-plugin creation stamp (`➕ YYYY-MM-DD`) to each *unchecked*
+ * task line that doesn't already have one. Completed tasks, prose, and blank
+ * lines are left untouched. A trailing block reference (` ^id`) stays at the
  * end. Pure/testable; used when lifting freshly generated items into the note.
  */
 export function stampCreatedDate(items: string[], dateStr: string): string[] {
 	const mark = `➕ ${dateStr}`;
 	return items.map((line) => {
+		if (!UNCHECKED_TASK.test(line)) return line;
 		if (CREATED_DATE_RE.test(line)) return line;
 		const ref = line.match(/(\s+\^[A-Za-z0-9-]+)\s*$/);
 		if (ref) {

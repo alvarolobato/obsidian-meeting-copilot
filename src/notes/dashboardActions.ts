@@ -277,3 +277,23 @@ export function splitByHorizon(
 	}
 	return { recent, older };
 }
+
+/**
+ * Merges action groups that share a note path, concatenating their tasks.
+ * Used when revealing horizon-hidden items so a meeting with both recent and
+ * older tasks appears once (not twice) in the dashboard list.
+ */
+export function mergeGroupsByPath(
+	groups: ActionNoteGroup[]
+): ActionNoteGroup[] {
+	const byPath = new Map<string, ActionNoteGroup>();
+	for (const g of groups) {
+		const existing = byPath.get(g.path);
+		if (!existing) {
+			byPath.set(g.path, { ...g, tasks: [...g.tasks] });
+			continue;
+		}
+		existing.tasks.push(...g.tasks);
+	}
+	return [...byPath.values()];
+}
