@@ -273,10 +273,20 @@ export default class SystemRecordingPlugin extends Plugin {
 	private oauth = new GoogleOAuth(
 		{
 			getCredentials: () => {
-				// User-supplied overrides take precedence; fall back to bundled credentials.
-				const id = this.settings.googleClientId.trim() || BUNDLED_CLIENT_ID;
-				const secret = this.settings.googleClientSecret.trim() || BUNDLED_CLIENT_SECRET;
-				return id && secret ? { client_id: id, client_secret: secret } : null;
+				const idOverride = this.settings.googleClientId.trim();
+				const secretOverride = this.settings.googleClientSecret.trim();
+				// Treat overrides atomically: a partial override (one field set,
+				// the other blank) would silently pair mismatched credentials and
+				// produce an opaque Google 401. Require both or neither.
+				if (idOverride || secretOverride) {
+					return idOverride && secretOverride
+						? { client_id: idOverride, client_secret: secretOverride }
+						: null;
+				}
+				// No overrides: use bundled credentials.
+				return BUNDLED_CLIENT_ID && BUNDLED_CLIENT_SECRET
+					? { client_id: BUNDLED_CLIENT_ID, client_secret: BUNDLED_CLIENT_SECRET }
+					: null;
 			},
 			getTokens: () => this.settings.googleTokens,
 			setTokens: async (tokens) => {

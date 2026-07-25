@@ -628,7 +628,7 @@ export const en = {
 		sessionExpired:
 			"Google Calendar session expired. Please reconnect from settings or the command palette.",
 		desktopOnly: "OAuth authentication is only supported on desktop.",
-		setCredentialsFirst: "Please set the OAuth Client ID and Secret first.",
+		setCredentialsFirst: "OAuth credentials are missing or incomplete. Open the Advanced section in Settings and enter both your Client ID and Client Secret.",
 		openingBrowser: "Opening Google authentication in your browser…",
 		noRefreshToken:
 			"No refresh_token was returned. Add yourself as a test user on the OAuth consent screen and try again.",

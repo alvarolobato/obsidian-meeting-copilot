@@ -93,8 +93,12 @@ function credentialsPlugin() {
 		name: "mc-credentials",
 		setup(build) {
 			const { id, secret } = loadBuildCredentials();
-			if (!id || !secret) {
+			if (!id && !secret) {
 				console.warn("mc-credentials: no credentials found — bundled OAuth will be disabled");
+			} else if (!id) {
+				console.warn("mc-credentials: GOOGLE_CLIENT_ID missing — bundled OAuth will be disabled");
+			} else if (!secret) {
+				console.warn("mc-credentials: GOOGLE_CLIENT_SECRET missing — bundled OAuth will be disabled");
 			}
 			const key = Array.from(randomBytes(32));
 			build.initialOptions.define = {
