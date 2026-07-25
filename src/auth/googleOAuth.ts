@@ -5,6 +5,7 @@ import { t } from "../i18n";
 
 export interface OAuthCredentials {
 	client_id: string;
+	client_secret: string;
 }
 
 export interface StoredTokens {
@@ -77,6 +78,7 @@ export class GoogleOAuth {
 		if (!creds) throw new Error(t().oauth.credentialsNotSet);
 		const body = new URLSearchParams({
 			client_id: creds.client_id,
+			client_secret: creds.client_secret,
 			refresh_token: tokens.refresh_token,
 			grant_type: "refresh_token",
 		}).toString();
@@ -153,6 +155,7 @@ export class GoogleOAuth {
 
 		const body = new URLSearchParams({
 			client_id: creds.client_id,
+			client_secret: creds.client_secret,
 			code,
 			code_verifier: codeVerifier,
 			grant_type: "authorization_code",

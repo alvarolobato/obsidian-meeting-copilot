@@ -20,7 +20,7 @@ function makeStorage(tokens: StoredTokens | null): {
 	return {
 		setTokens,
 		storage: {
-			getCredentials: () => ({ client_id: "id" }),
+			getCredentials: () => ({ client_id: "id", client_secret: "sec" }),
 			getTokens: () => current,
 			setTokens,
 		},
