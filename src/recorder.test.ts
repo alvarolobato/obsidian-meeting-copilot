@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseDeviceList } from "./recorder";
+import { parseDeviceList, parseStatusLines } from "./recorder";
 
 describe("parseDeviceList", () => {
 	it("parses the helper's device JSON", () => {
@@ -44,5 +44,31 @@ describe("parseDeviceList", () => {
 		expect(parseDeviceList("{}")).toEqual([]);
 		expect(parseDeviceList(JSON.stringify({ devices: [] }))).toEqual([]);
 		expect(parseDeviceList(JSON.stringify({ devices: "oops" }))).toEqual([]);
+	});
+});
+
+describe("parseStatusLines", () => {
+	it("parses complete JSON lines and keeps a partial trailing line", () => {
+		const first = parseStatusLines(
+			'{"status":"recording","file":"/a.wav"}\n{"status":"sto',
+			""
+		);
+		expect(first.statuses).toEqual([
+			{ status: "recording", file: "/a.wav" },
+		]);
+		expect(first.buffer).toBe('{"status":"sto');
+
+		const second = parseStatusLines('pped"}\n', first.buffer);
+		expect(second.statuses).toEqual([{ status: "stopped" }]);
+		expect(second.buffer).toBe("");
+	});
+
+	it("ignores non-JSON lines and blank lines", () => {
+		const { statuses, buffer } = parseStatusLines(
+			'noise\n\n{"status":"warning","message":"ok"}\n',
+			""
+		);
+		expect(statuses).toEqual([{ status: "warning", message: "ok" }]);
+		expect(buffer).toBe("");
 	});
 });

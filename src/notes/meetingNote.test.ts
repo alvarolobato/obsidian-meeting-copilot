@@ -86,6 +86,10 @@ class FakeVault {
 		return this.contents.get(file.path) ?? "";
 	}
 
+	async cachedRead(file: TFile): Promise<string> {
+		return this.read(file);
+	}
+
 	async modify(file: TFile, data: string): Promise<void> {
 		this.contents.set(file.path, data);
 	}

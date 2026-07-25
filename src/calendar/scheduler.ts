@@ -72,6 +72,11 @@ interface Phase {
 	ended: boolean;
 }
 
+/** Phase map key: event id + start so reused recurring ids don't collide (#127). */
+export function phaseKey(event: { id: string; start: number }): string {
+	return `${event.id}:${event.start}`;
+}
+
 export class CalendarScheduler {
 	private events: ScheduledEvent[] = [];
 	private phase = new Map<string, Phase>();
@@ -94,9 +99,9 @@ export class CalendarScheduler {
 			this.deps.onError?.(e instanceof Error ? e.message : String(e));
 			return;
 		}
-		const ids = new Set(this.events.map((e) => e.id));
-		for (const id of [...this.phase.keys()]) {
-			if (!ids.has(id)) this.phase.delete(id);
+		const keys = new Set(this.events.map((e) => phaseKey(e)));
+		for (const key of [...this.phase.keys()]) {
+			if (!keys.has(key)) this.phase.delete(key);
 		}
 	}
 
@@ -113,8 +118,9 @@ export class CalendarScheduler {
 
 		const leadMs = Math.max(0, this.deps.leadMs?.() ?? 0);
 		for (const event of this.events) {
+			const key = phaseKey(event);
 			const p =
-				this.phase.get(event.id) ??
+				this.phase.get(key) ??
 				({ upcoming: false, started: false, ended: false } as Phase);
 
 			// Upcoming: once, in the lead window strictly before the start.
@@ -146,7 +152,7 @@ export class CalendarScheduler {
 				this.deps.onEventEnd(event);
 			}
 
-			this.phase.set(event.id, p);
+			this.phase.set(key, p);
 		}
 	}
 

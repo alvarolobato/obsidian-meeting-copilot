@@ -64,15 +64,11 @@ export function renderMeetingRow(opts: MeetingRowOptions): void {
 	if (meeting.recording) dot.addClass("meeting-copilot-dot-recorded");
 
 	const time = row.createDiv({ cls: "meeting-copilot-row-time" });
-	if (meeting.allDay) {
-		time.setText(a.allDay);
-	} else {
-		time.setText(
-			`${moment(meeting.start).format("HH:mm")}–${moment(meeting.end).format(
-				"HH:mm"
-			)}`
-		);
-	}
+	time.setText(
+		`${moment(meeting.start).format("HH:mm")}–${moment(meeting.end).format(
+			"HH:mm"
+		)}`
+	);
 
 	const main = row.createDiv({ cls: "meeting-copilot-row-main" });
 	main.createDiv({ cls: "meeting-copilot-row-title", text: meeting.title });
@@ -102,7 +98,7 @@ export function renderMeetingRow(opts: MeetingRowOptions): void {
 			() => handlers.onStop(),
 			"meeting-copilot-row-action-danger"
 		);
-	} else if (!meeting.allDay && (isLive || isUpcoming || meeting.recording)) {
+	} else if (isLive || isUpcoming || meeting.recording) {
 		// Offer record even when a recording already exists (a second take
 		// extends the same meeting), relabeled so it's clearly additive.
 		const label = meeting.recording ? a.actions.recordAgain : a.actions.record;

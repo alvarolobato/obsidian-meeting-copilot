@@ -17,7 +17,6 @@ export interface AgendaMeeting {
 	title: string;
 	start: Date;
 	end: Date;
-	allDay: boolean;
 	meetingUrl: string | null;
 	location: string;
 	htmlLink: string;
@@ -81,7 +80,6 @@ export function toAgendaMeeting(
 		title: ev.summary,
 		start: ev.start,
 		end: ev.end,
-		allDay: ev.allDay,
 		meetingUrl: ev.meetLink,
 		location: ev.location,
 		htmlLink: ev.htmlLink,

@@ -63,6 +63,7 @@ import {
     MeetingEventInfo,
     MeetingNoteConfig,
     normalizeFolderPathOrEmpty,
+    notePathRenamed,
     parseStampDate,
     recordingLinkTarget,
     recordingLinkTargets,
@@ -524,7 +525,7 @@ export default class SystemRecordingPlugin extends Plugin {
 			callback: async () => {
 				this.settings.calendarAutoRecord = !this.settings.calendarAutoRecord;
 				await this.saveSettings();
-				this.updateScheduler();
+				void this.updateScheduler();
 				new Notice(
 					this.settings.calendarAutoRecord
 						? t().notices.autoRecordEnabled
@@ -604,6 +605,14 @@ export default class SystemRecordingPlugin extends Plugin {
 			this.notifyPendingTranscriptions()
 		);
 
+		// Keep the in-session identity map accurate when the user moves a note
+		// (#118) — metadataCache rename lag would otherwise recreate a duplicate.
+		this.registerEvent(
+			this.app.vault.on("rename", (file, oldPath) => {
+				if (file instanceof TFile) notePathRenamed(oldPath, file.path);
+			})
+		);
+
 		// Sweep expired recordings shortly after startup (never blocks load).
 		this.retentionTimeout = window.setTimeout(() => {
 			this.retentionTimeout = null;
@@ -618,17 +627,15 @@ export default class SystemRecordingPlugin extends Plugin {
             this.handleStatus(status);
         this.recorder.onError = (message: string) => {
             this.notifyRecordingError(message);
-            // Fatal failures (spawn error / non-zero exit) flip isRecording off
-            // before invoking onError; a stderr line while still recording is
-            // non-fatal, so only reset the UI when recording has truly stopped.
-            // Skip while attachRecording is in flight — a late stderr/exit line
-            // must not tear down state (or early-release a back-to-back waiter)
-            // mid-attach; attachRecording's finally owns that teardown.
+            // Fatal failures (spawn error / non-zero exit / terminal "error"
+            // status) flip isRecording off before invoking onError. Skip while
+            // attachRecording is in flight — a late exit line must not tear
+            // down state mid-attach; attachRecording's finally owns that teardown.
             if (!this.recorder.isRecording && !this.attaching)
                 this.resetRecordingUi();
         };
 
-		this.updateScheduler();
+		void this.updateScheduler();
 		requestNotificationPermission();
 		this.logNotificationEnvironment();
 		this.updateDetector();
@@ -1195,7 +1202,7 @@ export default class SystemRecordingPlugin extends Plugin {
 		try {
 			await this.oauth.authenticate();
 			this.authExpired = false;
-			this.updateScheduler();
+			void this.updateScheduler();
 			this.agendaEvents.emit("changed", undefined);
 		} catch (e) {
 			new Notice(e instanceof Error ? e.message : String(e));
@@ -1229,8 +1236,11 @@ export default class SystemRecordingPlugin extends Plugin {
 	 * auto-start, or auto-stop) and we're authenticated; stops it otherwise.
 	 * Auto-start/stop drive the scheduler on their own — they aren't inert just
 	 * because the notification prompts are turned off.
+	 *
+	 * Waits (bounded) for metadataCache to resolve once before the first start
+	 * so identity lookups don't create duplicate notes on a cold cache (#118).
 	 */
-	updateScheduler(): void {
+	async updateScheduler(): Promise<void> {
 		const shouldRun =
 			(this.settings.calendarAutoRecord ||
 				this.settings.calendarAutoStart ||
@@ -1256,7 +1266,10 @@ export default class SystemRecordingPlugin extends Plugin {
 					registerInterval: (id) => this.registerInterval(id),
 				});
 			}
-			if (!this.scheduler.isRunning) this.scheduler.start();
+			if (!this.scheduler.isRunning) {
+				await this.awaitMetadataResolvedOnce();
+				this.scheduler.start();
+			}
 		} else {
 			this.scheduler?.stop();
 			// No more boundary callbacks will fire, so sweep any calendar prompts'
@@ -1267,6 +1280,27 @@ export default class SystemRecordingPlugin extends Plugin {
 				keepOs: true,
 			});
 		}
+	}
+
+	/**
+	 * Resolves after the first `metadataCache.on("resolved")` (or a 15s timeout
+	 * so a stuck index can't block calendar automation forever).
+	 */
+	private metadataResolvedOnce: Promise<void> | null = null;
+	private awaitMetadataResolvedOnce(): Promise<void> {
+		if (this.metadataResolvedOnce) return this.metadataResolvedOnce;
+		this.metadataResolvedOnce = new Promise((resolve) => {
+			const timeout = window.setTimeout(() => {
+				this.app.metadataCache.offref(ref);
+				resolve();
+			}, 15_000);
+			const ref = this.app.metadataCache.on("resolved", () => {
+				window.clearTimeout(timeout);
+				this.app.metadataCache.offref(ref);
+				resolve();
+			});
+		});
+		return this.metadataResolvedOnce;
 	}
 
 	/** Re-poll the calendar immediately (e.g. after changing the target calendar). No-op if not running. */
@@ -2498,11 +2532,10 @@ export default class SystemRecordingPlugin extends Plugin {
         // Calendar events without a note yet — the enrichment. A timed event
         // whose note already exists is dropped here (the note row above
         // represents it, with fresh state), whether the match is by `event_id`
-        // or a legacy note's meeting URL. All-day entries (OOO, birthdays)
-        // aren't meetings, so they're skipped.
+        // or a legacy note's meeting URL. All-day calendar events never reach
+        // here (`listEvents` filters them out — #121).
         const index = buildNoteIndex(this.app, scanned);
         for (const ev of events) {
-            if (ev.allDay) continue;
             const m = toAgendaMeeting(ev, index);
             if (m.note) continue;
             const url = normalizeUrl(m.meetingUrl);
@@ -3325,7 +3358,6 @@ export default class SystemRecordingPlugin extends Plugin {
             title: str("title") || file.basename,
             start: toDate(fm["start"] ?? fm["date"]),
             end: toDate(fm["end"] ?? fm["start"] ?? fm["date"]),
-            allDay: false,
             meetingUrl: str("meeting_url") || null,
             location: str("location"),
             htmlLink: "",
@@ -5330,7 +5362,11 @@ export default class SystemRecordingPlugin extends Plugin {
                         this.settings.enrichPromptCustomize,
                         this.settings.enrichPrompt
                     ),
-                    ctx
+                    ctx,
+                    {
+                        maxTranscriptTokens:
+                            this.settings.enrichMaxTranscriptTokens,
+                    }
                 ) + (wantTitle ? ADHOC_TITLE_PROMPT_SUFFIX : "");
             const rawOutput = await chatComplete({
                 baseUrl: apiBaseUrl,

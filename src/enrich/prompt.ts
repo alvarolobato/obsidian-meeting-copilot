@@ -104,10 +104,55 @@ export function extractEmbeddedTitle(raw: string): {
 const PLACEHOLDER =
 	/\{\{(title|date|attendees|notes|actionItems|followUps|transcript)\}\}/g;
 
+/** Rough token estimate used for enrichment prompt budgeting (#22). */
+export function estimateTokens(text: string): number {
+	return Math.ceil(text.length / 4);
+}
+
+/**
+ * Marker inserted when the transcript is middle-truncated to fit the enrich
+ * prompt budget. Visible in the prompt so the model (and logs) know content
+ * was omitted.
+ */
+export const TRANSCRIPT_TRUNCATION_MARKER =
+	"\n\n[… transcript truncated for enrichment …]\n\n";
+
+/**
+ * Keeps the opening and closing of a long transcript and drops the middle when
+ * the estimated token count exceeds `maxTokens`. Under budget → unchanged.
+ */
+export function truncateTranscriptForBudget(
+	transcript: string,
+	maxTokens: number
+): { text: string; truncated: boolean } {
+	if (maxTokens <= 0 || estimateTokens(transcript) <= maxTokens) {
+		return { text: transcript, truncated: false };
+	}
+	const marker = TRANSCRIPT_TRUNCATION_MARKER;
+	const markerTokens = estimateTokens(marker);
+	const budget = Math.max(64, maxTokens - markerTokens);
+	const keepChars = budget * 4;
+	const headChars = Math.floor(keepChars / 2);
+	const tailChars = keepChars - headChars;
+	const head = transcript.slice(0, headChars);
+	const tail = transcript.slice(Math.max(headChars, transcript.length - tailChars));
+	return { text: `${head.trimEnd()}${marker}${tail.trimStart()}`, truncated: true };
+}
+
 /** Fills a prompt template with the context, defaulting empty fields to "(none)". */
-export function fillPrompt(template: string, ctx: EnrichmentContext): string {
+export function fillPrompt(
+	template: string,
+	ctx: EnrichmentContext,
+	opts?: { maxTranscriptTokens?: number }
+): string {
+	const maxTranscriptTokens = opts?.maxTranscriptTokens;
+	const transcript =
+		typeof maxTranscriptTokens === "number"
+			? truncateTranscriptForBudget(ctx.transcript, maxTranscriptTokens).text
+			: ctx.transcript;
+	const filled: EnrichmentContext = { ...ctx, transcript };
 	return template.replace(PLACEHOLDER, (_m, key: keyof EnrichmentContext) => {
-		const value = ctx[key];
+		const value = filled[key];
 		return value && value.trim().length > 0 ? value : "(none)";
 	});
 }

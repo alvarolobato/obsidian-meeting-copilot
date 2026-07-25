@@ -5,9 +5,16 @@
 /** Known conferencing providers, matched against free-text (location/description). */
 const PROVIDER_PATTERNS: RegExp[] = [
 	/https:\/\/teams\.microsoft\.com\/l\/meetup-join\/[^\s"'<>]+/i,
-	/https:\/\/[a-z0-9.-]*zoom\.us\/j\/[^\s"'<>]+/i,
+	/https:\/\/teams\.live\.com\/meet\/[^\s"'<>]+/i,
+	/https:\/\/teams\.microsoft\.us\/l\/meetup-join\/[^\s"'<>]+/i,
+	/https:\/\/[a-z0-9.-]*zoom\.us\/(?:j|my|w|s)\/[^\s"'<>]+/i,
+	/https:\/\/[a-z0-9.-]*zoomgov\.com\/(?:j|my|w|s)\/[^\s"'<>]+/i,
 	/https:\/\/meet\.google\.com\/[a-z0-9-]+(?:\?[^\s"'<>]*)?/i,
 	/https:\/\/[a-z0-9.-]*webex\.com\/(?:meet|wbxmjs|join)\/[^\s"'<>]+/i,
+	/https:\/\/(?:[\w.-]+\.)?gotomeeting\.com\/join\/[^\s"'<>]+/i,
+	/https:\/\/(?:[\w.-]+\.)?goto\.com\/meet\/[^\s"'<>]+/i,
+	/https:\/\/whereby\.com\/[^\s"'<>]+/i,
+	/https:\/\/(?:[\w.-]+\.)?chime\.aws\/(?:meetings|portal\/meetings)\/[^\s"'<>]+/i,
 ];
 
 /**

@@ -118,6 +118,29 @@ export function parseDeviceList(stdout: string): InputDevice[] {
 }
 
 /**
+ * Split a stdout chunk into complete JSON status lines, returning any leftover
+ * partial line as the new buffer. Exported for testing (#127).
+ */
+export function parseStatusLines(
+    chunk: string,
+    priorBuffer: string
+): { statuses: RecorderStatus[]; buffer: string } {
+    const combined = priorBuffer + chunk;
+    const lines = combined.split("\n");
+    const buffer = lines.pop() ?? "";
+    const statuses: RecorderStatus[] = [];
+    for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+            statuses.push(JSON.parse(line) as RecorderStatus);
+        } catch {
+            // Ignore non-JSON output
+        }
+    }
+    return { statuses, buffer };
+}
+
+/**
  * Durable recorder-lifecycle logging. Uses console.warn (not .info/.debug) so
  * the line is visible in Obsidian's console without switching on Verbose — the
  * recorder's only signals are otherwise ephemeral Notices, which makes a
@@ -186,36 +209,28 @@ export class Recorder {
         let buffer = "";
 
         proc.stdout?.on("data", (data: string | Uint8Array) => {
-            buffer += data.toString();
-            const lines = buffer.split("\n");
-            buffer = lines.pop() ?? "";
-
-            for (const line of lines) {
-                if (!line.trim()) continue;
-                try {
-                    const status = JSON.parse(line) as RecorderStatus;
-                    // Log lifecycle transitions but not every duration tick:
-                    // the first "recording" line confirms capture actually began
-                    // (vs. a helper that spawns then dies), plus every terminal
-                    // status. This is the signal for "did recording start?".
-                    if (status.status === "recording") {
-                        if (!this.loggedRecording) {
-                            this.loggedRecording = true;
-                            log("helper reports recording", { file: status.file });
-                        }
-                    } else {
-                        log(`helper status: ${status.status}`, {
-                            file: status.file,
-                            message: status.message,
-                        });
+            const parsed = parseStatusLines(data.toString(), buffer);
+            buffer = parsed.buffer;
+            for (const status of parsed.statuses) {
+                // Log lifecycle transitions but not every duration tick:
+                // the first "recording" line confirms capture actually began
+                // (vs. a helper that spawns then dies), plus every terminal
+                // status. This is the signal for "did recording start?".
+                if (status.status === "recording") {
+                    if (!this.loggedRecording) {
+                        this.loggedRecording = true;
+                        log("helper reports recording", { file: status.file });
                     }
-                    this.onStatus?.(status);
+                } else {
+                    log(`helper status: ${status.status}`, {
+                        file: status.file,
+                        message: status.message,
+                    });
+                }
+                this.onStatus?.(status);
 
-                    if (status.status === "stopped" || status.status === "error") {
-                        this._isRecording = false;
-                    }
-                } catch {
-                    // Ignore non-JSON output
+                if (status.status === "stopped" || status.status === "error") {
+                    this._isRecording = false;
                 }
             }
         });
@@ -223,8 +238,10 @@ export class Recorder {
         proc.stderr?.on("data", (data: string | Uint8Array) => {
             const msg = data.toString().trim();
             if (msg) {
+                // Core Audio / SCK emit routine warnings on stderr during
+                // healthy capture — log only; Notices come from spawn/exit/
+                // terminal "error" status (#127).
                 log("helper stderr", { msg });
-                this.onError?.(msg);
             }
         });
 
@@ -261,7 +278,25 @@ export class Recorder {
         if (this._isRecording && this.stopFilePath) {
             // Create the stop file - the Swift CLI polls for this
             log("stop requested (writing stop-file)", { stopFile: this.stopFilePath });
-            fs.writeFileSync(this.stopFilePath, "stop");
+            try {
+                fs.writeFileSync(this.stopFilePath, "stop");
+            } catch (e) {
+                // If /tmp is unwritable, try to terminate the helper so the UI
+                // is not stuck in a recording state (#127).
+                log("stop-file write failed; killing helper", {
+                    message: e instanceof Error ? e.message : String(e),
+                });
+                try {
+                    this.process?.kill("SIGTERM");
+                } catch {
+                    /* ignore */
+                }
+                this.onError?.(
+                    e instanceof Error
+                        ? `Could not stop recording: ${e.message}`
+                        : "Could not stop recording"
+                );
+            }
         } else {
             log("stop ignored: not recording");
         }

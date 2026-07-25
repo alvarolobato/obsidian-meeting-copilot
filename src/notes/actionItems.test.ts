@@ -46,6 +46,11 @@ describe("extractActionItems", () => {
 		expect(items).toEqual([]);
 		expect(without).toBe("### Topic\n- a point");
 	});
+
+	it("matches #### headings and light trailing junk", () => {
+		const md = ["#### Next steps 🚀", "- Ship it"].join("\n");
+		expect(extractActionItems(md).items).toEqual(["- [ ] Ship it"]);
+	});
 });
 
 describe("extractFollowUps", () => {

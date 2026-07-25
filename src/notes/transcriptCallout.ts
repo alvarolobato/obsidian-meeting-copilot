@@ -15,6 +15,13 @@ function escapeRegExp(s: string): string {
 }
 
 /**
+ * Callout type the plugin writes for transcripts (`> [!quote]- Transcript`).
+ * Strip/extract match this type only so a hand-made `> [!note] Transcript`
+ * is not destroyed on re-transcribe (#119).
+ */
+export const TRANSCRIPT_CALLOUT_TYPE = "quote";
+
+/**
  * Matches the collapsed transcript callout's marker line, e.g.
  * `> [!quote]- Transcript`. The callout has no markdown heading of its own and
  * is pinned at the note's bottom, so it sits inside the trailing section's
@@ -22,5 +29,5 @@ function escapeRegExp(s: string): string {
  * gets swallowed into that section (#20).
  */
 export const TRANSCRIPT_CALLOUT_MARKER = new RegExp(
-	`^>\\s*\\[![\\w-]+\\][+-]?\\s*${escapeRegExp(TRANSCRIPT_CALLOUT_TITLE)}\\s*$`
+	`^>\\s*\\[!${escapeRegExp(TRANSCRIPT_CALLOUT_TYPE)}\\][+-]?\\s*${escapeRegExp(TRANSCRIPT_CALLOUT_TITLE)}\\s*$`
 );

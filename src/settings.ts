@@ -176,6 +176,12 @@ export interface SystemRecordingSettings {
 	enrichPromptCustomize: boolean;
 	/** The user's custom enrichment prompt; only used when `enrichPromptCustomize` is on. */
 	enrichPrompt: string;
+	/**
+	 * Soft cap on transcript tokens (~chars/4) spliced into the enrichment
+	 * prompt. Over budget, the middle is truncated with a visible marker (#22).
+	 * 0 disables truncation.
+	 */
+	enrichMaxTranscriptTokens: number;
 	enrichOnTranscribe: boolean;
 	hideAiNotes: boolean;
 	/** After enriching an ad-hoc meeting, ask the LLM for a title and offer to rename. */
@@ -271,6 +277,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	enrichModel: "gpt-4o",
 	enrichPromptCustomize: false,
 	enrichPrompt: "",
+	enrichMaxTranscriptTokens: 12_000,
 	enrichOnTranscribe: true,
 	hideAiNotes: false,
 	suggestAdhocTitle: true,
@@ -676,7 +683,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     .onChange(async (value) => {
                         this.plugin.settings.calendarAutoRecord = value;
                         await this.plugin.saveSettings();
-                        this.plugin.updateScheduler();
+                        void this.plugin.updateScheduler();
                     })
             );
 
@@ -706,7 +713,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     .onChange(async (value) => {
                         this.plugin.settings.calendarAutoStart = value;
                         await this.plugin.saveSettings();
-                        this.plugin.updateScheduler();
+                        void this.plugin.updateScheduler();
                     })
             );
 
@@ -719,7 +726,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     .onChange(async (value) => {
                         this.plugin.settings.calendarAutoStop = value;
                         await this.plugin.saveSettings();
-                        this.plugin.updateScheduler();
+                        void this.plugin.updateScheduler();
                     })
             );
 
@@ -927,6 +934,23 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
             () => this.plugin.settings.enrichPrompt,
             (v) => (this.plugin.settings.enrichPrompt = v)
         );
+
+        new Setting(containerEl)
+            .setName(s.settings.enrichMaxTranscriptTokens.name)
+            .setDesc(s.settings.enrichMaxTranscriptTokens.desc)
+            .addText((text) =>
+                text
+                    .setPlaceholder("12000")
+                    .setValue(
+                        String(this.plugin.settings.enrichMaxTranscriptTokens)
+                    )
+                    .onChange(async (value) => {
+                        const n = Number.parseInt(value.trim(), 10);
+                        this.plugin.settings.enrichMaxTranscriptTokens =
+                            Number.isFinite(n) && n >= 0 ? n : 12_000;
+                        await this.plugin.saveSettings();
+                    })
+            );
 
         new Setting(containerEl)
             .setName(s.settings.actionItemsAsTasks.name)

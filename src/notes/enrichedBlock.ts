@@ -38,7 +38,11 @@ export function stripEnriched(content: string): string {
 	return out.join("\n");
 }
 
-const FRONTMATTER = /^(---\r?\n[\s\S]*?\r?\n---\r?\n)/;
+/**
+ * Leading YAML fence, including empty frontmatter (`---\n---`) and a closing
+ * `---` at EOF with no trailing newline (#119).
+ */
+const FRONTMATTER = /^(---\r?\n(?:[\s\S]*?\r?\n)?---(?:\r?\n|$))/;
 
 /**
  * Places the enriched callout near the top of the body — after any YAML

@@ -1,9 +1,13 @@
-/** Heading (## or ###) that holds the participant's own action items in enriched output. */
+/**
+ * Heading (##–####) that holds the participant's own action items in enriched
+ * output. Allows light trailing junk / emoji after the phrase (#119); does not
+ * match bold pseudo-headings.
+ */
 const ACTION_HEADING =
-	/^#{2,3}\s+(next steps|action items|actions|to[- ]?dos?)\s*$/i;
+	/^#{2,4}\s+(next steps|action items|actions|to[- ]?dos?)\b[^\n]*$/i;
 
-/** Heading (## or ###) that holds meeting-wide follow-ups in enriched output. */
-const FOLLOWUP_HEADING = /^#{2,3}\s+follow[- ]?ups?\s*$/i;
+/** Heading (##–####) that holds meeting-wide follow-ups in enriched output. */
+const FOLLOWUP_HEADING = /^#{2,4}\s+follow[- ]?ups?\b[^\n]*$/i;
 
 /** Matches a markdown task line, e.g. `- [ ] foo`, `* [x] bar`, or `1. [ ] baz`. */
 const TASK_LINE = /^\s*(?:[-*]|\d+\.)\s+\[[ xX]\]\s+/;

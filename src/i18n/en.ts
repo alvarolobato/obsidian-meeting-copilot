@@ -194,7 +194,6 @@ export const en = {
 		now: "Now",
 		recording: "Recording",
 		startsIn: (min: number) => `Starts in ${min} min`,
-		allDay: "All-day",
 		attendeesCount: (n: number) => `${n} attendees`,
 		refresh: "Refresh calendar",
 		openSettings: "Open plugin settings",
@@ -616,6 +615,10 @@ export const en = {
 		enrichPrompt: {
 			name: "Enrichment prompt",
 			desc: "Prompt sent to the model. While Customize is off, the plugin uses its built-in prompt (which improves with each update); toggle it on to edit and store your own. Placeholders: {{title}}, {{date}}, {{attendees}}, {{notes}}, {{actionItems}}, {{followUps}}, {{transcript}}.",
+		},
+		enrichMaxTranscriptTokens: {
+			name: "Max transcript tokens for enrichment",
+			desc: "Soft cap (~characters÷4) on how much of the transcript is spliced into the enrichment prompt. Longer transcripts keep the opening and closing with a visible truncation marker in the middle. 0 disables truncation. Default 12000.",
 		},
 	},
 	oauth: {
