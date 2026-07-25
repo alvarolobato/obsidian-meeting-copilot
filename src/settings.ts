@@ -182,6 +182,24 @@ export { STT_MODELS, inferSttApiType, type SttApiType };
 /** Shared row count so every settings text area is the same (comfortable) height. */
 const TEXTAREA_ROWS = 18;
 
+/** Settings panes shown as horizontal tabs inside the plugin settings view. */
+type SettingsTabId =
+	| "general"
+	| "calendar"
+	| "detection"
+	| "recording"
+	| "transcription"
+	| "enrichment";
+
+const SETTINGS_TABS: readonly SettingsTabId[] = [
+	"general",
+	"calendar",
+	"detection",
+	"recording",
+	"transcription",
+	"enrichment",
+] as const;
+
 export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	oneOffFolderTemplate: "Meetings/{{year}}",
 	seriesFolderTemplate: "Meetings/{{series}}",
@@ -205,13 +223,13 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	googleClientId: "",
 	googleClientSecret: "",
 	googleTokens: null,
-	calendarAutoRecord: false,
+	calendarAutoRecord: true,
 	calendarAutoStart: false,
 	calendarAutoStop: false,
 	notifyBeforeStartMinutes: 1,
 	calendarId: "primary",
 	exclusionKeywords: "",
-	openMeetAutomatically: true,
+	openMeetAutomatically: false,
 	notificationStyleHintShown: false,
 	detectMeetings: true,
 	detectZoom: true,
@@ -225,7 +243,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	dashboardFollowupsPageSize: 10,
 	apiBaseUrl: "https://api.openai.com/v1",
 	apiKey: "",
-	transcriptionBackend: "remote",
+	transcriptionBackend: "local",
 	localWhisperModel: DEFAULT_LOCAL_MODEL_ID,
 	localFallbackToRemote: false,
 	sttModel: "gpt-4o-transcribe",
@@ -234,12 +252,11 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	postProcessingEnabled: false,
 	dictionaryCorrectionEnabled: false,
 	dictionary: "",
-	// Off by default: diarization runs two full transcription passes (~2x the
-	// time of the mixed path) and speaker separation is still being hardened.
-	// Turn it on per-vault to get me/them labels; local WebRTC VAD then gates
-	// each stream's silence and cross-talk bleed is de-duped so the merge stays
-	// clean. Manual re-transcribe can also force it on/off per run.
-	diarizationEnabled: false,
+	// On by default: diarization runs two full transcription passes (~2x the
+	// time of the mixed path). Local WebRTC VAD gates each stream's silence and
+	// cross-talk bleed is de-duped so the merge stays clean. Manual re-transcribe
+	// can also force it on/off per run.
+	diarizationEnabled: true,
 	sttTranscriptionSupported: null,
 	sttTimestampsSupported: null,
 	sttTimestampsProbeKey: "",
@@ -338,6 +355,8 @@ export function migrateSettings(
 
 export class SystemRecordingSettingTab extends PluginSettingTab {
     plugin: SystemRecordingPlugin;
+    /** Which settings pane is currently shown; preserved across `display()` re-renders. */
+    private activeTab: SettingsTabId = "general";
     /** Model ids fetched from the endpoint (populated by "Load models"), shared by transcription + enrichment. */
     private models: string[] = [];
     /** Per-model capabilities from the endpoint (LiteLLM), or null when the endpoint doesn't expose them (plain OpenAI). Drives the transcription-model filter. */
@@ -393,502 +412,546 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         // The guard still prevents repeated probes from rapid in-tab edits.
         this.probedKeys.clear();
 
-		new Setting(containerEl).setName(s.settings.calendarHeading).setHeading();
+        this.renderTabBar(containerEl);
 
-		new Setting(containerEl)
-			.setName(s.settings.clientId.name)
-			.setDesc(s.settings.clientId.desc)
-			.addText((text) =>
-				text
-					.setValue(this.plugin.settings.googleClientId)
-					.onChange(async (value) => {
-						this.plugin.settings.googleClientId = value.trim();
-						await this.plugin.saveSettings();
-					})
-			);
+        const pane = containerEl.createDiv({ cls: "mc-settings-tab-pane" });
+        switch (this.activeTab) {
+            case "general":
+                this.renderGeneralTab(pane);
+                break;
+            case "calendar":
+                this.renderCalendarTab(pane);
+                break;
+            case "detection":
+                this.renderDetectionTab(pane);
+                break;
+            case "recording":
+                this.renderRecordingSettings(pane);
+                break;
+            case "transcription":
+                this.renderTranscriptionTab(pane);
+                break;
+            case "enrichment":
+                this.renderEnrichmentTab(pane);
+                break;
+        }
+    }
 
-		new Setting(containerEl)
-			.setName(s.settings.clientSecret.name)
-			.setDesc(s.settings.clientSecret.desc)
-			.addText((text) => {
-				text.inputEl.type = "password";
-				text
-					.setValue(this.plugin.settings.googleClientSecret)
-					.onChange(async (value) => {
-						this.plugin.settings.googleClientSecret = value.trim();
-						await this.plugin.saveSettings();
-					});
-			});
-
-		new Setting(containerEl)
-			.setName(s.settings.googleAuth.name)
-			.setDesc(
-				this.plugin.isCalendarAuthenticated()
-					? s.settings.googleAuth.descAuthenticated
-					: s.settings.googleAuth.descUnauthenticated
-			)
-			.addButton((btn) =>
-				btn
-					.setButtonText(
-						this.plugin.isCalendarAuthenticated()
-							? s.settings.googleAuth.buttonReauthenticate
-							: s.settings.googleAuth.buttonAuthenticate
-					)
-					.setCta()
-					.onClick(async () => {
-						await this.plugin.authenticateCalendar();
-						this.display();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName(s.settings.calendarAutoRecord.name)
-			.setDesc(s.settings.calendarAutoRecord.desc)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.calendarAutoRecord)
-					.onChange(async (value) => {
-						this.plugin.settings.calendarAutoRecord = value;
-						await this.plugin.saveSettings();
-						this.plugin.updateScheduler();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName(s.settings.notifyBeforeStart.name)
-			.setDesc(s.settings.notifyBeforeStart.desc)
-			.addText((text) => {
-				text.inputEl.type = "number";
-				text
-					.setValue(
-						String(this.plugin.settings.notifyBeforeStartMinutes)
-					)
-					.onChange(async (value) => {
-						const n = Number.parseInt(value, 10);
-						this.plugin.settings.notifyBeforeStartMinutes =
-							Number.isFinite(n) && n >= 0 ? Math.min(n, 60) : 1;
-						await this.plugin.saveSettings();
-					});
-			});
-
-		new Setting(containerEl)
-			.setName(s.settings.calendarAutoStart.name)
-			.setDesc(s.settings.calendarAutoStart.desc)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.calendarAutoStart)
-					.onChange(async (value) => {
-						this.plugin.settings.calendarAutoStart = value;
-						await this.plugin.saveSettings();
-						this.plugin.updateScheduler();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName(s.settings.calendarAutoStop.name)
-			.setDesc(s.settings.calendarAutoStop.desc)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.calendarAutoStop)
-					.onChange(async (value) => {
-						this.plugin.settings.calendarAutoStop = value;
-						await this.plugin.saveSettings();
-						this.plugin.updateScheduler();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName(s.settings.targetCalendarId.name)
-			.setDesc(s.settings.targetCalendarId.desc)
-			.addText((text) => {
-				text
-					.setValue(this.plugin.settings.calendarId)
-					.onChange(async (value) => {
-						this.plugin.settings.calendarId = value.trim() || "primary";
-						await this.plugin.saveSettings();
-					});
-				// Re-poll immediately once the user finishes editing (avoids per-keystroke API calls).
-				this.plugin.registerDomEvent(text.inputEl, "blur", () => {
-					this.plugin.refreshCalendarNow();
-				});
-			});
-
-		new Setting(containerEl)
-			.setName(s.settings.exclusionKeywords.name)
-			.setDesc(s.settings.exclusionKeywords.desc)
-			.addTextArea((ta) => {
-				ta
-					.setValue(this.plugin.settings.exclusionKeywords)
-					.onChange(async (value) => {
-						this.plugin.settings.exclusionKeywords = value;
-						await this.plugin.saveSettings();
-					});
-				ta.inputEl.rows = TEXTAREA_ROWS;
-				ta.inputEl.addClass("meeting-copilot-template-input");
-				// Re-poll and refresh the agenda once editing ends so newly
-				// excluded events drop out without waiting for the next poll.
-				this.plugin.registerDomEvent(ta.inputEl, "blur", () => {
-					this.plugin.refreshCalendarNow();
-					this.plugin.refreshAgenda();
-				});
-			});
-
-		new Setting(containerEl)
-			.setName(s.settings.agendaLookAhead.name)
-			.setDesc(s.settings.agendaLookAhead.desc)
-			.addText((text) => {
-				text.inputEl.type = "number";
-				text
-					.setValue(String(this.plugin.settings.agendaLookAheadDays))
-					.onChange(async (value) => {
-						const n = Number.parseInt(value, 10);
-						this.plugin.settings.agendaLookAheadDays =
-							Number.isFinite(n) && n >= 1 ? Math.min(n, 180) : 7;
-						await this.plugin.saveSettings();
-						this.plugin.refreshAgenda();
-					});
-			});
-
-		new Setting(containerEl)
-			.setName(s.settings.agendaLookBack.name)
-			.setDesc(s.settings.agendaLookBack.desc)
-			.addText((text) => {
-				text.inputEl.type = "number";
-				text
-					.setValue(String(this.plugin.settings.agendaLookBackDays))
-					.onChange(async (value) => {
-						const n = Number.parseInt(value, 10);
-						this.plugin.settings.agendaLookBackDays =
-							Number.isFinite(n) && n >= 0 ? Math.min(n, 30) : 7;
-						await this.plugin.saveSettings();
-						this.plugin.refreshAgenda();
-					});
-			});
-
-		new Setting(containerEl)
-			.setName(s.settings.openMeet.name)
-			.setDesc(s.settings.openMeet.desc)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.openMeetAutomatically)
-					.onChange(async (value) => {
-						this.plugin.settings.openMeetAutomatically = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		// ---- Notifications (macOS) ----
-		new Setting(containerEl)
-			.setName(s.settings.notificationsHeading)
-			.setHeading();
-
-		new Setting(containerEl)
-			.setName(s.settings.notificationStyle.name)
-			.setDesc(s.settings.notificationStyle.desc)
-			.addButton((btn) =>
-				btn
-					.setButtonText(s.settings.notificationStyle.button)
-					.onClick(() => this.plugin.openMacNotificationSettings())
-			);
-
-		// ---- Meeting detection (macOS) ----
-		new Setting(containerEl)
-			.setName(s.settings.detectionHeading)
-			.setHeading();
-
-		new Setting(containerEl)
-			.setName(s.settings.detectMeetings.name)
-			.setDesc(s.settings.detectMeetings.desc)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.detectMeetings)
-					.onChange(async (value) => {
-						this.plugin.settings.detectMeetings = value;
-						await this.plugin.saveSettings();
-						this.plugin.updateDetector();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName(s.settings.detectZoom.name)
-			.setDesc(s.settings.detectZoom.desc)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.detectZoom)
-					.onChange(async (value) => {
-						this.plugin.settings.detectZoom = value;
-						await this.plugin.saveSettings();
-						this.plugin.updateDetector();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName(s.settings.detectGoogleMeet.name)
-			.setDesc(s.settings.detectGoogleMeet.desc)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.detectGoogleMeet)
-					.onChange(async (value) => {
-						this.plugin.settings.detectGoogleMeet = value;
-						await this.plugin.saveSettings();
-						this.plugin.updateDetector();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName(s.settings.detectionInterval.name)
-			.setDesc(s.settings.detectionInterval.desc)
-			.addText((text) => {
-				text.inputEl.type = "number";
-				text
-					.setValue(
-						String(this.plugin.settings.detectionIntervalSeconds)
-					)
-					.onChange(async (value) => {
-						const n = Number.parseInt(value, 10);
-						this.plugin.settings.detectionIntervalSeconds =
-							Number.isFinite(n) && n >= 3 ? Math.min(n, 120) : 10;
-						await this.plugin.saveSettings();
-						this.plugin.updateDetector();
-					});
-			});
-
-		this.renderRecordingSettings(containerEl);
-
-		// ---- AI ----
-		// One endpoint + key is used for both transcription and enrichment.
-		new Setting(containerEl).setName(s.settings.endpointHeading).setHeading();
-
-		new Setting(containerEl)
-			.setName(s.settings.apiBaseUrl.name)
-			.setDesc(s.settings.apiBaseUrl.desc)
-			.addText((text) =>
-				text
-					.setPlaceholder("https://api.openai.com/v1")
-					.setValue(this.plugin.settings.apiBaseUrl)
-					.onChange(async (value) => {
-						this.plugin.settings.apiBaseUrl = value.trim();
-						await this.plugin.saveSettings();
-						// The stored verdict is keyed on the old base URL, so the
-						// badges now read "not checked yet"; repaint them and let
-						// a re-probe run on the next model change / tab reopen.
-						this.probedKeys.clear();
-						this.refreshSttBadges();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName(s.settings.apiKey.name)
-			.setDesc(s.settings.apiKey.desc)
-			.addText((text) => {
-				text.inputEl.type = "password";
-				text
-					.setValue(this.plugin.settings.apiKey)
-					.onChange(async (value) => {
-						this.plugin.settings.apiKey = value.trim();
-						// probeKey ignores the key, so a stored verdict would
-						// otherwise stay falsely "fresh" after a key change.
-						// Reset it so transcription/timestamp support is
-						// re-probed against the new credential.
-						this.plugin.settings.sttTimestampsProbeKey = "";
-						await this.plugin.saveSettings();
-						this.probedKeys.clear();
-						this.refreshSttBadges();
-					});
-			});
-
-		// Endpoint actions: one button that verifies the endpoint and loads the
-		// shared model list + capabilities used by both the transcription and
-		// enrichment pickers. Kept as the last row of the endpoint section so
-		// the credentials sit above it.
-		new Setting(containerEl)
-			.setName(s.settings.endpointActions.name)
-			.setDesc(s.settings.endpointActions.desc)
-			.addButton((button) =>
-				button
-					.setButtonText(s.settings.testConnection.button)
-					.setCta()
-					.onClick(async () => {
-						const { apiBaseUrl, apiKey } = this.plugin.settings;
-						if (!apiBaseUrl) {
-							new Notice(s.settings.testConnection.noBaseUrl);
-							return;
-						}
-						button.setButtonText(s.settings.testConnection.testing);
-						button.setDisabled(true);
-						try {
-							// One round-trip: fetch the model list and, when the
-							// endpoint exposes them (LiteLLM), per-model
-							// capabilities so the STT picker can filter to real
-							// transcription models.
-							this.models = await listModels(apiBaseUrl, apiKey);
-							this.capabilities = await fetchModelCapabilities(
-								apiBaseUrl,
-								apiKey
-							);
-							new Notice(
-								this.models.length === 0
-									? s.settings.testConnection.empty
-									: s.settings.testConnection.success(
-											this.models.length
-										)
-							);
-							// Transcription/timestamp support is assessed
-							// automatically when the model changes (and on open),
-							// not here — this button only verifies the endpoint
-							// and loads the model list + capabilities.
-							this.display();
-						} catch (e) {
-							new Notice(
-								s.settings.testConnection.failure(
-									e instanceof Error ? e.message : String(e)
-								)
-							);
-							button.setButtonText(
-								s.settings.testConnection.button
-							);
-							button.setDisabled(false);
-						}
-					})
-			);
-
-		// ---- Transcription ----
-		new Setting(containerEl)
-			.setName(s.settings.transcriptionHeading)
-			.setHeading();
-
-		// Engine selector: the remote OpenAI-compatible endpoint vs. an
-		// on-device Whisper model (issue #34). Switching re-renders the section
-		// so only the chosen engine's rows show.
-		new Setting(containerEl)
-			.setName(s.settings.transcriptionEngine.name)
-			.setDesc(s.settings.transcriptionEngine.desc)
-			.addDropdown((dd) => {
-				dd.addOption("remote", s.settings.transcriptionEngine.remote);
-				dd.addOption("local", s.settings.transcriptionEngine.local);
-				dd
-					.setValue(this.plugin.settings.transcriptionBackend)
-					// Locked mid-download so the switch can't strand an in-flight
-					// model fetch on a torn-down row.
-					.setDisabled(this.downloadingModel)
-					.onChange(async (value) => {
-						this.plugin.settings.transcriptionBackend =
-							value === "local" ? "local" : "remote";
-						await this.plugin.saveSettings();
-						this.display();
-					});
-			});
-
-		// Layout preserves the pre-#34 remote order (engine identity → speaker
-		// separation + language → dictionary → automation); the local rows slot
-		// into the engine-identity position and the remote-only dictionary rows
-		// are simply absent under Local.
-		if (this.plugin.settings.transcriptionBackend === "local") {
-			this.renderLocalTranscription(containerEl);
-		} else {
-			this.renderRemoteTranscription(containerEl);
-		}
-		this.renderDiarizationLanguage(containerEl);
-		if (this.plugin.settings.transcriptionBackend !== "local") {
-			this.renderRemoteDictionary(containerEl);
-		}
-		this.renderTranscriptionAutomation(containerEl);
-
-		// ---- AI enrichment ----
-		new Setting(containerEl).setName(s.settings.enrichHeading).setHeading();
-
-		new Setting(containerEl)
-			.setName(s.settings.enableEnrichment.name)
-			.setDesc(s.settings.enableEnrichment.desc)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.enableEnrichment)
-					.onChange(async (value) => {
-						this.plugin.settings.enableEnrichment = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		this.addModelPicker(
-			new Setting(containerEl)
-				.setName(s.settings.enrichModel.name)
-				.setDesc(s.settings.enrichModel.desc),
-			this.plugin.settings.enrichModel,
-			async (value) => {
-				this.plugin.settings.enrichModel = value;
-				await this.plugin.saveSettings();
-			}
-		);
-
-		new Setting(containerEl)
-			.setName(s.settings.enrichOnTranscribe.name)
-			.setDesc(s.settings.enrichOnTranscribe.desc)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.enrichOnTranscribe)
-					.onChange(async (value) => {
-						this.plugin.settings.enrichOnTranscribe = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		this.addCustomizableText(
-			containerEl,
-			s.settings.enrichPrompt,
-			s.settings.enrichPromptCustomize.name,
-			DEFAULT_ENRICH_PROMPT,
-			true,
-			() => this.plugin.settings.enrichPromptCustomize,
-			(v) => (this.plugin.settings.enrichPromptCustomize = v),
-			() => this.plugin.settings.enrichPrompt,
-			(v) => (this.plugin.settings.enrichPrompt = v)
-		);
-
-		new Setting(containerEl)
-			.setName(s.settings.actionItemsAsTasks.name)
-			.setDesc(s.settings.actionItemsAsTasks.desc)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.actionItemsAsTasks)
-					.onChange(async (value) => {
-						this.plugin.settings.actionItemsAsTasks = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName(s.settings.followUpHorizonDays.name)
-			.setDesc(s.settings.followUpHorizonDays.desc)
-			.addText((text) =>
-				text
-					.setPlaceholder("45")
-					.setValue(String(this.plugin.settings.followUpHorizonDays))
-					.onChange(async (value) => {
-						const n = Number.parseInt(value.trim(), 10);
-						if (!Number.isFinite(n) || n < 0) return;
-						this.plugin.settings.followUpHorizonDays = n;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName(s.settings.suggestAdhocTitle.name)
-			.setDesc(s.settings.suggestAdhocTitle.desc)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.suggestAdhocTitle)
-					.onChange(async (value) => {
-						this.plugin.settings.suggestAdhocTitle = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
+    private renderTabBar(containerEl: HTMLElement): void {
+        const s = t();
+        const bar = containerEl.createDiv({ cls: "mc-settings-tab-bar" });
+        for (const id of SETTINGS_TABS) {
+            const btn = bar.createEl("button", {
+                cls: "mc-settings-tab" + (this.activeTab === id ? " is-active" : ""),
+                text: s.settings.tabs[id],
+                attr: { type: "button" },
+            });
+            btn.addEventListener("click", () => {
+                if (this.activeTab === id) return;
+                this.activeTab = id;
+                this.display();
+            });
+        }
     }
 
     /**
-     * The remote (OpenAI-compatible endpoint) transcription rows: model picker,
-     * support badges, engine-family override, and the dictionary/GPT-correction
-     * options that only the vendored engine's pipeline applies.
+     * Setup essentials: Google credentials + login, shared AI endpoint, and the
+     * transcription / enrichment model pickers.
+     */
+    private renderGeneralTab(containerEl: HTMLElement): void {
+        const s = t();
+
+        new Setting(containerEl).setName(s.settings.googleHeading).setHeading();
+
+        new Setting(containerEl)
+            .setName(s.settings.clientId.name)
+            .setDesc(s.settings.clientId.desc)
+            .addText((text) =>
+                text
+                    .setValue(this.plugin.settings.googleClientId)
+                    .onChange(async (value) => {
+                        this.plugin.settings.googleClientId = value.trim();
+                        await this.plugin.saveSettings();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName(s.settings.clientSecret.name)
+            .setDesc(s.settings.clientSecret.desc)
+            .addText((text) => {
+                text.inputEl.type = "password";
+                text
+                    .setValue(this.plugin.settings.googleClientSecret)
+                    .onChange(async (value) => {
+                        this.plugin.settings.googleClientSecret = value.trim();
+                        await this.plugin.saveSettings();
+                    });
+            });
+
+        new Setting(containerEl)
+            .setName(s.settings.googleAuth.name)
+            .setDesc(
+                this.plugin.isCalendarAuthenticated()
+                    ? s.settings.googleAuth.descAuthenticated
+                    : s.settings.googleAuth.descUnauthenticated
+            )
+            .addButton((btn) =>
+                btn
+                    .setButtonText(
+                        this.plugin.isCalendarAuthenticated()
+                            ? s.settings.googleAuth.buttonReauthenticate
+                            : s.settings.googleAuth.buttonAuthenticate
+                    )
+                    .setCta()
+                    .onClick(async () => {
+                        await this.plugin.authenticateCalendar();
+                        this.display();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName(s.settings.notificationsHeading)
+            .setHeading();
+
+        new Setting(containerEl)
+            .setName(s.settings.notificationStyle.name)
+            .setDesc(s.settings.notificationStyle.desc)
+            .addButton((btn) =>
+                btn
+                    .setButtonText(s.settings.notificationStyle.button)
+                    .onClick(() => this.plugin.openMacNotificationSettings())
+            );
+
+        new Setting(containerEl).setName(s.settings.endpointHeading).setHeading();
+
+        new Setting(containerEl)
+            .setName(s.settings.apiBaseUrl.name)
+            .setDesc(s.settings.apiBaseUrl.desc)
+            .addText((text) =>
+                text
+                    .setPlaceholder("https://api.openai.com/v1")
+                    .setValue(this.plugin.settings.apiBaseUrl)
+                    .onChange(async (value) => {
+                        this.plugin.settings.apiBaseUrl = value.trim();
+                        await this.plugin.saveSettings();
+                        // The stored verdict is keyed on the old base URL, so the
+                        // badges now read "not checked yet"; repaint them and let
+                        // a re-probe run on the next model change / tab reopen.
+                        this.probedKeys.clear();
+                        this.refreshSttBadges();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName(s.settings.apiKey.name)
+            .setDesc(s.settings.apiKey.desc)
+            .addText((text) => {
+                text.inputEl.type = "password";
+                text
+                    .setValue(this.plugin.settings.apiKey)
+                    .onChange(async (value) => {
+                        this.plugin.settings.apiKey = value.trim();
+                        // probeKey ignores the key, so a stored verdict would
+                        // otherwise stay falsely "fresh" after a key change.
+                        // Reset it so transcription/timestamp support is
+                        // re-probed against the new credential.
+                        this.plugin.settings.sttTimestampsProbeKey = "";
+                        await this.plugin.saveSettings();
+                        this.probedKeys.clear();
+                        this.refreshSttBadges();
+                    });
+            });
+
+        // Endpoint actions: one button that verifies the endpoint and loads the
+        // shared model list + capabilities used by both the transcription and
+        // enrichment pickers. Kept as the last row of the endpoint section so
+        // the credentials sit above it.
+        new Setting(containerEl)
+            .setName(s.settings.endpointActions.name)
+            .setDesc(s.settings.endpointActions.desc)
+            .addButton((button) =>
+                button
+                    .setButtonText(s.settings.testConnection.button)
+                    .setCta()
+                    .onClick(async () => {
+                        const { apiBaseUrl, apiKey } = this.plugin.settings;
+                        if (!apiBaseUrl) {
+                            new Notice(s.settings.testConnection.noBaseUrl);
+                            return;
+                        }
+                        button.setButtonText(s.settings.testConnection.testing);
+                        button.setDisabled(true);
+                        try {
+                            // One round-trip: fetch the model list and, when the
+                            // endpoint exposes them (LiteLLM), per-model
+                            // capabilities so the STT picker can filter to real
+                            // transcription models.
+                            this.models = await listModels(apiBaseUrl, apiKey);
+                            this.capabilities = await fetchModelCapabilities(
+                                apiBaseUrl,
+                                apiKey
+                            );
+                            new Notice(
+                                this.models.length === 0
+                                    ? s.settings.testConnection.empty
+                                    : s.settings.testConnection.success(
+                                            this.models.length
+                                        )
+                            );
+                            // Transcription/timestamp support is assessed
+                            // automatically when the model changes (and on open),
+                            // not here — this button only verifies the endpoint
+                            // and loads the model list + capabilities.
+                            this.display();
+                        } catch (e) {
+                            new Notice(
+                                s.settings.testConnection.failure(
+                                    e instanceof Error ? e.message : String(e)
+                                )
+                            );
+                            button.setButtonText(
+                                s.settings.testConnection.button
+                            );
+                            button.setDisabled(false);
+                        }
+                    })
+            );
+
+        new Setting(containerEl).setName(s.settings.modelsHeading).setHeading();
+
+        // Engine selector: remote OpenAI-compatible endpoint vs. on-device Whisper.
+        // Switching re-renders so only the chosen engine's model rows show.
+        new Setting(containerEl)
+            .setName(s.settings.transcriptionEngine.name)
+            .setDesc(s.settings.transcriptionEngine.desc)
+            .addDropdown((dd) => {
+                dd.addOption("remote", s.settings.transcriptionEngine.remote);
+                dd.addOption("local", s.settings.transcriptionEngine.local);
+                dd
+                    .setValue(this.plugin.settings.transcriptionBackend)
+                    // Locked mid-download so the switch can't strand an in-flight
+                    // model fetch on a torn-down row.
+                    .setDisabled(this.downloadingModel)
+                    .onChange(async (value) => {
+                        this.plugin.settings.transcriptionBackend =
+                            value === "local" ? "local" : "remote";
+                        await this.plugin.saveSettings();
+                        this.display();
+                    });
+            });
+
+        if (this.plugin.settings.transcriptionBackend === "local") {
+            this.renderLocalTranscription(containerEl);
+        } else {
+            this.renderRemoteTranscription(containerEl);
+        }
+
+        this.addModelPicker(
+            new Setting(containerEl)
+                .setName(s.settings.enrichModel.name)
+                .setDesc(s.settings.enrichModel.desc),
+            this.plugin.settings.enrichModel,
+            async (value) => {
+                this.plugin.settings.enrichModel = value;
+                await this.plugin.saveSettings();
+            }
+        );
+    }
+
+    private renderCalendarTab(containerEl: HTMLElement): void {
+        const s = t();
+
+        new Setting(containerEl)
+            .setName(s.settings.calendarAutoRecord.name)
+            .setDesc(s.settings.calendarAutoRecord.desc)
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.calendarAutoRecord)
+                    .onChange(async (value) => {
+                        this.plugin.settings.calendarAutoRecord = value;
+                        await this.plugin.saveSettings();
+                        this.plugin.updateScheduler();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName(s.settings.notifyBeforeStart.name)
+            .setDesc(s.settings.notifyBeforeStart.desc)
+            .addText((text) => {
+                text.inputEl.type = "number";
+                text
+                    .setValue(
+                        String(this.plugin.settings.notifyBeforeStartMinutes)
+                    )
+                    .onChange(async (value) => {
+                        const n = Number.parseInt(value, 10);
+                        this.plugin.settings.notifyBeforeStartMinutes =
+                            Number.isFinite(n) && n >= 0 ? Math.min(n, 60) : 1;
+                        await this.plugin.saveSettings();
+                    });
+            });
+
+        new Setting(containerEl)
+            .setName(s.settings.calendarAutoStart.name)
+            .setDesc(s.settings.calendarAutoStart.desc)
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.calendarAutoStart)
+                    .onChange(async (value) => {
+                        this.plugin.settings.calendarAutoStart = value;
+                        await this.plugin.saveSettings();
+                        this.plugin.updateScheduler();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName(s.settings.calendarAutoStop.name)
+            .setDesc(s.settings.calendarAutoStop.desc)
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.calendarAutoStop)
+                    .onChange(async (value) => {
+                        this.plugin.settings.calendarAutoStop = value;
+                        await this.plugin.saveSettings();
+                        this.plugin.updateScheduler();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName(s.settings.targetCalendarId.name)
+            .setDesc(s.settings.targetCalendarId.desc)
+            .addText((text) => {
+                text
+                    .setValue(this.plugin.settings.calendarId)
+                    .onChange(async (value) => {
+                        this.plugin.settings.calendarId = value.trim() || "primary";
+                        await this.plugin.saveSettings();
+                    });
+                // Re-poll immediately once the user finishes editing (avoids per-keystroke API calls).
+                this.plugin.registerDomEvent(text.inputEl, "blur", () => {
+                    this.plugin.refreshCalendarNow();
+                });
+            });
+
+        new Setting(containerEl)
+            .setName(s.settings.exclusionKeywords.name)
+            .setDesc(s.settings.exclusionKeywords.desc)
+            .addTextArea((ta) => {
+                ta
+                    .setValue(this.plugin.settings.exclusionKeywords)
+                    .onChange(async (value) => {
+                        this.plugin.settings.exclusionKeywords = value;
+                        await this.plugin.saveSettings();
+                    });
+                ta.inputEl.rows = TEXTAREA_ROWS;
+                ta.inputEl.addClass("meeting-copilot-template-input");
+                // Re-poll and refresh the agenda once editing ends so newly
+                // excluded events drop out without waiting for the next poll.
+                this.plugin.registerDomEvent(ta.inputEl, "blur", () => {
+                    this.plugin.refreshCalendarNow();
+                    this.plugin.refreshAgenda();
+                });
+            });
+
+        new Setting(containerEl)
+            .setName(s.settings.agendaLookAhead.name)
+            .setDesc(s.settings.agendaLookAhead.desc)
+            .addText((text) => {
+                text.inputEl.type = "number";
+                text
+                    .setValue(String(this.plugin.settings.agendaLookAheadDays))
+                    .onChange(async (value) => {
+                        const n = Number.parseInt(value, 10);
+                        this.plugin.settings.agendaLookAheadDays =
+                            Number.isFinite(n) && n >= 1 ? Math.min(n, 180) : 7;
+                        await this.plugin.saveSettings();
+                        this.plugin.refreshAgenda();
+                    });
+            });
+
+        new Setting(containerEl)
+            .setName(s.settings.agendaLookBack.name)
+            .setDesc(s.settings.agendaLookBack.desc)
+            .addText((text) => {
+                text.inputEl.type = "number";
+                text
+                    .setValue(String(this.plugin.settings.agendaLookBackDays))
+                    .onChange(async (value) => {
+                        const n = Number.parseInt(value, 10);
+                        this.plugin.settings.agendaLookBackDays =
+                            Number.isFinite(n) && n >= 0 ? Math.min(n, 30) : 7;
+                        await this.plugin.saveSettings();
+                        this.plugin.refreshAgenda();
+                    });
+            });
+
+        new Setting(containerEl)
+            .setName(s.settings.openMeet.name)
+            .setDesc(s.settings.openMeet.desc)
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.openMeetAutomatically)
+                    .onChange(async (value) => {
+                        this.plugin.settings.openMeetAutomatically = value;
+                        await this.plugin.saveSettings();
+                    })
+            );
+    }
+
+    private renderDetectionTab(containerEl: HTMLElement): void {
+        const s = t();
+
+        new Setting(containerEl)
+            .setName(s.settings.detectMeetings.name)
+            .setDesc(s.settings.detectMeetings.desc)
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.detectMeetings)
+                    .onChange(async (value) => {
+                        this.plugin.settings.detectMeetings = value;
+                        await this.plugin.saveSettings();
+                        this.plugin.updateDetector();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName(s.settings.detectZoom.name)
+            .setDesc(s.settings.detectZoom.desc)
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.detectZoom)
+                    .onChange(async (value) => {
+                        this.plugin.settings.detectZoom = value;
+                        await this.plugin.saveSettings();
+                        this.plugin.updateDetector();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName(s.settings.detectGoogleMeet.name)
+            .setDesc(s.settings.detectGoogleMeet.desc)
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.detectGoogleMeet)
+                    .onChange(async (value) => {
+                        this.plugin.settings.detectGoogleMeet = value;
+                        await this.plugin.saveSettings();
+                        this.plugin.updateDetector();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName(s.settings.detectionInterval.name)
+            .setDesc(s.settings.detectionInterval.desc)
+            .addText((text) => {
+                text.inputEl.type = "number";
+                text
+                    .setValue(
+                        String(this.plugin.settings.detectionIntervalSeconds)
+                    )
+                    .onChange(async (value) => {
+                        const n = Number.parseInt(value, 10);
+                        this.plugin.settings.detectionIntervalSeconds =
+                            Number.isFinite(n) && n >= 3 ? Math.min(n, 120) : 10;
+                        await this.plugin.saveSettings();
+                        this.plugin.updateDetector();
+                    });
+            });
+    }
+
+    private renderTranscriptionTab(containerEl: HTMLElement): void {
+        // Engine + model pickers live on General; this tab keeps speaker
+        // separation, language, dictionary, and automation options.
+        this.renderDiarizationLanguage(containerEl);
+        if (this.plugin.settings.transcriptionBackend !== "local") {
+            this.renderRemoteDictionary(containerEl);
+        }
+        this.renderTranscriptionAutomation(containerEl);
+    }
+
+    private renderEnrichmentTab(containerEl: HTMLElement): void {
+        const s = t();
+
+        new Setting(containerEl)
+            .setName(s.settings.enableEnrichment.name)
+            .setDesc(s.settings.enableEnrichment.desc)
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.enableEnrichment)
+                    .onChange(async (value) => {
+                        this.plugin.settings.enableEnrichment = value;
+                        await this.plugin.saveSettings();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName(s.settings.enrichOnTranscribe.name)
+            .setDesc(s.settings.enrichOnTranscribe.desc)
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.enrichOnTranscribe)
+                    .onChange(async (value) => {
+                        this.plugin.settings.enrichOnTranscribe = value;
+                        await this.plugin.saveSettings();
+                    })
+            );
+
+        this.addCustomizableText(
+            containerEl,
+            s.settings.enrichPrompt,
+            s.settings.enrichPromptCustomize.name,
+            DEFAULT_ENRICH_PROMPT,
+            true,
+            () => this.plugin.settings.enrichPromptCustomize,
+            (v) => (this.plugin.settings.enrichPromptCustomize = v),
+            () => this.plugin.settings.enrichPrompt,
+            (v) => (this.plugin.settings.enrichPrompt = v)
+        );
+
+        new Setting(containerEl)
+            .setName(s.settings.actionItemsAsTasks.name)
+            .setDesc(s.settings.actionItemsAsTasks.desc)
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.actionItemsAsTasks)
+                    .onChange(async (value) => {
+                        this.plugin.settings.actionItemsAsTasks = value;
+                        await this.plugin.saveSettings();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName(s.settings.followUpHorizonDays.name)
+            .setDesc(s.settings.followUpHorizonDays.desc)
+            .addText((text) =>
+                text
+                    .setPlaceholder("45")
+                    .setValue(String(this.plugin.settings.followUpHorizonDays))
+                    .onChange(async (value) => {
+                        const n = Number.parseInt(value.trim(), 10);
+                        if (!Number.isFinite(n) || n < 0) return;
+                        this.plugin.settings.followUpHorizonDays = n;
+                        await this.plugin.saveSettings();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName(s.settings.suggestAdhocTitle.name)
+            .setDesc(s.settings.suggestAdhocTitle.desc)
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.suggestAdhocTitle)
+                    .onChange(async (value) => {
+                        this.plugin.settings.suggestAdhocTitle = value;
+                        await this.plugin.saveSettings();
+                    })
+            );
+    }
+
+    /**
+     * The remote (OpenAI-compatible endpoint) transcription identity rows:
+     * model picker, support badges, and engine-family override. Shown on the
+     * General tab as part of setup.
      */
     private renderRemoteTranscription(containerEl: HTMLElement): void {
         const s = t();
@@ -1274,12 +1337,9 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
             );
     }
 
-    /** Recording & notes settings, rendered right after meeting detection. */
+    /** Recording & notes settings. */
     private renderRecordingSettings(containerEl: HTMLElement): void {
         const s = t();
-		new Setting(containerEl)
-			.setName(s.settings.recordingHeading)
-			.setHeading();
 
 		new Setting(containerEl)
 			.setName(s.settings.compressedRecordings.name)

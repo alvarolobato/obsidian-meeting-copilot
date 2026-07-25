@@ -371,7 +371,17 @@ export const en = {
 			name: "Suggest a title for unplanned meetings",
 			desc: "When enriching an unplanned (ad-hoc or detected) meeting, ask the same LLM call for a title and offer to rename the note, keeping the date prefix. Scheduled meetings keep their calendar title.",
 		},
+		tabs: {
+			general: "General",
+			calendar: "Calendar",
+			detection: "Detection",
+			recording: "Recording & notes",
+			transcription: "Transcription",
+			enrichment: "Enrichment",
+		},
 		calendarHeading: "Google Calendar integration",
+		googleHeading: "Google Calendar",
+		modelsHeading: "Models",
 		clientId: {
 			name: "Client ID",
 			desc: "The client ID issued by Google.",
@@ -580,8 +590,8 @@ export const en = {
 			desc: "Allow generating an AI notes summary from your notes and the transcript.",
 		},
 		enrichModel: {
-			name: "Model",
-			desc: "Chat model used for enrichment. Use 'Load models' to load the models your endpoint exposes, then pick one from the dropdown.",
+			name: "Enrichment model",
+			desc: "Chat model used for enrichment. Use 'Load models' above to load the models your endpoint exposes, then pick one from the dropdown.",
 		},
 		testConnection: {
 			button: "Load models",

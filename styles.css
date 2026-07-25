@@ -230,18 +230,56 @@
  * Scoped to this plugin's tab so it can't affect other settings panes.
  * ====================================================================== */
 
+/* Horizontal tabs for the settings sections. */
+.meeting-copilot-settings .mc-settings-tab-bar {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 2px;
+	margin: var(--size-4-3) 0 var(--size-4-4);
+	border-bottom: 1px solid var(--background-modifier-border);
+	padding-bottom: 0;
+}
+
+.meeting-copilot-settings .mc-settings-tab {
+	appearance: none;
+	background: transparent;
+	border: none;
+	border-bottom: 2px solid transparent;
+	border-radius: 0;
+	box-shadow: none;
+	color: var(--text-muted);
+	cursor: pointer;
+	font-size: var(--font-ui-small);
+	margin-bottom: -1px;
+	padding: var(--size-4-2) var(--size-4-3);
+}
+
+.meeting-copilot-settings .mc-settings-tab:hover {
+	color: var(--text-normal);
+}
+
+.meeting-copilot-settings .mc-settings-tab.is-active {
+	border-bottom-color: var(--interactive-accent);
+	color: var(--text-normal);
+	font-weight: var(--font-medium);
+}
+
 /* Text inputs and text areas get at least half the row (number inputs are
- * left alone — they only match input[type="text"]/[type="password"]). */
+ * left alone — they only match input[type="text"]/[type="password"]).
+ * min-width keeps text and password boxes the same size across rows even when
+ * their labels differ in length. */
 .meeting-copilot-settings .setting-item-control:has(> input[type="text"]),
 .meeting-copilot-settings .setting-item-control:has(> input[type="password"]),
 .meeting-copilot-settings .setting-item-control:has(> textarea) {
-    flex: 1 0 50%;
+    flex: 1 1 50%;
+    min-width: 50%;
 }
 
 .meeting-copilot-settings .setting-item-control > input[type="text"],
 .meeting-copilot-settings .setting-item-control > input[type="password"],
 .meeting-copilot-settings .setting-item-control > textarea {
     width: 100%;
+    box-sizing: border-box;
 }
 
 /* Timestamp support shown as a lighter sub-detail under transcription support. */
