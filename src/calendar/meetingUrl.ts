@@ -13,7 +13,7 @@ const PROVIDER_PATTERNS: RegExp[] = [
 	/https:\/\/[a-z0-9.-]*webex\.com\/(?:meet|wbxmjs|join)\/[^\s"'<>]+/i,
 	/https:\/\/(?:[\w.-]+\.)?gotomeeting\.com\/join\/[^\s"'<>]+/i,
 	/https:\/\/(?:[\w.-]+\.)?goto\.com\/meet\/[^\s"'<>]+/i,
-	/https:\/\/whereby\.com\/[^\s"'<>]+/i,
+	/https:\/\/whereby\.com\/[a-zA-Z0-9_-]+(?:\?[^\s"'<>]*)?/i,
 	/https:\/\/(?:[\w.-]+\.)?chime\.aws\/(?:meetings|portal\/meetings)\/[^\s"'<>]+/i,
 ];
 

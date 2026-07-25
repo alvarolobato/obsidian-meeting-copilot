@@ -551,6 +551,10 @@ async function belongsToOtherEvent(
  * Picks the note path for this event: reuses the base path when it's free or
  * already belongs to this event; otherwise appends " 2", " 3"… so two distinct
  * meetings that share a title + time never collapse into one note.
+ *
+ * Claims the chosen path in {@link sessionEventIdByPath} *before* returning so
+ * a concurrent create for a different event (same title) cannot reuse it in
+ * the create→stamp window when the file has no `event_id` yet (#118).
  */
 async function resolveNotePath(
 	app: App,
@@ -560,11 +564,17 @@ async function resolveNotePath(
 ): Promise<string> {
 	let candidate = normalizePath(`${folder}/${basename}.md`);
 	for (let n = 2; n < 1000; n++) {
+		const claimedBy = sessionEventIdByPath.get(candidate);
+		if (claimedBy && claimedBy !== eventId) {
+			candidate = normalizePath(`${folder}/${basename} ${n}.md`);
+			continue;
+		}
 		const file = app.vault.getAbstractFileByPath(candidate);
 		if (
 			!(file instanceof TFile) ||
 			!(await belongsToOtherEvent(app, file, eventId))
 		) {
+			sessionEventIdByPath.set(candidate, eventId);
 			return candidate;
 		}
 		candidate = normalizePath(`${folder}/${basename} ${n}.md`);
@@ -642,7 +652,16 @@ function rememberRecentNote(eventId: string, path: string): void {
 	sessionEventIdByPath.set(path, eventId);
 	if (recentNoteByEventId.size > RECENT_NOTE_CACHE_MAX) {
 		for (const oldest of recentNoteByEventId.keys()) {
+			const evictedPath = recentNoteByEventId.get(oldest);
 			recentNoteByEventId.delete(oldest);
+			// Drop the session claim only when it still points at this event —
+			// otherwise a newer claim on the same path would be wiped.
+			if (
+				evictedPath &&
+				sessionEventIdByPath.get(evictedPath) === oldest
+			) {
+				sessionEventIdByPath.delete(evictedPath);
+			}
 			if (recentNoteByEventId.size <= RECENT_NOTE_CACHE_MAX) break;
 		}
 	}
@@ -664,6 +683,16 @@ export function notePathRenamed(oldPath: string, newPath: string): void {
 			sessionEventIdByPath.set(newPath, id);
 			break;
 		}
+	}
+}
+
+/** Clears session / recent claims when a note is deleted (#118). */
+export function notePathDeleted(path: string): void {
+	const eventId = sessionEventIdByPath.get(path);
+	sessionEventIdByPath.delete(path);
+	if (eventId) recentNoteByEventId.delete(eventId);
+	for (const [id, p] of [...recentNoteByEventId]) {
+		if (p === path) recentNoteByEventId.delete(id);
 	}
 }
 

@@ -286,6 +286,7 @@ export class Recorder {
                 log("stop-file write failed; killing helper", {
                     message: e instanceof Error ? e.message : String(e),
                 });
+                this._isRecording = false;
                 try {
                     this.process?.kill("SIGTERM");
                 } catch {

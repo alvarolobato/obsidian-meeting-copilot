@@ -56,6 +56,9 @@ describe("extractMeetingUrlFromText", () => {
 		expect(extractMeetingUrlFromText("https://whereby.com/standup-room")).toBe(
 			"https://whereby.com/standup-room"
 		);
+		// Single-segment slug only — nested marketing paths aren't full matches
+		// beyond the first segment (best-effort; still no bare domain).
+		expect(extractMeetingUrlFromText("https://whereby.com/")).toBeNull();
 		expect(
 			extractMeetingUrlFromText(
 				"https://chime.aws/meetings/abc-123-def"

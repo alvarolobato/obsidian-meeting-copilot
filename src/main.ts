@@ -64,6 +64,7 @@ import {
     MeetingNoteConfig,
     normalizeFolderPathOrEmpty,
     notePathRenamed,
+    notePathDeleted,
     parseStampDate,
     recordingLinkTarget,
     recordingLinkTargets,
@@ -605,13 +606,23 @@ export default class SystemRecordingPlugin extends Plugin {
 			this.notifyPendingTranscriptions()
 		);
 
-		// Keep the in-session identity map accurate when the user moves a note
-		// (#118) — metadataCache rename lag would otherwise recreate a duplicate.
+		// Keep the in-session identity map accurate when the user moves or
+		// deletes a note (#118) — metadataCache lag would otherwise recreate
+		// a duplicate or trust a stale session claim.
 		this.registerEvent(
 			this.app.vault.on("rename", (file, oldPath) => {
 				if (file instanceof TFile) notePathRenamed(oldPath, file.path);
 			})
 		);
+		this.registerEvent(
+			this.app.vault.on("delete", (file) => {
+				if (file instanceof TFile) notePathDeleted(file.path);
+			})
+		);
+
+		// Start listening for metadataCache resolution immediately so enabling
+		// calendar automation *after* the initial index doesn't wait 15s (#118).
+		this.beginWatchingMetadataResolved();
 
 		// Sweep expired recordings shortly after startup (never blocks load).
 		this.retentionTimeout = window.setTimeout(() => {
@@ -1284,23 +1295,30 @@ export default class SystemRecordingPlugin extends Plugin {
 
 	/**
 	 * Resolves after the first `metadataCache.on("resolved")` (or a 15s timeout
-	 * so a stuck index can't block calendar automation forever).
+	 * so a stuck index can't block calendar automation forever). Listening
+	 * starts in {@link beginWatchingMetadataResolved} at load so enabling
+	 * calendar later doesn't miss the initial resolution and wait on timeout.
 	 */
+	private metadataHasResolved = false;
 	private metadataResolvedOnce: Promise<void> | null = null;
-	private awaitMetadataResolvedOnce(): Promise<void> {
-		if (this.metadataResolvedOnce) return this.metadataResolvedOnce;
+	private beginWatchingMetadataResolved(): void {
+		if (this.metadataResolvedOnce) return;
 		this.metadataResolvedOnce = new Promise((resolve) => {
-			const timeout = window.setTimeout(() => {
-				this.app.metadataCache.offref(ref);
-				resolve();
-			}, 15_000);
-			const ref = this.app.metadataCache.on("resolved", () => {
+			const finish = (): void => {
+				if (this.metadataHasResolved) return;
+				this.metadataHasResolved = true;
 				window.clearTimeout(timeout);
 				this.app.metadataCache.offref(ref);
 				resolve();
-			});
+			};
+			const timeout = window.setTimeout(finish, 15_000);
+			const ref = this.app.metadataCache.on("resolved", finish);
 		});
-		return this.metadataResolvedOnce;
+	}
+	private awaitMetadataResolvedOnce(): Promise<void> {
+		if (this.metadataHasResolved) return Promise.resolve();
+		this.beginWatchingMetadataResolved();
+		return this.metadataResolvedOnce!;
 	}
 
 	/** Re-poll the calendar immediately (e.g. after changing the target calendar). No-op if not running. */
