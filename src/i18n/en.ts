@@ -440,8 +440,8 @@ export const en = {
 		},
 		notificationsHeading: "Notifications (macOS)",
 		notificationStyle: {
-			name: "Notifications not popping up?",
-			desc: "When Obsidian is in front you get an in-app prompt; otherwise a system notification. If those system notifications land silently in Notification Center instead of on screen, it's a macOS setting (apps can't override it): turn off Do Not Disturb / Focus, set Obsidian to “Alerts” so prompts persist with a button, and — while recording or mirroring a display — enable “Allow notifications when mirroring or sharing the display”.",
+			name: "Enable system notifications",
+			desc: "When Obsidian is in front you get an in-app prompt; otherwise a system notification. If those don't appear on screen, turn off Focus / Do Not Disturb and set Obsidian to Alerts in macOS notification settings.",
 			button: "Open macOS notification settings",
 		},
 		detectionHeading: "Meeting detection (macOS)",
@@ -468,11 +468,11 @@ export const en = {
 		},
 		apiKey: {
 			name: "API key",
-			desc: "Sent as a Bearer token for transcription and enrichment. Stored in this vault's plugin data. Use 'Load models' to verify it and load the available models.",
+			desc: "Use 'Load models' to verify it and load the available models.",
 		},
 		endpointActions: {
 			name: "Connection",
-			desc: "Verify the endpoint and load the models available for transcription and enrichment in one step.",
+			desc: "Verify the endpoint and load the models available for transcription and enrichment.",
 		},
 		transcriptionHeading: "Transcription",
 		transcriptionEngine: {
