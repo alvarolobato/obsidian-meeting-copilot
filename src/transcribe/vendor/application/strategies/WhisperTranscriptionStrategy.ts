@@ -166,18 +166,18 @@ export class WhisperTranscriptionStrategy extends TranscriptionStrategy {
 					includeFailures: true
 				});
 			}
-			} else {
-				// Get model-specific merge config
-				const modelConfig = getModelConfig(this.transcriptionService.modelId);
-				const mergeConfig = modelConfig.merging;
+		} else {
+			// Get model-specific merge config
+			const modelConfig = getModelConfig(this.transcriptionService.modelId);
+			const mergeConfig = modelConfig.merging;
 
-				mergedText = this.merger.mergeWithOverlapRemoval(results, {
-					removeOverlaps: true,
-					minMatchLength: mergeConfig.minMatchLength ?? 20,
-					separator: '\n\n',
-					includeFailures: true
-				});
-			}
+			mergedText = this.merger.mergeWithOverlapRemoval(results, {
+				removeOverlaps: true,
+				minMatchLength: mergeConfig.minMatchLength ?? 20,
+				separator: '\n\n',
+				includeFailures: true
+			});
+		}
 
 		mergedText = await this.postProcessMergedText(mergedText, results, this.workflowLanguage);
 

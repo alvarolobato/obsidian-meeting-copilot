@@ -766,6 +766,12 @@ export default class SystemRecordingPlugin extends Plugin {
         ) {
             this.settings.localWhisperModel = DEFAULT_SETTINGS.localWhisperModel;
         }
+        {
+            const n = Number(this.settings.enrichTimeoutSeconds);
+            this.settings.enrichTimeoutSeconds = Number.isFinite(n)
+                ? Math.min(600, Math.max(60, Math.round(n)))
+                : DEFAULT_SETTINGS.enrichTimeoutSeconds;
+        }
         // Migrate the previously enrichment-only endpoint into the shared fields
         // when the shared ones are still unset or at the default.
         const legacyBase = raw?.enrichBaseUrl?.trim();
@@ -1047,8 +1053,8 @@ export default class SystemRecordingPlugin extends Plugin {
         },
         opts?: { replaceCurrent?: boolean }
     ) {
-        console.warn("[Meeting Copilot][recorder] startRecording requested", {
-            notePath: meeting.notePath,
+        mcLog("recorder", "startRecording requested", {
+            note: meeting.basename,
             eventId: meeting.eventId,
             isRecording: this.recorder.isRecording,
             starting: this.starting,
@@ -4031,7 +4037,9 @@ export default class SystemRecordingPlugin extends Plugin {
             // Cancellation is expected; other failures were already surfaced with
             // their own notice/status inside transcribeToNote.
             if (!(e instanceof TaskCancelledError)) {
-                console.warn("[Meeting Copilot] transcription failed", e);
+                mcLog("transcribe", "transcription failed", {
+                    error: e instanceof Error ? e.message : String(e),
+                });
             }
         }
     }
@@ -4369,7 +4377,9 @@ export default class SystemRecordingPlugin extends Plugin {
             // Cancellation (or an unexpected queue failure) mid-rebuild: leave
             // the existing transcript untouched rather than write a partial one.
             if (!(e instanceof TaskCancelledError)) {
-                console.warn("[Meeting Copilot] transcript rebuild failed", e);
+                mcLog("transcribe", "transcript rebuild failed", {
+                    error: e instanceof Error ? e.message : String(e),
+                });
             }
             return;
         }
@@ -5448,7 +5458,7 @@ export default class SystemRecordingPlugin extends Plugin {
             );
             enrichStarted = Date.now();
             mcLog("enrich", "begin", {
-                note: file.path,
+                note: file.basename,
                 model: enrichModel,
                 promptChars: userPrompt.length,
                 transcriptChars: (transcript ?? "").length,
@@ -5476,7 +5486,7 @@ export default class SystemRecordingPlugin extends Plugin {
                     ) {
                         attempt = 1;
                         mcLog("enrich", "timeout retry", {
-                            note: file.path,
+                            note: file.basename,
                             timeoutMs,
                         });
                         continue;
@@ -5499,13 +5509,15 @@ export default class SystemRecordingPlugin extends Plugin {
                     embeddedTitle = cleaned;
                 } else {
                     mcLog("enrich", "title suggestion skipped", {
-                        note: file.path,
+                        note: file.basename,
                         reason: "missing title trailer",
                     });
                 }
             }
             // Atomic RMW against the live note so concurrent keystrokes during
-            // the LLM call aren't clobbered (#19).
+            // the LLM call aren't clobbered (#19). Bail if cancelled after the
+            // LLM returned so we don't write a discarded enrich.
+            if (signal.aborted) throw new ChatAbortError();
             const vault = this.app.vault as typeof this.app.vault & {
                 process?: (
                     f: TFile,
@@ -5531,7 +5543,7 @@ export default class SystemRecordingPlugin extends Plugin {
             });
             const elapsedMs = Date.now() - enrichStarted;
             mcLog("enrich", "ok", {
-                note: file.path,
+                note: file.basename,
                 model: enrichModel,
                 elapsedMs,
                 attempts: attempt + 1,
@@ -5552,7 +5564,7 @@ export default class SystemRecordingPlugin extends Plugin {
             if (e instanceof EnrichTimeoutError) {
                 const secs = Math.round(e.timeoutMs / 1000);
                 mcLog("enrich", "fail", {
-                    note: file.path,
+                    note: file.basename,
                     outcome: "timeout",
                     timeoutMs: e.timeoutMs,
                     elapsedMs,
@@ -5560,7 +5572,7 @@ export default class SystemRecordingPlugin extends Plugin {
                 new Notice(t().notices.enrichTimeout(file.basename, secs));
             } else {
                 mcLog("enrich", "fail", {
-                    note: file.path,
+                    note: file.basename,
                     outcome: "error",
                     error: e instanceof Error ? e.message : String(e),
                     elapsedMs,
