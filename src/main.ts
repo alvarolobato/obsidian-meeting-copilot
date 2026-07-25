@@ -1313,6 +1313,23 @@ export default class SystemRecordingPlugin extends Plugin {
 			};
 			const timeout = window.setTimeout(finish, 15_000);
 			const ref = this.app.metadataCache.on("resolved", finish);
+			// If the vault finished indexing before we registered (plugin enabled
+			// mid-session / after Obsidian's initial resolve), don't wait on the
+			// timeout — treat a populated cache as already warm.
+			window.setTimeout(() => {
+				if (this.metadataHasResolved) return;
+				const files = this.app.vault.getMarkdownFiles();
+				if (files.length === 0) {
+					finish();
+					return;
+				}
+				for (const f of files.slice(0, 20)) {
+					if (this.app.metadataCache.getFileCache(f)) {
+						finish();
+						return;
+					}
+				}
+			}, 0);
 		});
 	}
 	private awaitMetadataResolvedOnce(): Promise<void> {
