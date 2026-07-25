@@ -384,17 +384,13 @@ export const en = {
 		modelsHeading: "Models",
 		clientId: {
 			name: "Client ID",
-			desc: "The client ID issued by Google.",
-		},
-		clientSecret: {
-			name: "Client secret",
-			desc: "The client secret issued by Google.",
+			desc: "The OAuth client ID from your Google Cloud Desktop app.",
 		},
 		googleAuth: {
 			name: "Google authentication",
 			descAuthenticated: "Authenticated. Re-authenticating refreshes the token.",
 			descUnauthenticated:
-				"Not authenticated. Set the client ID and secret, then authenticate.",
+				"Not authenticated. Set the client ID above, then authenticate.",
 			buttonReauthenticate: "Re-authenticate",
 			buttonAuthenticate: "Authenticate",
 		},
@@ -621,11 +617,11 @@ export const en = {
 	oauth: {
 		notAuthenticated:
 			"Not authenticated. Please authenticate from the command palette.",
-		credentialsNotSet: "OAuth credentials are not set.",
+		credentialsNotSet: "OAuth client ID is not set.",
 		sessionExpired:
 			"Google Calendar session expired. Please reconnect from settings or the command palette.",
 		desktopOnly: "OAuth authentication is only supported on desktop.",
-		setCredentialsFirst: "Please set the OAuth Client ID / Secret first.",
+		setCredentialsFirst: "Please set the OAuth Client ID first.",
 		openingBrowser: "Opening Google authentication in your browser…",
 		noRefreshToken:
 			"No refresh_token was returned. Add yourself as a test user on the OAuth consent screen and try again.",

@@ -89,7 +89,6 @@ export interface SystemRecordingSettings {
 	 */
 	followUpHorizonDays: number;
 	googleClientId: string;
-	googleClientSecret: string;
 	googleTokens: StoredTokens | null;
 	calendarAutoRecord: boolean;
 	/**
@@ -226,7 +225,6 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	actionItemsAsTasks: true,
 	followUpHorizonDays: 45,
 	googleClientId: "",
-	googleClientSecret: "",
 	googleTokens: null,
 	calendarAutoRecord: true,
 	calendarAutoStart: false,
@@ -480,19 +478,6 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     })
             );
-
-        new Setting(containerEl)
-            .setName(s.settings.clientSecret.name)
-            .setDesc(s.settings.clientSecret.desc)
-            .addText((text) => {
-                text.inputEl.type = "password";
-                text
-                    .setValue(this.plugin.settings.googleClientSecret)
-                    .onChange(async (value) => {
-                        this.plugin.settings.googleClientSecret = value.trim();
-                        await this.plugin.saveSettings();
-                    });
-            });
 
         new Setting(containerEl)
             .setName(s.settings.googleAuth.name)

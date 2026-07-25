@@ -273,8 +273,7 @@ export default class SystemRecordingPlugin extends Plugin {
 		{
 			getCredentials: () => {
 				const id = this.settings.googleClientId.trim();
-				const secret = this.settings.googleClientSecret.trim();
-				return id && secret ? { client_id: id, client_secret: secret } : null;
+				return id ? { client_id: id } : null;
 			},
 			getTokens: () => this.settings.googleTokens,
 			setTokens: async (tokens) => {
@@ -790,49 +789,34 @@ export default class SystemRecordingPlugin extends Plugin {
             this.settings.sttApiType = "whisper-1-ts";
         }
         // Keep the OAuth refresh token and client secret out of the synced/
-        // committed data.json: load them from per-vault localStorage instead,
-        // migrating any legacy plaintext copies that still live in data.json.
+        // committed data.json: load tokens from per-vault localStorage instead,
+        // migrating any legacy plaintext copy that still lives in data.json.
         const localTokens = this.loadLocal<StoredTokens>("googleTokens");
-        const localSecret = this.loadLocal<string>("googleClientSecret");
         const legacyTokens = raw?.googleTokens ?? null;
-        const legacySecret =
-            typeof raw?.googleClientSecret === "string"
-                ? raw.googleClientSecret
-                : "";
         this.settings.googleTokens = localTokens ?? legacyTokens;
-        // localStorage is authoritative: use its value even when it's an empty
-        // string (an intentionally cleared secret) and only fall back to the
-        // legacy data.json copy when localStorage has nothing.
-        this.settings.googleClientSecret =
-            typeof localSecret === "string" ? localSecret : legacySecret;
-        // If data.json still carries either secret (whether or not localStorage
-        // already has a copy), re-persist so it gets moved into localStorage and
-        // stripped from the synced file — don't leave a stale plaintext copy behind.
+        // If data.json still carries tokens (or a legacy client secret), re-persist
+        // so they get moved into localStorage and stripped from the synced file.
+        const rawAny = raw as Record<string, unknown> | null;
         const legacyInDataJson =
-            legacyTokens !== null || legacySecret !== "";
+            legacyTokens !== null ||
+            (typeof rawAny?.googleClientSecret === "string" && rawAny.googleClientSecret !== "");
         if (legacyInDataJson) {
             await this.saveSettings();
         }
     }
 
     async saveSettings() {
-        // Sensitive fields live in per-vault localStorage, never in the synced/
-        // committed data.json. Strip a field from data.json only once we've
-        // *verified* it was durably written to localStorage — otherwise (older
-        // Obsidian without the API, or a write failure) keep it in data.json so
-        // we never silently lose the user's calendar credentials. Persist each
-        // field independently so a failure on one doesn't skip the other.
+        // Tokens live in per-vault localStorage, never in the synced/committed
+        // data.json. Strip them only once we've verified localStorage accepted
+        // the write — otherwise keep them in data.json so credentials aren't lost.
         const tokensStored = this.saveLocal(
             "googleTokens",
             this.settings.googleTokens
         );
-        const secretStored = this.saveLocal(
-            "googleClientSecret",
-            this.settings.googleClientSecret || null
-        );
         const persisted: Record<string, unknown> = { ...this.settings };
         if (tokensStored) delete persisted.googleTokens;
-        if (secretStored) delete persisted.googleClientSecret;
+        // Always scrub any legacy client secret that may linger from an older vault.
+        delete persisted.googleClientSecret;
         await this.saveData(persisted);
     }
 
