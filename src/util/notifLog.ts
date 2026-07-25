@@ -18,6 +18,8 @@
  * off.
  */
 
+import { formatLogData } from "./logLine";
+
 const DEBUG_KEY = "mc:notif-debug";
 
 /** True when notification tracing is enabled via the `mc:notif-debug` localStorage flag. */
@@ -32,12 +34,11 @@ export function notifDebugEnabled(): boolean {
 
 export function notifLog(event: string, data?: Record<string, unknown>): void {
 	if (!notifDebugEnabled()) return;
-	// `console.warn` (not `debug`) so the trace shows at the default DevTools log
-	// level and is captured by the console interceptors people use for bug
-	// reports — `console.debug` is filtered out by both. It's gated behind the
-	// off-by-default flag, so this only appears while actively diagnosing.
+	// Single string so Obsidian console exports don't collapse payloads to
+	// the literal word `Object` (#129). `console.warn` (not `debug`) so the
+	// trace shows at the default DevTools log level.
 	if (data) {
-		console.warn(`[mc:notif] ${event}`, data);
+		console.warn(`[mc:notif] ${event} ${formatLogData(data)}`);
 	} else {
 		console.warn(`[mc:notif] ${event}`);
 	}

@@ -96,6 +96,16 @@ class FakeVault {
 		this.contents.set(file.path, data);
 	}
 
+	async process(
+		file: TFile,
+		fn: (data: string) => string
+	): Promise<string> {
+		const current = await this.read(file);
+		const next = fn(current);
+		await this.modify(file, next);
+		return next;
+	}
+
 	getMarkdownFiles(): TFile[] {
 		return [...this.entries.values()].map((e) => e.file);
 	}

@@ -26,6 +26,18 @@ export class ChatAbortError extends Error {
 	}
 }
 
+/** Thrown when {@link chatComplete} hits its timeout budget (#128). */
+export class EnrichTimeoutError extends Error {
+	readonly timeoutMs: number;
+	constructor(timeoutMs: number) {
+		super(
+			`LLM request timed out after ${Math.round(timeoutMs / 1000)}s`
+		);
+		this.name = "EnrichTimeoutError";
+		this.timeoutMs = timeoutMs;
+	}
+}
+
 interface ChatResponse {
 	choices?: { message?: { content?: string } }[];
 	error?: { message?: string };
@@ -60,12 +72,7 @@ export async function chatComplete(p: ChatParams): Promise<string> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const timeout = new Promise<never>((_, reject) => {
 		timer = setTimeout(
-			() =>
-				reject(
-					new Error(
-						`LLM request timed out after ${Math.round(timeoutMs / 1000)}s`
-					)
-				),
+			() => reject(new EnrichTimeoutError(timeoutMs)),
 			timeoutMs
 		);
 	});

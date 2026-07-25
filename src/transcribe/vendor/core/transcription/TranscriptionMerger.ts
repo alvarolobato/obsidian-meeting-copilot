@@ -944,7 +944,9 @@ export class TranscriptionMerger {
 		if (!firstSegment) {
 			return [];
 		}
-		const merged: TranscriptionSegment[] = [firstSegment];
+		// MEETING-COPILOT PATCH (#23): copy segments so we never mutate shared
+		// objects reused by callers / later merge stages.
+		const merged: TranscriptionSegment[] = [{ ...firstSegment }];
 		// Get duplicate window from config or model-specific config
 		const duplicateWindowSeconds = this.mergingConfig.duplicateWindowSeconds ?? 30;
 		const overlapThreshold = this.mergingConfig.overlapThreshold ?? 0.5;
@@ -972,24 +974,91 @@ export class TranscriptionMerger {
 				// Overlapping segments - merge or skip
 				if (current.end > previous.end) {
 					// Partial overlap - extract non-overlapping part
-					const overlapRatio = (previous.end - current.start) / (current.end - current.start);
+					const duration = Math.max(current.end - current.start, 1e-6);
+					const overlapRatio = (previous.end - current.start) / duration;
 					if (overlapRatio < overlapThreshold) {
 						// Less than threshold overlap, keep both
-						merged.push(current);
+						merged.push({ ...current });
 					} else {
-						// Significant overlap, extend previous segment
-						previous.end = current.end;
-						previous.text += ' ' + current.text;
+						// Significant overlap: extend previous with only the
+						// trailing (non-overlapping-time) fraction of current
+						// text — appending the whole string duplicated the
+						// overlap (~5s of words at every chunk boundary).
+						const keepFrac = (current.end - previous.end) / duration;
+						const suffix = this.sliceTrailingWordFraction(
+							current.text,
+							keepFrac
+						);
+						merged[merged.length - 1] = {
+							...previous,
+							end: current.end,
+							text: suffix.trim()
+								? `${previous.text.trimEnd()} ${suffix.trim()}`
+								: previous.text,
+						};
+					}
+				} else if (currText && !this.textRoughlyCovers(prevText, currText)) {
+					// Contained in time but novel text (imprecise Whisper
+					// edge timestamps) — keep the novel suffix instead of
+					// dropping legitimate words.
+					const novel = this.novelWordSuffix(prevText, currText);
+					if (novel) {
+						merged[merged.length - 1] = {
+							...previous,
+							text: `${previous.text.trimEnd()} ${novel}`,
+						};
 					}
 				}
-				// Else: current is completely contained, skip it
+				// Else: current is completely contained and redundant, skip it
 			} else {
 				// No overlap
-				merged.push(current);
+				merged.push({ ...current });
 			}
 		}
 
 		return merged;
+	}
+
+	/** Keep roughly the last `frac` of words in `text` (MEETING-COPILOT PATCH #23). */
+	private sliceTrailingWordFraction(text: string, frac: number): string {
+		if (frac <= 0) return '';
+		const words = text.trim().split(/\s+/).filter(Boolean);
+		if (words.length === 0) return '';
+		if (frac >= 1) return words.join(' ');
+		const n = Math.max(1, Math.round(words.length * frac));
+		return words.slice(-n).join(' ');
+	}
+
+	/** True when `needle` is mostly already present in `haystack` (word overlap). */
+	private textRoughlyCovers(haystack: string, needle: string): boolean {
+		const h = haystack.toLowerCase();
+		const n = needle.toLowerCase().trim();
+		if (!n) return true;
+		if (h.includes(n)) return true;
+		const nw = n.split(/\s+/).filter(Boolean);
+		const hw = new Set(h.split(/\s+/).filter(Boolean));
+		if (nw.length === 0) return true;
+		let hit = 0;
+		for (const w of nw) {
+			if (hw.has(w)) hit++;
+		}
+		return hit / nw.length >= 0.8;
+	}
+
+	/** Words in `curr` after the longest word-aligned prefix that matches a suffix of `prev`. */
+	private novelWordSuffix(prev: string, curr: string): string {
+		const pw = prev.toLowerCase().split(/\s+/).filter(Boolean);
+		const cw = curr.trim().split(/\s+/).filter(Boolean);
+		const cl = cw.map((w) => w.toLowerCase());
+		let best = 0;
+		const max = Math.min(pw.length, cl.length);
+		for (let len = max; len >= 1; len--) {
+			if (pw.slice(-len).join(' ') === cl.slice(0, len).join(' ')) {
+				best = len;
+				break;
+			}
+		}
+		return cw.slice(best).join(' ');
 	}
 
 	/**

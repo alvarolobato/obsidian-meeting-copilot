@@ -72,6 +72,8 @@ export const en = {
 		enriching: "Enriching meeting note…",
 		enrichDone: (note: string) => `Enriched ${note}`,
 		enrichError: (msg: string) => `Enrichment failed: ${msg}`,
+		enrichTimeout: (note: string, seconds: number) =>
+			`Enrichment timed out for ${note} after ${seconds}s — increase the timeout in settings or retry`,
 		enrichNotConfigured:
 			"Set the AI endpoint (base URL + API key) and an enrichment model in settings first.",
 		enrichDisabled: "AI enrichment is disabled in settings.",
@@ -622,6 +624,10 @@ export const en = {
 		enrichMaxTranscriptTokens: {
 			name: "Max transcript tokens for enrichment",
 			desc: "Soft cap (~characters÷4) on how much of the transcript is spliced into the enrichment prompt. Longer transcripts keep the opening and closing with a visible truncation marker in the middle. 0 disables truncation. Default 12000.",
+		},
+		enrichTimeoutSeconds: {
+			name: "Enrichment timeout (seconds)",
+			desc: "How long to wait for the enrichment model before failing (and retrying once). Raise this for slow local/proxy LLMs. Range 60–600; default 120.",
 		},
 	},
 	oauth: {

@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { parseDeviceList, parseStatusLines } from "./recorder";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { parseDeviceList, parseStatusLines, Recorder } from "./recorder";
 
 describe("parseDeviceList", () => {
 	it("parses the helper's device JSON", () => {
@@ -70,5 +70,27 @@ describe("parseStatusLines", () => {
 		);
 		expect(statuses).toEqual([{ status: "recording", file: "/a.wav" }]);
 		expect(buffer).toBe("");
+	});
+});
+
+describe("Recorder.stop idempotency (#130)", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("writes the stop-file once when stop() is called twice", () => {
+		const writes: string[] = [];
+		const recorder = new Recorder({
+			writeStopFile: (p) => {
+				writes.push(p);
+			},
+		});
+		recorder.armForStopTest("/tmp/stop-test");
+		expect(recorder.isRecording).toBe(true);
+
+		recorder.stop();
+		recorder.stop();
+		expect(writes).toEqual(["/tmp/stop-test"]);
+		expect(recorder.hasStopBeenSignaled).toBe(true);
 	});
 });

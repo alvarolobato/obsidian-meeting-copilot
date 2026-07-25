@@ -152,13 +152,10 @@ export class WhisperTranscriptionStrategy extends TranscriptionStrategy {
 					useTimestamps: true
 				});
 			} else {
-				mergedText = this.merger.mergeWithTimestamps(results, {
-					includeFailures: true,
-					useTimestamps: true
-				});
-			}
-			} else {
-				// Get model-specific merge config
+				// MEETING-COPILOT PATCH (#23): whisper-1 always receives
+				// verbose_json segments, so the timestamp merge path ran for
+				// every chunk boundary and duplicated/dropped words. Prefer
+				// the text-overlap path GPT-4o uses.
 				const modelConfig = getModelConfig(this.transcriptionService.modelId);
 				const mergeConfig = modelConfig.merging;
 
@@ -169,6 +166,18 @@ export class WhisperTranscriptionStrategy extends TranscriptionStrategy {
 					includeFailures: true
 				});
 			}
+		} else {
+			// Get model-specific merge config
+			const modelConfig = getModelConfig(this.transcriptionService.modelId);
+			const mergeConfig = modelConfig.merging;
+
+			mergedText = this.merger.mergeWithOverlapRemoval(results, {
+				removeOverlaps: true,
+				minMatchLength: mergeConfig.minMatchLength ?? 20,
+				separator: '\n\n',
+				includeFailures: true
+			});
+		}
 
 		mergedText = await this.postProcessMergedText(mergedText, results, this.workflowLanguage);
 

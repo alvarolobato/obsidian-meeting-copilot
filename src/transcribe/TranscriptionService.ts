@@ -225,7 +225,11 @@ export async function transcribeDiarized(
 		// That must not kill the whole transcription: the mixed wav can still be
 		// transcribed, so warn and let the caller fall back to it rather than
 		// letting the throw escape and leave no transcript written.
-		console.warn("Diarized transcription pass failed; falling back to mixed file", error);
+		console.warn(
+			`[Meeting Copilot][transcribe] diarized pass failed; falling back to mixed file ${
+				error instanceof Error ? error.message : String(error)
+			}`
+		);
 		return { text: "", diarized: false, reason: "error" };
 	}
 }

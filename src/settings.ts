@@ -182,6 +182,11 @@ export interface SystemRecordingSettings {
 	 * 0 disables truncation.
 	 */
 	enrichMaxTranscriptTokens: number;
+	/**
+	 * Per-request timeout for enrichment LLM calls (seconds). Default 120.
+	 * Clamped to 60–600 in settings. One automatic retry on timeout (#128).
+	 */
+	enrichTimeoutSeconds: number;
 	enrichOnTranscribe: boolean;
 	hideAiNotes: boolean;
 	/** After enriching an ad-hoc meeting, ask the LLM for a title and offer to rename. */
@@ -278,6 +283,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	enrichPromptCustomize: false,
 	enrichPrompt: "",
 	enrichMaxTranscriptTokens: 12_000,
+	enrichTimeoutSeconds: 120,
 	enrichOnTranscribe: true,
 	hideAiNotes: false,
 	suggestAdhocTitle: true,
@@ -962,6 +968,25 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                         const n = Number.parseInt(value.trim(), 10);
                         this.plugin.settings.enrichMaxTranscriptTokens =
                             Number.isFinite(n) && n >= 0 ? n : 12_000;
+                        await this.plugin.saveSettings();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName(s.settings.enrichTimeoutSeconds.name)
+            .setDesc(s.settings.enrichTimeoutSeconds.desc)
+            .addText((text) =>
+                text
+                    .setPlaceholder("120")
+                    .setValue(
+                        String(this.plugin.settings.enrichTimeoutSeconds)
+                    )
+                    .onChange(async (value) => {
+                        const n = Number.parseInt(value.trim(), 10);
+                        this.plugin.settings.enrichTimeoutSeconds =
+                            Number.isFinite(n)
+                                ? Math.min(600, Math.max(60, n))
+                                : 120;
                         await this.plugin.saveSettings();
                     })
             );

@@ -70,27 +70,23 @@ import {
     recordingLinkTargets,
     sanitizeName,
     scanMeetingNotes,
-    stripTranscript,
     templateStaticRoot,
     TRANSCRIPT_SEGMENT_SEPARATOR,
-    transcriptAtBottom,
-    upsertSection,
 } from "./notes/meetingNote";
 import {
     extractSection,
     extractTranscript,
     HIDE_AI_CLASS,
-    withEnrichedBlock,
 } from "./notes/enrichedBlock";
 import {
     extractActionItems,
     extractFollowUps,
     extractManualActionItems,
-    refreshActionItems,
-    stampCreatedDate,
     stripTaskMeta,
 } from "./notes/actionItems";
 import { normalizeManualNotes } from "./notes/manualNotes";
+import { applyEnrichToContent } from "./notes/applyEnrich";
+import { mcLog } from "./util/logLine";
 import {
     ACTIONS_BLOCK_LANG,
     ATTENTION_BLOCK_LANG,
@@ -128,7 +124,7 @@ import { findExpiredRecordings, underFolder } from "./recordings/retention";
 const ACTION_ITEMS_HEADING = "## Action items";
 /** Note section that holds meeting-wide follow-up checkboxes. */
 const FOLLOW_UPS_HEADING = "## Follow-ups";
-import { chatComplete, ChatAbortError } from "./enrich/llm";
+import { chatComplete, ChatAbortError, EnrichTimeoutError } from "./enrich/llm";
 import { isPartialTranscript } from "./transcribe/partial";
 import { stripHallucinatedLines } from "./transcribe/hallucination";
 import {
@@ -770,6 +766,12 @@ export default class SystemRecordingPlugin extends Plugin {
         ) {
             this.settings.localWhisperModel = DEFAULT_SETTINGS.localWhisperModel;
         }
+        {
+            const n = Number(this.settings.enrichTimeoutSeconds);
+            this.settings.enrichTimeoutSeconds = Number.isFinite(n)
+                ? Math.min(600, Math.max(60, Math.round(n)))
+                : DEFAULT_SETTINGS.enrichTimeoutSeconds;
+        }
         // Migrate the previously enrichment-only endpoint into the shared fields
         // when the shared ones are still unset or at the default.
         const legacyBase = raw?.enrichBaseUrl?.trim();
@@ -1051,8 +1053,8 @@ export default class SystemRecordingPlugin extends Plugin {
         },
         opts?: { replaceCurrent?: boolean }
     ) {
-        console.warn("[Meeting Copilot][recorder] startRecording requested", {
-            notePath: meeting.notePath,
+        mcLog("recorder", "startRecording requested", {
+            note: meeting.basename,
             eventId: meeting.eventId,
             isRecording: this.recorder.isRecording,
             starting: this.starting,
@@ -3904,9 +3906,10 @@ export default class SystemRecordingPlugin extends Plugin {
         // until the user manually re-checks (issue #61). Only a genuine
         // capability miss warrants invalidating the probe.
         if (!shouldInvalidateProbe(result)) {
-            console.warn(
-                "[Meeting Copilot] diarization pass errored; using mixed audio for this meeting (probe left intact)"
-            );
+            mcLog("transcribe", "diarized fallback", {
+                reason: "error",
+                recording: recording.path,
+            });
             return null;
         }
 
@@ -3914,9 +3917,10 @@ export default class SystemRecordingPlugin extends Plugin {
         // slipping past the probe). Invalidate the cached probe so we stop
         // paying for three passes every meeting, and tell the user how to
         // re-check. The mixed pass runs back in launchTranscriber.
-        console.warn(
-            "[Meeting Copilot] diarization returned no segments; using mixed audio"
-        );
+        mcLog("transcribe", "diarized fallback", {
+            reason: "capability",
+            recording: recording.path,
+        });
         this.settings.sttTimestampsSupported = null;
         await this.saveSettings();
         new Notice(t().notices.diarizationNoTimestamps);
@@ -4033,7 +4037,9 @@ export default class SystemRecordingPlugin extends Plugin {
             // Cancellation is expected; other failures were already surfaced with
             // their own notice/status inside transcribeToNote.
             if (!(e instanceof TaskCancelledError)) {
-                console.warn("[Meeting Copilot] transcription failed", e);
+                mcLog("transcribe", "transcription failed", {
+                    error: e instanceof Error ? e.message : String(e),
+                });
             }
         }
     }
@@ -4122,10 +4128,10 @@ export default class SystemRecordingPlugin extends Plugin {
                 // Diarization isn't retried remotely: its timestamp support isn't
                 // probed on this path, and a mixed transcript is the safe floor.
                 if (!(useLocal && this.canFallbackToRemote(e, signal))) throw e;
-                console.warn(
-                    "[Meeting Copilot] local transcription failed; falling back to the remote service",
-                    e
-                );
+                mcLog("transcribe", "local→remote fallback", {
+                    recording: recording.path,
+                    error: e instanceof Error ? e.message : String(e),
+                });
                 // Say diarization was dropped when the user asked for it: the
                 // remote fallback is always a plain mixed pass, so a forced
                 // speaker-separated request silently becomes mixed otherwise.
@@ -4164,9 +4170,12 @@ export default class SystemRecordingPlugin extends Plugin {
                 // untouched on purpose (we never overwrite a transcript with
                 // nothing). Surfacing it makes that visible in the log instead
                 // of the run just going silent.
-                console.warn(
-                    `[Meeting Copilot][transcribe] "${recording.name}" produced an empty transcript after filtering; note left unchanged`
-                );
+                mcLog("transcribe", "empty after filter", {
+                    recording: recording.name,
+                    diarized,
+                    rawLen: rawText.length,
+                    strippedLen: text.length,
+                });
                 return { kind: "empty" };
             }
             // A partial/failed run comes back as a marker-prefixed string
@@ -4233,8 +4242,20 @@ export default class SystemRecordingPlugin extends Plugin {
                 this.settings.discardSilentRecordings &&
                 !(await this.recordingHasSpeech(recording))
             ) {
+                mcLog("recorder", "discard silent", {
+                    recording: recording.path,
+                    hasSpeech: false,
+                    speechJson: "empty-or-missing",
+                });
                 await this.discardSilentRecording(recording);
             } else {
+                if (res.kind === "empty") {
+                    mcLog("recorder", "keep empty transcript", {
+                        recording: recording.path,
+                        fresh,
+                        discardEnabled: this.settings.discardSilentRecordings,
+                    });
+                }
                 new Notice(t().notices.transcribeEmpty);
             }
             if (!this.recorder.isRecording) this.clearActionStatus();
@@ -4356,7 +4377,9 @@ export default class SystemRecordingPlugin extends Plugin {
             // Cancellation (or an unexpected queue failure) mid-rebuild: leave
             // the existing transcript untouched rather than write a partial one.
             if (!(e instanceof TaskCancelledError)) {
-                console.warn("[Meeting Copilot] transcript rebuild failed", e);
+                mcLog("transcribe", "transcript rebuild failed", {
+                    error: e instanceof Error ? e.message : String(e),
+                });
             }
             return;
         }
@@ -5132,9 +5155,10 @@ export default class SystemRecordingPlugin extends Plugin {
                 }
             });
         }
-        console.warn(
-            `[Meeting Copilot][recorder] discarded silent recording "${recording.name}"`
-        );
+        mcLog("recorder", "discarded silent recording", {
+            recording: recording.name,
+            note: note?.path ?? null,
+        });
         new Notice(t().notices.silentDiscarded);
         this.agendaEvents.emit("changed", undefined);
     }
@@ -5315,7 +5339,10 @@ export default class SystemRecordingPlugin extends Plugin {
         // surfaces its own error notice, so this is a last-resort net).
         promise.catch((e) => {
             if (!(e instanceof TaskCancelledError)) {
-                console.warn("[Meeting Copilot] enrichment failed", e);
+                mcLog("enrich", "queue fail", {
+                    note: note.path,
+                    error: e instanceof Error ? e.message : String(e),
+                });
             }
         });
         return promise;
@@ -5350,6 +5377,7 @@ export default class SystemRecordingPlugin extends Plugin {
         let alreadySuggestedForTitle: unknown;
         /** Title embedded in the enrich response (same LLM call); offered after write. */
         let embeddedTitle: string | null = null;
+        let enrichStarted = Date.now();
         try {
             const content = await this.app.vault.read(file);
             // Gather manual notes wherever they were written (incl. above the
@@ -5424,14 +5452,48 @@ export default class SystemRecordingPlugin extends Plugin {
                             this.settings.enrichMaxTranscriptTokens,
                     }
                 ) + (wantTitle ? ADHOC_TITLE_PROMPT_SUFFIX : "");
-            const rawOutput = await chatComplete({
-                baseUrl: apiBaseUrl,
-                apiKey: apiKey,
+            const timeoutMs = Math.min(
+                600_000,
+                Math.max(60_000, (this.settings.enrichTimeoutSeconds || 120) * 1000)
+            );
+            enrichStarted = Date.now();
+            mcLog("enrich", "begin", {
+                note: file.basename,
                 model: enrichModel,
-                system: ENRICH_SYSTEM_PROMPT,
-                user: userPrompt,
-                signal,
+                promptChars: userPrompt.length,
+                transcriptChars: (transcript ?? "").length,
+                timeoutMs,
             });
+            let rawOutput: string;
+            let attempt = 0;
+            for (;;) {
+                try {
+                    rawOutput = await chatComplete({
+                        baseUrl: apiBaseUrl,
+                        apiKey: apiKey,
+                        model: enrichModel,
+                        system: ENRICH_SYSTEM_PROMPT,
+                        user: userPrompt,
+                        signal,
+                        timeoutMs,
+                    });
+                    break;
+                } catch (e) {
+                    if (
+                        e instanceof EnrichTimeoutError &&
+                        attempt === 0 &&
+                        !signal.aborted
+                    ) {
+                        attempt = 1;
+                        mcLog("enrich", "timeout retry", {
+                            note: file.basename,
+                            timeoutMs,
+                        });
+                        continue;
+                    }
+                    throw e;
+                }
+            }
             // Only parse/strip a title trailer when we asked for one — calendar
             // enrichments must never feed RenameModal (scheduled titles stay).
             const extracted = wantTitle
@@ -5446,80 +5508,45 @@ export default class SystemRecordingPlugin extends Plugin {
                 if (cleaned && cleaned !== "Untitled") {
                     embeddedTitle = cleaned;
                 } else {
-                    console.warn(
-                        "[Meeting Copilot] title suggestion skipped: enrich response missing title trailer",
-                        file.path
-                    );
+                    mcLog("enrich", "title suggestion skipped", {
+                        note: file.basename,
+                        reason: "missing title trailer",
+                    });
                 }
             }
-            // Re-read in case the note changed during the network call.
-            const current = await this.app.vault.read(file);
-            // The transcript callout has no heading of its own, so it lives
-            // inside whatever section precedes it (usually "## Follow-ups" or
-            // "## Action items"). Pull it out before any section edits —
-            // otherwise extractSection would scoop it up and merged items
-            // would land *after* it — and re-pin it to the very bottom once
-            // everything else is placed.
-            const bottomTranscript = extractTranscript(current);
-            let updated = bottomTranscript.trim().length
-                ? stripTranscript(current)
-                : current;
-            // Consolidate any loose notes under "## Notes" (creating it if
-            // missing) so they're preserved in place rather than orphaned.
-            updated = normalizeManualNotes(updated).content;
-            let calloutBody = output;
-            // Lift Next steps / Follow-ups out of the summary into real
-            // obsidian-tasks checkboxes under the matching ## sections
-            // (merged, never duplicated). Stamp fresh items with ➕ today.
-            if (this.settings.actionItemsAsTasks) {
-                const created = this.todayStamp();
-                const actions = extractActionItems(calloutBody);
-                calloutBody = actions.without;
-                const followUps = extractFollowUps(calloutBody);
-                calloutBody = followUps.without;
-                if (actions.items.length > 0) {
-                    const existing = extractSection(
-                        updated,
-                        ACTION_ITEMS_HEADING
-                    );
-                    // Merge first (carries prior ➕ onto normalized matches),
-                    // then stamp only lines still missing a creation date.
-                    const merged = stampCreatedDate(
-                        refreshActionItems(existing, actions.items).split("\n"),
-                        created
-                    ).join("\n");
-                    updated = upsertSection(
-                        updated,
-                        ACTION_ITEMS_HEADING,
-                        merged
-                    );
-                }
-                if (followUps.items.length > 0) {
-                    const existing = extractSection(
-                        updated,
-                        FOLLOW_UPS_HEADING
-                    );
-                    const merged = stampCreatedDate(
-                        refreshActionItems(existing, followUps.items).split(
-                            "\n"
-                        ),
-                        created
-                    ).join("\n");
-                    updated = upsertSection(
-                        updated,
-                        FOLLOW_UPS_HEADING,
-                        merged
-                    );
-                }
+            // Atomic RMW against the live note so concurrent keystrokes during
+            // the LLM call aren't clobbered (#19). Bail if cancelled after the
+            // LLM returned so we don't write a discarded enrich.
+            if (signal.aborted) throw new ChatAbortError();
+            const vault = this.app.vault as typeof this.app.vault & {
+                process?: (
+                    f: TFile,
+                    fn: (data: string) => string
+                ) => Promise<string>;
+            };
+            const apply = (current: string) =>
+                applyEnrichToContent(current, {
+                    calloutBody: output,
+                    actionItemsAsTasks: this.settings.actionItemsAsTasks,
+                    todayStamp: this.todayStamp(),
+                    extractActionItems,
+                    extractFollowUps,
+                });
+            if (typeof vault.process === "function") {
+                await vault.process(file, apply);
+            } else {
+                const current = await this.app.vault.read(file);
+                await this.app.vault.modify(file, apply(current));
             }
-            updated = withEnrichedBlock(updated, calloutBody);
-            // Keep the transcript pinned to the very bottom of the note.
-            if (bottomTranscript.trim().length) {
-                updated = transcriptAtBottom(updated, bottomTranscript);
-            }
-            await this.app.vault.modify(file, updated);
             await this.app.fileManager.processFrontMatter(file, (f) => {
                 (f as Record<string, unknown>).status = "enriched";
+            });
+            const elapsedMs = Date.now() - enrichStarted;
+            mcLog("enrich", "ok", {
+                note: file.basename,
+                model: enrichModel,
+                elapsedMs,
+                attempts: attempt + 1,
             });
             new Notice(t().notices.enrichDone(file.basename));
             this.setEnrichStatus(t().statusBar.enriched, "success");
@@ -5533,9 +5560,29 @@ export default class SystemRecordingPlugin extends Plugin {
                 if (!this.transcriptionRunning) this.clearActionStatus();
                 throw new TaskCancelledError();
             }
-            new Notice(
-                t().notices.enrichError(e instanceof Error ? e.message : String(e))
-            );
+            const elapsedMs = Date.now() - enrichStarted;
+            if (e instanceof EnrichTimeoutError) {
+                const secs = Math.round(e.timeoutMs / 1000);
+                mcLog("enrich", "fail", {
+                    note: file.basename,
+                    outcome: "timeout",
+                    timeoutMs: e.timeoutMs,
+                    elapsedMs,
+                });
+                new Notice(t().notices.enrichTimeout(file.basename, secs));
+            } else {
+                mcLog("enrich", "fail", {
+                    note: file.basename,
+                    outcome: "error",
+                    error: e instanceof Error ? e.message : String(e),
+                    elapsedMs,
+                });
+                new Notice(
+                    t().notices.enrichError(
+                        e instanceof Error ? e.message : String(e)
+                    )
+                );
+            }
             this.setEnrichStatus(t().statusBar.enrichFailed, "error");
             // Reject the queue task (its own catch just logs) so a failed enrich
             // isn't recorded as a success — and skips the title-suggestion step.
@@ -5873,8 +5920,23 @@ export default class SystemRecordingPlugin extends Plugin {
         const existing = this.app.vault.getAbstractFileByPath(path);
         let file: TFile;
         if (existing instanceof TFile) {
-            const content = await this.app.vault.read(existing);
-            await this.app.vault.modify(existing, withDashboardBlock(content, block));
+            const vault = this.app.vault as typeof this.app.vault & {
+                process?: (
+                    f: TFile,
+                    fn: (data: string) => string
+                ) => Promise<string>;
+            };
+            if (typeof vault.process === "function") {
+                await vault.process(existing, (content) =>
+                    withDashboardBlock(content, block)
+                );
+            } else {
+                const content = await this.app.vault.read(existing);
+                await this.app.vault.modify(
+                    existing,
+                    withDashboardBlock(content, block)
+                );
+            }
             file = existing;
         } else {
             file = await this.app.vault.create(path, `${block}\n`);
