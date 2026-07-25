@@ -476,7 +476,7 @@ export const en = {
 		transcriptionHeading: "Transcription",
 		transcriptionEngine: {
 			name: "Transcription engine",
-			desc: "Where audio is transcribed. Remote sends audio to the OpenAI-compatible endpoint configured above. Local runs a Whisper model entirely on this Mac (Apple Silicon) — audio never leaves the device and there are no per-minute API costs, at the price of a one-time model download.",
+			desc: "Remote sends audio to the OpenAI-compatible endpoint configured above. Local runs a Whisper model — audio never leaves the device.",
 			remote: "Remote (API endpoint)",
 			local: "Local (on-device Whisper)",
 		},
@@ -513,11 +513,11 @@ export const en = {
 		},
 		localFallback: {
 			name: "Fall back to remote on failure",
-			desc: "If local transcription fails (for example the model isn't downloaded, or the helper errors), transcribe with the remote endpoint instead — when one is configured.",
+			desc: "If local transcription fails, transcribe with the remote endpoint instead — when one is configured.",
 		},
 		sttModel: {
 			name: "Transcription model",
-			desc: "Model sent to the endpoint. Run 'Load models' above to list the models your endpoint exposes — when it reports capabilities, the list is narrowed to speech-to-text models. Chat models like gpt-4o can't transcribe; use gpt-4o-transcribe or whisper. You can also type a gateway deployment name such as llm-gateway/whisper.",
+			desc: "Model sent to the endpoint. Run 'Load models' above to list the models your endpoint exposes — when it reports capabilities, the list is narrowed to speech-to-text models.",
 		},
 		sttApiType: {
 			name: "Engine (advanced)",
