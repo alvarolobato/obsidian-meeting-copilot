@@ -422,6 +422,10 @@ export const en = {
 			name: "Exclusion keywords",
 			desc: "Events whose title contains any of these words are excluded from the calendar entirely — not shown in the agenda and not recorded (separate by newline or comma; case-insensitive).",
 		},
+		excludeWithoutMeetingLink: {
+			name: "Exclude meetings without a conference link",
+			desc: "Hide events that have no Google Meet, Zoom, Teams, or Webex link in the conference data, location, or description. Uses the same detection as 'Open meeting link automatically'. Off by default.",
+		},
 		openMeet: {
 			name: "Open meeting link automatically",
 			desc: "If the event has a meeting link (Google Meet, Zoom, Teams, or Webex), open it in the browser at the start time.",

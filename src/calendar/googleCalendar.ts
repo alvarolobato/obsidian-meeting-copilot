@@ -2,7 +2,11 @@ import { requestUrl } from "obsidian";
 import type { GoogleOAuth } from "../auth/googleOAuth";
 import { extractMeetLink, RawConferenceEvent } from "./meetLink";
 import { extractMeetingUrlFromText } from "./meetingUrl";
-import { isMeetingEventType, matchesExclusionKeyword } from "./eventFilter";
+import {
+	filterRequireMeetingLink,
+	isMeetingEventType,
+	matchesExclusionKeyword,
+} from "./eventFilter";
 
 export interface GCalEvent {
 	id: string;
@@ -229,7 +233,9 @@ export async function listEvents(
 	timeMin: Date,
 	timeMax: Date,
 	maxResults = 50,
-	exclusionKeywords: string[] = []
+	exclusionKeywords: string[] = [],
+	/** When true, drop events with no Meet/Zoom/Teams/Webex link (same detection as auto-open). */
+	requireMeetingLink = false
 ): Promise<GCalEvent[]> {
 	// Follow nextPageToken so busy calendars (>maxResults events in the window)
 	// don't silently drop today's/future meetings — ordered ascending, those are
@@ -249,7 +255,7 @@ export async function listEvents(
 			nextPageToken?: string;
 		};
 	});
-	return rawEvents
+	const mapped = rawEvents
 		.filter((ev) => ev.status !== "cancelled") // drop cancelled meetings
 		.filter((ev) => !isDeclinedByUser(ev.attendees)) // drop meetings the user declined
 		.filter((ev) => isMeetingEventType(ev.eventType))
@@ -290,4 +296,5 @@ export async function listEvents(
 			}),
 		};
 	});
+	return filterRequireMeetingLink(mapped, requireMeetingLink);
 }
