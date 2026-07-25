@@ -63,12 +63,12 @@ describe("parseStatusLines", () => {
 		expect(second.buffer).toBe("");
 	});
 
-	it("ignores non-JSON lines and blank lines", () => {
+	it("parses CRLF-terminated JSON status lines", () => {
 		const { statuses, buffer } = parseStatusLines(
-			'noise\n\n{"status":"warning","message":"ok"}\n',
+			'{"status":"recording","file":"/a.wav"}\r\n',
 			""
 		);
-		expect(statuses).toEqual([{ status: "warning", message: "ok" }]);
+		expect(statuses).toEqual([{ status: "recording", file: "/a.wav" }]);
 		expect(buffer).toBe("");
 	});
 });

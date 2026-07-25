@@ -130,9 +130,11 @@ export function parseStatusLines(
     const buffer = lines.pop() ?? "";
     const statuses: RecorderStatus[] = [];
     for (const line of lines) {
-        if (!line.trim()) continue;
+        const trimmed = line.trim();
+        if (!trimmed) continue;
         try {
-            statuses.push(JSON.parse(line) as RecorderStatus);
+            // Trim so CRLF helpers (`\r` left by split on `\n`) still parse (#132).
+            statuses.push(JSON.parse(trimmed) as RecorderStatus);
         } catch {
             // Ignore non-JSON output
         }

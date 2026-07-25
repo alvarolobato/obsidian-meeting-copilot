@@ -1279,7 +1279,16 @@ export default class SystemRecordingPlugin extends Plugin {
 			}
 			if (!this.scheduler.isRunning) {
 				await this.awaitMetadataResolvedOnce();
-				this.scheduler.start();
+				// Re-check after the await: a concurrent void updateScheduler()
+				// may have disabled automation while we waited on metadata.
+				const stillShouldRun =
+					(this.settings.calendarAutoRecord ||
+						this.settings.calendarAutoStart ||
+						this.settings.calendarAutoStop) &&
+					this.oauth.isAuthenticated();
+				if (stillShouldRun && !this.scheduler.isRunning) {
+					this.scheduler.start();
+				}
 			}
 		} else {
 			this.scheduler?.stop();

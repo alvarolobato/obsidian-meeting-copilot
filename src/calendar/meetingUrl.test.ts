@@ -24,6 +24,9 @@ describe("extractMeetingUrlFromText", () => {
 				"Gov: https://acme.zoomgov.com/j/111222333?pwd=x"
 			)
 		).toBe("https://acme.zoomgov.com/j/111222333?pwd=x");
+		expect(
+			extractMeetingUrlFromText("https://evilzoom.us/j/123456789")
+		).toBeNull();
 	});
 
 	it("finds a Google Meet link", () => {

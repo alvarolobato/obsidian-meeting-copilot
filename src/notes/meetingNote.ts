@@ -530,13 +530,12 @@ async function belongsToOtherEvent(
 	if (typeof sessionId === "string" && sessionId.length > 0) {
 		return sessionId !== eventId;
 	}
-	// Still no cache: read the file and parse a minimal `event_id:` line.
+	// Still no cache: read the file and parse `event_id` from YAML frontmatter
+	// only (require a closing fence so a body line can't spoof identity).
 	try {
 		const text = await app.vault.cachedRead(file);
-		const m = text.match(
-			/^---\r?\n[\s\S]*?^event_id:\s*["']?([^\s"'#]+)/m
-		);
-		const existing = m?.[1];
+		const fm = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+		const existing = fm?.[1]?.match(/^event_id:\s*["']?([^\s"'#]+)/m)?.[1];
 		if (typeof existing === "string" && existing.length > 0) {
 			sessionEventIdByPath.set(file.path, existing);
 			return existing !== eventId;
