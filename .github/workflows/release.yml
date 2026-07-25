@@ -157,8 +157,12 @@ jobs:
       - name: Build plugin
         # MC_RELEASE marks the bundle as an official release build so the plugin
         # shows a clean version (no "custom build" provenance); see src/buildInfo.ts.
+        # GOOGLE_CLIENT_* are XOR-encoded at build time by the credentials plugin
+        # in esbuild.config.mjs so they don't appear as plain strings in main.js.
         env:
           MC_RELEASE: "1"
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
         run: npm run build
 
       - name: Create or update GitHub release

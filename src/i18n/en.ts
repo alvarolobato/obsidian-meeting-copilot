@@ -382,21 +382,24 @@ export const en = {
 		calendarHeading: "Google Calendar integration",
 		googleHeading: "Google Calendar",
 		modelsHeading: "Models",
-		clientId: {
-			name: "Client ID",
-			desc: "The client ID issued by Google.",
-		},
-		clientSecret: {
-			name: "Client secret",
-			desc: "The client secret issued by Google.",
-		},
 		googleAuth: {
 			name: "Google authentication",
 			descAuthenticated: "Authenticated. Re-authenticating refreshes the token.",
-			descUnauthenticated:
-				"Not authenticated. Set the client ID and secret, then authenticate.",
+			descUnauthenticated: "Not authenticated. Click to connect your Google Calendar.",
 			buttonReauthenticate: "Re-authenticate",
 			buttonAuthenticate: "Authenticate",
+		},
+		advancedCredentials: {
+			summary: "Advanced: custom OAuth credentials",
+			desc: "Override the built-in app credentials. Leave blank to use the bundled defaults. Only needed if you want to use your own Google Cloud project.",
+		},
+		clientId: {
+			name: "Client ID",
+			desc: "OAuth client ID from your Google Cloud Desktop app.",
+		},
+		clientSecret: {
+			name: "Client secret",
+			desc: "OAuth client secret from your Google Cloud Desktop app.",
 		},
 		calendarAutoRecord: {
 			name: "Calendar meeting notifications",
@@ -625,7 +628,7 @@ export const en = {
 		sessionExpired:
 			"Google Calendar session expired. Please reconnect from settings or the command palette.",
 		desktopOnly: "OAuth authentication is only supported on desktop.",
-		setCredentialsFirst: "Please set the OAuth Client ID / Secret first.",
+		setCredentialsFirst: "OAuth credentials are missing or incomplete. Open the Advanced section in Settings and enter both your Client ID and Client Secret.",
 		openingBrowser: "Opening Google authentication in your browser…",
 		noRefreshToken:
 			"No refresh_token was returned. Add yourself as a test user on the OAuth consent screen and try again.",

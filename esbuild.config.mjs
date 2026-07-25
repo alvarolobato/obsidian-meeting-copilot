@@ -1,8 +1,11 @@
 import esbuild from "esbuild";
 import process from "process";
 import { builtinModules } from 'node:module';
-import { copyFileSync, existsSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 // Build provenance baked into the bundle so the plugin can tell a real release
 // from a local/custom build (see src/buildInfo.ts). `git` may be unavailable
@@ -53,7 +56,64 @@ if you want to view the source, please visit the github repository of this plugi
 
 const prod = (process.argv[2] === "production");
 
+// -- Credentials plugin -------------------------------------------------------
+// XOR-encodes the Google OAuth credentials at build time so they don't appear
+// as plain strings in main.js. Both the ciphertext and the key are baked in —
+// this is obfuscation, not encryption — but it stops naive grep/strings from
+// surfacing them. A fresh random key is generated on every build.
+//
+// Credential sources (first non-empty wins):
+//   1. GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET env vars   (CI/release.yml)
+//   2. ~/.config/obsidian-meeting-copilot/credentials.json (local dev)
+//   3. Empty arrays → bundled auth disabled (CI lint/test builds are fine)
+
+function loadBuildCredentials() {
+	let id = process.env.GOOGLE_CLIENT_ID ?? "";
+	let secret = process.env.GOOGLE_CLIENT_SECRET ?? "";
+	if (!id || !secret) {
+		const local = join(homedir(), ".config", "obsidian-meeting-copilot", "credentials.json");
+		if (existsSync(local)) {
+			try {
+				const cfg = JSON.parse(readFileSync(local, "utf8"));
+				id = id || cfg.googleClientId || "";
+				secret = secret || cfg.googleClientSecret || "";
+			} catch { /* ignore */ }
+		}
+	}
+	return { id, secret };
+}
+
+function xorEncode(str, key) {
+	const bytes = Buffer.from(str, "utf8");
+	return Array.from(bytes, (b, i) => b ^ key[i % key.length]);
+}
+
+function credentialsPlugin() {
+	return {
+		name: "mc-credentials",
+		setup(build) {
+			const { id, secret } = loadBuildCredentials();
+			if (!id && !secret) {
+				console.warn("mc-credentials: no credentials found — bundled OAuth will be disabled");
+			} else if (!id) {
+				console.warn("mc-credentials: GOOGLE_CLIENT_ID missing — bundled OAuth will be disabled");
+			} else if (!secret) {
+				console.warn("mc-credentials: GOOGLE_CLIENT_SECRET missing — bundled OAuth will be disabled");
+			}
+			const key = Array.from(randomBytes(32));
+			build.initialOptions.define = {
+				...(build.initialOptions.define ?? {}),
+				__MC_GOOGLE_CLIENT_ID_XOR__: JSON.stringify(id ? xorEncode(id, key) : []),
+				__MC_GOOGLE_CLIENT_SECRET_XOR__: JSON.stringify(secret ? xorEncode(secret, key) : []),
+				__MC_GOOGLE_XOR_KEY__: JSON.stringify(key),
+			};
+		},
+	};
+}
+// -----------------------------------------------------------------------------
+
 const context = await esbuild.context({
+	plugins: [credentialsPlugin()],
 	banner: {
 		js: banner,
 	},

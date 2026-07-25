@@ -1301,3 +1301,26 @@ ul.mc-action-tasks {
 	font-size: var(--font-ui-smaller);
 	margin-bottom: var(--size-4-4);
 }
+
+/* Advanced credentials collapsible */
+.mc-advanced-credentials {
+	margin-top: var(--size-4-2);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	padding: 0 var(--size-4-3);
+}
+.mc-advanced-credentials-summary {
+	cursor: pointer;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+	padding: var(--size-4-2) 0;
+	user-select: none;
+}
+.mc-advanced-credentials-summary:hover {
+	color: var(--text-normal);
+}
+.mc-advanced-credentials-desc {
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+	margin: 0 0 var(--size-4-2);
+}

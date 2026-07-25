@@ -207,6 +207,7 @@ import {
 import { MeetingDetector } from "./detect/meetingDetector";
 import { googleMeetActive, zoomInMeeting } from "./detect/probe";
 import { execFile } from "child_process";
+import { BUNDLED_CLIENT_ID, BUNDLED_CLIENT_SECRET } from "./auth/credentials";
 
 /**
  * How a transcribe run treats speaker separation:
@@ -272,9 +273,20 @@ export default class SystemRecordingPlugin extends Plugin {
 	private oauth = new GoogleOAuth(
 		{
 			getCredentials: () => {
-				const id = this.settings.googleClientId.trim();
-				const secret = this.settings.googleClientSecret.trim();
-				return id && secret ? { client_id: id, client_secret: secret } : null;
+				const idOverride = this.settings.googleClientId.trim();
+				const secretOverride = this.settings.googleClientSecret.trim();
+				// Treat overrides atomically: a partial override (one field set,
+				// the other blank) would silently pair mismatched credentials and
+				// produce an opaque Google 401. Require both or neither.
+				if (idOverride || secretOverride) {
+					return idOverride && secretOverride
+						? { client_id: idOverride, client_secret: secretOverride }
+						: null;
+				}
+				// No overrides: use bundled credentials.
+				return BUNDLED_CLIENT_ID && BUNDLED_CLIENT_SECRET
+					? { client_id: BUNDLED_CLIENT_ID, client_secret: BUNDLED_CLIENT_SECRET }
+					: null;
 			},
 			getTokens: () => this.settings.googleTokens,
 			setTokens: async (tokens) => {
@@ -802,7 +814,7 @@ export default class SystemRecordingPlugin extends Plugin {
         this.settings.googleTokens = localTokens ?? legacyTokens;
         // localStorage is authoritative: use its value even when it's an empty
         // string (an intentionally cleared secret) and only fall back to the
-        // legacy data.json copy when localStorage has nothing.
+        // legacy data.json copy when localStorage has nothing at all.
         this.settings.googleClientSecret =
             typeof localSecret === "string" ? localSecret : legacySecret;
         // If data.json still carries either secret (whether or not localStorage

@@ -10,6 +10,13 @@ export default defineConfig({
 			),
 		},
 	},
+	define: {
+		// Mirror what the esbuild credentials plugin injects at build time.
+		// Tests use empty arrays so credentials.ts resolves to empty strings.
+		__MC_GOOGLE_CLIENT_ID_XOR__: "[]",
+		__MC_GOOGLE_CLIENT_SECRET_XOR__: "[]",
+		__MC_GOOGLE_XOR_KEY__: "[]",
+	},
 	test: {
 		include: ["src/**/*.test.ts"],
 		environment: "node",

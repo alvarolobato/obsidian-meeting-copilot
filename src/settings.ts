@@ -470,31 +470,6 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         new Setting(containerEl).setName(s.settings.googleHeading).setHeading();
 
         new Setting(containerEl)
-            .setName(s.settings.clientId.name)
-            .setDesc(s.settings.clientId.desc)
-            .addText((text) =>
-                text
-                    .setValue(this.plugin.settings.googleClientId)
-                    .onChange(async (value) => {
-                        this.plugin.settings.googleClientId = value.trim();
-                        await this.plugin.saveSettings();
-                    })
-            );
-
-        new Setting(containerEl)
-            .setName(s.settings.clientSecret.name)
-            .setDesc(s.settings.clientSecret.desc)
-            .addText((text) => {
-                text.inputEl.type = "password";
-                text
-                    .setValue(this.plugin.settings.googleClientSecret)
-                    .onChange(async (value) => {
-                        this.plugin.settings.googleClientSecret = value.trim();
-                        await this.plugin.saveSettings();
-                    });
-            });
-
-        new Setting(containerEl)
             .setName(s.settings.googleAuth.name)
             .setDesc(
                 this.plugin.isCalendarAuthenticated()
@@ -514,6 +489,45 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                         this.display();
                     })
             );
+
+        // Advanced: credential overrides — collapsed by default so the common
+        // path (use bundled credentials) requires zero configuration.
+        const advancedDetails = containerEl.createEl("details", {
+            cls: "mc-advanced-credentials",
+        });
+        advancedDetails.createEl("summary", {
+            text: s.settings.advancedCredentials.summary,
+            cls: "mc-advanced-credentials-summary",
+        });
+        const advancedDesc = advancedDetails.createEl("p", {
+            cls: "mc-advanced-credentials-desc",
+        });
+        advancedDesc.setText(s.settings.advancedCredentials.desc);
+
+        new Setting(advancedDetails)
+            .setName(s.settings.clientId.name)
+            .setDesc(s.settings.clientId.desc)
+            .addText((text) =>
+                text
+                    .setValue(this.plugin.settings.googleClientId)
+                    .onChange(async (value) => {
+                        this.plugin.settings.googleClientId = value.trim();
+                        await this.plugin.saveSettings();
+                    })
+            );
+
+        new Setting(advancedDetails)
+            .setName(s.settings.clientSecret.name)
+            .setDesc(s.settings.clientSecret.desc)
+            .addText((text) => {
+                text.inputEl.type = "password";
+                text
+                    .setValue(this.plugin.settings.googleClientSecret)
+                    .onChange(async (value) => {
+                        this.plugin.settings.googleClientSecret = value.trim();
+                        await this.plugin.saveSettings();
+                    });
+            });
 
         new Setting(containerEl)
             .setName(s.settings.notificationsHeading)
