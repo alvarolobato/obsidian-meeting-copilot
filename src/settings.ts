@@ -107,6 +107,11 @@ export interface SystemRecordingSettings {
 	notifyBeforeStartMinutes: number;
 	calendarId: string;
 	exclusionKeywords: string;
+	/**
+	 * When on, drop calendar events that have no Meet/Zoom/Teams/Webex link
+	 * (conference data, location, or description — same detection as auto-open).
+	 */
+	excludeWithoutMeetingLink: boolean;
 	openMeetAutomatically: boolean;
 	/**
 	 * Whether the one-time "set macOS to Alerts so notifications persist" tip has
@@ -229,6 +234,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	notifyBeforeStartMinutes: 1,
 	calendarId: "primary",
 	exclusionKeywords: "",
+	excludeWithoutMeetingLink: false,
 	openMeetAutomatically: false,
 	notificationStyleHintShown: false,
 	detectMeetings: true,
@@ -733,28 +739,42 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                 });
             });
 
-        new Setting(containerEl)
-            .setName(s.settings.exclusionKeywords.name)
-            .setDesc(s.settings.exclusionKeywords.desc)
-            .addTextArea((ta) => {
-                ta
-                    .setValue(this.plugin.settings.exclusionKeywords)
-                    .onChange(async (value) => {
-                        this.plugin.settings.exclusionKeywords = value;
-                        await this.plugin.saveSettings();
-                    });
-                ta.inputEl.rows = TEXTAREA_ROWS;
-                ta.inputEl.addClass("meeting-copilot-template-input");
-                // Re-poll and refresh the agenda once editing ends so newly
-                // excluded events drop out without waiting for the next poll.
-                this.plugin.registerDomEvent(ta.inputEl, "blur", () => {
-                    this.plugin.refreshCalendarNow();
-                    this.plugin.refreshAgenda();
-                });
-            });
+		new Setting(containerEl)
+			.setName(s.settings.exclusionKeywords.name)
+			.setDesc(s.settings.exclusionKeywords.desc)
+			.addTextArea((ta) => {
+				ta
+					.setValue(this.plugin.settings.exclusionKeywords)
+					.onChange(async (value) => {
+						this.plugin.settings.exclusionKeywords = value;
+						await this.plugin.saveSettings();
+					});
+				ta.inputEl.rows = TEXTAREA_ROWS;
+				ta.inputEl.addClass("meeting-copilot-template-input");
+				// Re-poll and refresh the agenda once editing ends so newly
+				// excluded events drop out without waiting for the next poll.
+				this.plugin.registerDomEvent(ta.inputEl, "blur", () => {
+					this.plugin.refreshCalendarNow();
+					this.plugin.refreshAgenda();
+				});
+			});
 
-        new Setting(containerEl)
-            .setName(s.settings.agendaLookAhead.name)
+		new Setting(containerEl)
+			.setName(s.settings.excludeWithoutMeetingLink.name)
+			.setDesc(s.settings.excludeWithoutMeetingLink.desc)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.excludeWithoutMeetingLink)
+					.onChange(async (value) => {
+						this.plugin.settings.excludeWithoutMeetingLink = value;
+						await this.plugin.saveSettings();
+						this.plugin.refreshCalendarNow();
+						this.plugin.refreshAgenda();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName(s.settings.agendaLookAhead.name)
             .setDesc(s.settings.agendaLookAhead.desc)
             .addText((text) => {
                 text.inputEl.type = "number";

@@ -49,3 +49,16 @@ export function shouldRecord(event: FilterableEvent, exclusionKeywords: string[]
 	if (event.allDay) return false;
 	return !matchesExclusionKeyword(event.summary, exclusionKeywords);
 }
+
+/**
+ * When `requireMeetingLink` is on, keep only events that already have a
+ * resolved conference URL (Meet/Zoom/Teams/Webex — same detection as auto-open).
+ * Off (the default) is a no-op.
+ */
+export function filterRequireMeetingLink<T extends { meetLink: string | null }>(
+	events: T[],
+	requireMeetingLink: boolean
+): T[] {
+	if (!requireMeetingLink) return events;
+	return events.filter((e) => !!e.meetLink);
+}

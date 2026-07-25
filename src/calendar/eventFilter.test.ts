@@ -4,6 +4,7 @@ import {
 	parseKeywords,
 	isMeetingEventType,
 	matchesExclusionKeyword,
+	filterRequireMeetingLink,
 } from "./eventFilter";
 
 describe("shouldRecord", () => {
@@ -67,5 +68,26 @@ describe("parseKeywords", () => {
 
 	it("returns an empty array for empty input", () => {
 		expect(parseKeywords("")).toEqual([]);
+	});
+});
+
+describe("filterRequireMeetingLink", () => {
+	const withLink = { id: "a", meetLink: "https://meet.google.com/abc-defg-hij" };
+	const withoutLink = { id: "b", meetLink: null };
+
+	it("is a no-op when the filter is off", () => {
+		expect(
+			filterRequireMeetingLink([withLink, withoutLink], false)
+		).toEqual([withLink, withoutLink]);
+	});
+
+	it("keeps only events with a conference link when on", () => {
+		expect(
+			filterRequireMeetingLink([withLink, withoutLink], true)
+		).toEqual([withLink]);
+	});
+
+	it("returns an empty list when nothing has a link", () => {
+		expect(filterRequireMeetingLink([withoutLink], true)).toEqual([]);
 	});
 });

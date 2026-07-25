@@ -1789,7 +1789,8 @@ export default class SystemRecordingPlugin extends Plugin {
 			new Date(minMs),
 			new Date(maxMs),
 			250,
-			parseKeywords(this.settings.exclusionKeywords)
+			parseKeywords(this.settings.exclusionKeywords),
+			this.settings.excludeWithoutMeetingLink
 		);
 		return events.map((e) => ({
 			id: e.id,
@@ -2387,7 +2388,8 @@ export default class SystemRecordingPlugin extends Plugin {
             from,
             to,
             250,
-            parseKeywords(this.settings.exclusionKeywords)
+            parseKeywords(this.settings.exclusionKeywords),
+            this.settings.excludeWithoutMeetingLink
         )
             .then((events) => {
                 this.dashboardEventsCache = { at: Date.now(), events };
@@ -3374,7 +3376,8 @@ export default class SystemRecordingPlugin extends Plugin {
             new Date(fromMs),
             new Date(toMs),
             250,
-            parseKeywords(this.settings.exclusionKeywords)
+            parseKeywords(this.settings.exclusionKeywords),
+            this.settings.excludeWithoutMeetingLink
         );
         const index = buildNoteIndex(this.app);
         return events
