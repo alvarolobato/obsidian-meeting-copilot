@@ -35,6 +35,8 @@ re-synced, **except** the small, clearly marked patches below. Grep for
 | `application/TranscriptionController.ts` | one `warn` → `debug` for "local VAD unavailable" | server-side chunking is our expected mixed-path default, so it fired on every run |
 | `config/ModelProcessingConfig.ts` | `whisper`/`whisperTs`: `maxConcurrentChunks` 2 → 6, `rateLimitDelayMs` 3000 → 1000 | our LiteLLM/whisper gateway runs ~2.5x real-time per chunk, so 2-wide made a 30-min meeting take ~1700s/pass (x2 diarized); the gateway tolerates more parallelism and the network-retry backoff absorbs 429s |
 | `application/TranscriptionController.ts` | added `transcribeChunks()` (runs the strategy on caller-supplied `AudioChunk[]`, skipping file load + AudioPipeline chunking) and extracted `createServiceAndStrategy()` from `createWorkflow()` to share model-family selection | the diarized pre-gate (issue #67) slices each stream to its speech windows and uploads only speech; each chunk's absolute `startTime` is offset back onto segment times by `WhisperClient`, so the merge stays on the shared clock |
+| `application/strategies/WhisperTranscriptionStrategy.ts` | whisper-1 (non-ts) uses `mergeWithOverlapRemoval` even when segments are present | timestamp dedup duplicated/dropped words at every ~20s chunk boundary (issue #23) |
+| `core/transcription/TranscriptionMerger.ts` | `deduplicateSegments` copies segments, appends only the non-overlapping text fraction on extend, keeps novel text on time-containment | same #23 fix for the whisper-1-ts / timestamp merge path |
 
 Two files are **added** (not from upstream):
 

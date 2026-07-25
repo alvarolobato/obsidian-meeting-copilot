@@ -3,6 +3,7 @@ import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
 import type { RecordingFormat } from "./transcribe/sidecar";
+import { formatLogData } from "./util/logLine";
 
 export type { RecordingFormat };
 
@@ -147,10 +148,13 @@ export function parseStatusLines(
  * the line is visible in Obsidian's console without switching on Verbose — the
  * recorder's only signals are otherwise ephemeral Notices, which makes a
  * "recording didn't start" failure impossible to diagnose after the fact.
+ * Single-string payloads so console exports don't show `Object` (#129).
  */
 function log(event: string, data?: Record<string, unknown>): void {
     if (data) {
-        console.warn(`[Meeting Copilot][recorder] ${event}`, data);
+        console.warn(
+            `[Meeting Copilot][recorder] ${event} ${formatLogData(data)}`
+        );
     } else {
         console.warn(`[Meeting Copilot][recorder] ${event}`);
     }
@@ -160,14 +164,40 @@ export class Recorder {
     private process: ChildProcess | null = null;
     private _isRecording = false;
     private stopFilePath: string | null = null;
+    /** Basename of the output path — correlates start/stop/exit in console exports (#129). */
+    private sessionId: string | null = null;
+    /** True after this session's stop-file has been written (#130). */
+    private stopSignaled = false;
     /** Whether the helper has emitted at least one "recording" status this run. */
     private loggedRecording = false;
+    /** Injected for unit tests (#130). */
+    private readonly writeStopFile: (path: string, data: string) => void;
 
     onStatus: ((status: RecorderStatus) => void) | null = null;
     onError: ((message: string) => void) | null = null;
 
+    constructor(opts?: { writeStopFile?: (path: string, data: string) => void }) {
+        this.writeStopFile = opts?.writeStopFile ?? ((p, d) => fs.writeFileSync(p, d));
+    }
+
     get isRecording(): boolean {
         return this._isRecording;
+    }
+
+    /** Test seam: whether stop() has already written the stop-file this session. */
+    get hasStopBeenSignaled(): boolean {
+        return this.stopSignaled;
+    }
+
+    /**
+     * Test-only: mark as recording with a stop-file path so `stop()` can be
+     * exercised without spawning the helper (#130).
+     */
+    armForStopTest(stopFilePath: string, sessionId = "test-session"): void {
+        this._isRecording = true;
+        this.stopFilePath = stopFilePath;
+        this.sessionId = sessionId;
+        this.stopSignaled = false;
     }
 
     start(binaryPath: string, outputPath: string, opts?: RecorderStartOptions): void {
@@ -175,7 +205,10 @@ export class Recorder {
             // A start slipped past the caller's own guard while a prior run was
             // still finalizing — log it, since the caller may have already
             // created the note/folder and would otherwise see a silent no-op.
-            log("start ignored: already recording", { outputPath });
+            log("start ignored: already recording", {
+                session: this.sessionId,
+                outputPath,
+            });
             return;
         }
 
@@ -184,6 +217,8 @@ export class Recorder {
             `system-recorder-stop-${Date.now()}`
         );
         this.stopFilePath = stopFile;
+        this.sessionId = path.basename(outputPath);
+        this.stopSignaled = false;
 
         const spawnArgs = [
             "start", "--output", outputPath,
@@ -198,6 +233,7 @@ export class Recorder {
         }
 
         log("spawning helper", {
+            session: this.sessionId,
             binaryPath,
             args: spawnArgs.join(" "),
         });
@@ -221,10 +257,14 @@ export class Recorder {
                 if (status.status === "recording") {
                     if (!this.loggedRecording) {
                         this.loggedRecording = true;
-                        log("helper reports recording", { file: status.file });
+                        log("helper reports recording", {
+                            session: this.sessionId,
+                            file: status.file,
+                        });
                     }
                 } else {
                     log(`helper status: ${status.status}`, {
+                        session: this.sessionId,
                         file: status.file,
                         message: status.message,
                     });
@@ -243,16 +283,19 @@ export class Recorder {
                 // Core Audio / SCK emit routine warnings on stderr during
                 // healthy capture — log only; Notices come from spawn/exit/
                 // terminal "error" status (#127).
-                log("helper stderr", { msg });
+                log("helper stderr", { session: this.sessionId, msg });
             }
         });
 
         proc.on("close", (code: number | null) => {
             const wasRecording = this._isRecording;
+            const session = this.sessionId;
             this._isRecording = false;
             this.process = null;
             this.stopFilePath = null;
+            this.stopSignaled = false;
             log("helper exited", {
+                session,
                 code,
                 wasRecording,
                 everReportedRecording: this.loggedRecording,
@@ -271,21 +314,34 @@ export class Recorder {
             this._isRecording = false;
             this.process = null;
             this.stopFilePath = null;
-            log("helper spawn error", { message: err.message });
+            this.stopSignaled = false;
+            log("helper spawn error", {
+                session: this.sessionId,
+                message: err.message,
+            });
             this.onError?.(err.message);
         });
     }
 
     stop(): void {
+        if (this.stopSignaled) {
+            log("stop ignored: already signaled", { session: this.sessionId });
+            return;
+        }
         if (this._isRecording && this.stopFilePath) {
             // Create the stop file - the Swift CLI polls for this
-            log("stop requested (writing stop-file)", { stopFile: this.stopFilePath });
+            log("stop requested (writing stop-file)", {
+                session: this.sessionId,
+                stopFile: this.stopFilePath,
+            });
             try {
-                fs.writeFileSync(this.stopFilePath, "stop");
+                this.writeStopFile(this.stopFilePath, "stop");
+                this.stopSignaled = true;
             } catch (e) {
                 // If /tmp is unwritable, try to terminate the helper so the UI
                 // is not stuck in a recording state (#127).
                 log("stop-file write failed; killing helper", {
+                    session: this.sessionId,
                     message: e instanceof Error ? e.message : String(e),
                 });
                 this._isRecording = false;
@@ -301,7 +357,7 @@ export class Recorder {
                 );
             }
         } else {
-            log("stop ignored: not recording");
+            log("stop ignored: not recording", { session: this.sessionId });
         }
     }
 }

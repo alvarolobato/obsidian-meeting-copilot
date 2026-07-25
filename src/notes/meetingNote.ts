@@ -993,9 +993,25 @@ export async function insertTranscript(
 	transcript: string,
 	opts?: { append?: boolean }
 ): Promise<void> {
-	const content = await app.vault.read(file);
-	const next = transcriptAtBottom(content, transcript, opts?.append ?? false);
-	if (next !== content) await app.vault.modify(file, next);
+	const append = opts?.append ?? false;
+	// Atomic RMW so concurrent user edits between read and write aren't
+	// clobbered (#19). Falls back to read+modify when `process` is absent
+	// (older mocks / tests).
+	const vault = app.vault as App["vault"] & {
+		process?: (
+			f: TFile,
+			fn: (data: string) => string
+		) => Promise<string>;
+	};
+	if (typeof vault.process === "function") {
+		await vault.process(file, (content) =>
+			transcriptAtBottom(content, transcript, append)
+		);
+	} else {
+		const content = await app.vault.read(file);
+		const next = transcriptAtBottom(content, transcript, append);
+		if (next !== content) await app.vault.modify(file, next);
+	}
 	await app.fileManager.processFrontMatter(file, (fm) => {
 		const f = fm as Record<string, unknown>;
 		f.status = "transcribed";
