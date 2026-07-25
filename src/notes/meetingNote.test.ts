@@ -20,6 +20,8 @@ import {
 	type MeetingEventInfo,
 	type MeetingNoteConfig,
 	normalizeFolderPath,
+	notePathDeleted,
+	notePathRenamed,
 	parseStampDate,
 	recordingLinkTarget,
 	recordingLinkTargets,
@@ -84,6 +86,10 @@ class FakeVault {
 
 	async read(file: TFile): Promise<string> {
 		return this.contents.get(file.path) ?? "";
+	}
+
+	async cachedRead(file: TFile): Promise<string> {
+		return this.read(file);
 	}
 
 	async modify(file: TFile, data: string): Promise<void> {
@@ -620,6 +626,49 @@ describe("createMeetingNote", () => {
 		);
 		expect(second.file).not.toBe(reclaimed);
 		expect(vault.frontmatterFor(reclaimed)?.event_id).toBe("evt-b");
+	});
+
+	it("gives concurrent same-title creates distinct paths", async () => {
+		const vault = new FakeVault();
+		const app = makeApp(vault);
+		const [a, b] = await Promise.all([
+			createMeetingNote(app, ev({ id: "evt-a", summary: "Standup" }), cfg()),
+			createMeetingNote(app, ev({ id: "evt-b", summary: "Standup" }), cfg()),
+		]);
+		expect(a.notePath).not.toBe(b.notePath);
+		expect(vault.frontmatterFor(a.file)?.event_id).toBe("evt-a");
+		expect(vault.frontmatterFor(b.file)?.event_id).toBe("evt-b");
+	});
+
+	it("updates identity maps on rename and clears them on delete", async () => {
+		const vault = new FakeVault();
+		const app = makeApp(vault);
+		const ref = await createMeetingNote(
+			app,
+			ev({ id: "evt-move", summary: "Standup" }),
+			cfg()
+		);
+		const oldPath = ref.notePath;
+		const moved = vault.addNote("Archive/Standup.md", { event_id: "evt-move" });
+		vault.deleteNote(oldPath);
+		notePathRenamed(oldPath, moved.path);
+
+		vault.markCacheStale(moved.path);
+		const again = await createMeetingNote(
+			app,
+			ev({ id: "evt-move", summary: "Standup" }),
+			cfg()
+		);
+		expect(again.file.path).toBe(moved.path);
+
+		notePathDeleted(moved.path);
+		vault.deleteNote(moved.path);
+		const recreated = await createMeetingNote(
+			app,
+			ev({ id: "evt-move", summary: "Standup" }),
+			cfg()
+		);
+		expect(recreated.notePath).not.toBe(moved.path);
 	});
 
 	it("recovers from a create collision by reusing the file that won the race", async () => {

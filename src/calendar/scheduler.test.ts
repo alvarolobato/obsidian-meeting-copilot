@@ -196,12 +196,44 @@ describe("CalendarScheduler", () => {
 		s.tick();
 		expect(deps.onEventStart).toHaveBeenCalledTimes(1);
 
-		// Same id returns again after being pruned; with a fresh phase it can fire again.
+		// Same id+start returns again after being pruned; with a fresh phase it can fire again.
 		events = [];
 		await s.poll(); // prunes e1
 		events = [evt()];
 		await s.poll(); // e1 back
 		now.v = T + 2000;
+		s.tick();
+		expect(deps.onEventStart).toHaveBeenCalledTimes(2);
+	});
+
+	it("does not re-fire start for the same id+start after a mid-poll gap", async () => {
+		const now = { v: T + 1000 };
+		const events = [evt()];
+		const deps = makeDeps(now, [], { fetchEvents: async () => events });
+		const s = new CalendarScheduler(deps);
+		await s.poll();
+		s.tick();
+		expect(deps.onEventStart).toHaveBeenCalledTimes(1);
+		// Event stays in the next poll (no prune) — phase key keeps started=true.
+		await s.poll();
+		now.v = T + 2000;
+		s.tick();
+		expect(deps.onEventStart).toHaveBeenCalledTimes(1);
+	});
+
+	it("treats a reused id with a new start as a fresh meeting", async () => {
+		const now = { v: T + 1000 };
+		let events = [evt()];
+		const deps = makeDeps(now, [], { fetchEvents: async () => events });
+		const s = new CalendarScheduler(deps);
+		await s.poll();
+		s.tick();
+		expect(deps.onEventStart).toHaveBeenCalledTimes(1);
+
+		const nextStart = T + 60 * 60 * 1000;
+		events = [evt({ start: nextStart, end: nextStart + 30 * 60 * 1000 })];
+		await s.poll();
+		now.v = nextStart + 1000;
 		s.tick();
 		expect(deps.onEventStart).toHaveBeenCalledTimes(2);
 	});

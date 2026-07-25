@@ -504,32 +504,76 @@ async function ensureFolder(app: App, folder: string): Promise<void> {
 	}
 }
 
-/** True if the note has an `event_id` that belongs to a *different* meeting. */
-function belongsToOtherEvent(app: App, file: TFile, eventId: string): boolean {
+/**
+ * True if the note has an `event_id` that belongs to a *different* meeting.
+ * When metadataCache has not indexed the file yet, falls back to the session
+ * map and then a direct vault read (#118).
+ */
+async function belongsToOtherEvent(
+	app: App,
+	file: TFile,
+	eventId: string
+): Promise<boolean> {
 	const fm = app.metadataCache.getFileCache(file)?.frontmatter as
 		| Record<string, unknown>
 		| undefined;
-	const existing = fm?.["event_id"];
-	return (
-		typeof existing === "string" && existing.length > 0 && existing !== eventId
-	);
+	if (fm) {
+		const existing = fm["event_id"];
+		return (
+			typeof existing === "string" &&
+			existing.length > 0 &&
+			existing !== eventId
+		);
+	}
+	// Cache miss: session map bridges same-tick lag for notes we just stamped.
+	const sessionId = sessionEventIdByPath.get(file.path);
+	if (typeof sessionId === "string" && sessionId.length > 0) {
+		return sessionId !== eventId;
+	}
+	// Still no cache: read the file and parse `event_id` from YAML frontmatter
+	// only (require a closing fence so a body line can't spoof identity).
+	try {
+		const text = await app.vault.cachedRead(file);
+		const fm = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+		const existing = fm?.[1]?.match(/^event_id:\s*["']?([^\s"'#]+)/m)?.[1];
+		if (typeof existing === "string" && existing.length > 0) {
+			sessionEventIdByPath.set(file.path, existing);
+			return existing !== eventId;
+		}
+	} catch {
+		/* unreadable — treat as free below */
+	}
+	return false;
 }
 
 /**
  * Picks the note path for this event: reuses the base path when it's free or
  * already belongs to this event; otherwise appends " 2", " 3"… so two distinct
  * meetings that share a title + time never collapse into one note.
+ *
+ * Claims the chosen path in {@link sessionEventIdByPath} *before* returning so
+ * a concurrent create for a different event (same title) cannot reuse it in
+ * the create→stamp window when the file has no `event_id` yet (#118).
  */
-function resolveNotePath(
+async function resolveNotePath(
 	app: App,
 	folder: string,
 	basename: string,
 	eventId: string
-): string {
+): Promise<string> {
 	let candidate = normalizePath(`${folder}/${basename}.md`);
 	for (let n = 2; n < 1000; n++) {
+		const claimedBy = sessionEventIdByPath.get(candidate);
+		if (claimedBy && claimedBy !== eventId) {
+			candidate = normalizePath(`${folder}/${basename} ${n}.md`);
+			continue;
+		}
 		const file = app.vault.getAbstractFileByPath(candidate);
-		if (!(file instanceof TFile) || !belongsToOtherEvent(app, file, eventId)) {
+		if (
+			!(file instanceof TFile) ||
+			!(await belongsToOtherEvent(app, file, eventId))
+		) {
+			sessionEventIdByPath.set(candidate, eventId);
 			return candidate;
 		}
 		candidate = normalizePath(`${folder}/${basename} ${n}.md`);
@@ -591,6 +635,12 @@ async function stampFrontmatter(
  */
 const recentNoteByEventId = new Map<string, string>();
 
+/**
+ * Path → event_id for notes stamped this session. Used when metadataCache has
+ * not indexed frontmatter yet (#118 same-tick / cold-cache collision).
+ */
+const sessionEventIdByPath = new Map<string, string>();
+
 /** Bounds `recentNoteByEventId`; oldest entries are evicted first. */
 const RECENT_NOTE_CACHE_MAX = 200;
 
@@ -598,17 +648,57 @@ function rememberRecentNote(eventId: string, path: string): void {
 	// Re-insert so the entry moves to the back of the eviction order.
 	recentNoteByEventId.delete(eventId);
 	recentNoteByEventId.set(eventId, path);
+	sessionEventIdByPath.set(path, eventId);
 	if (recentNoteByEventId.size > RECENT_NOTE_CACHE_MAX) {
 		for (const oldest of recentNoteByEventId.keys()) {
+			const evictedPath = recentNoteByEventId.get(oldest);
 			recentNoteByEventId.delete(oldest);
+			// Drop the session claim only when it still points at this event —
+			// otherwise a newer claim on the same path would be wiped.
+			if (
+				evictedPath &&
+				sessionEventIdByPath.get(evictedPath) === oldest
+			) {
+				sessionEventIdByPath.delete(evictedPath);
+			}
 			if (recentNoteByEventId.size <= RECENT_NOTE_CACHE_MAX) break;
 		}
+	}
+}
+
+/**
+ * Keeps the recent-note / session maps accurate when the user renames or moves
+ * a meeting note (#118).
+ */
+export function notePathRenamed(oldPath: string, newPath: string): void {
+	const eventId = sessionEventIdByPath.get(oldPath);
+	if (eventId) {
+		sessionEventIdByPath.delete(oldPath);
+		sessionEventIdByPath.set(newPath, eventId);
+	}
+	for (const [id, path] of recentNoteByEventId) {
+		if (path === oldPath) {
+			recentNoteByEventId.set(id, newPath);
+			sessionEventIdByPath.set(newPath, id);
+			break;
+		}
+	}
+}
+
+/** Clears session / recent claims when a note is deleted (#118). */
+export function notePathDeleted(path: string): void {
+	const eventId = sessionEventIdByPath.get(path);
+	sessionEventIdByPath.delete(path);
+	if (eventId) recentNoteByEventId.delete(eventId);
+	for (const [id, p] of [...recentNoteByEventId]) {
+		if (p === path) recentNoteByEventId.delete(id);
 	}
 }
 
 /** Test-only: clears the module-level recent-note cache between test cases. */
 export function __resetRecentNoteCache(): void {
 	recentNoteByEventId.clear();
+	sessionEventIdByPath.clear();
 }
 
 function refFromFile(file: TFile): MeetingNoteRef {
@@ -658,7 +748,13 @@ export async function createMeetingNote(
 			const cachedId = (
 				cache?.frontmatter as Record<string, unknown> | undefined
 			)?.["event_id"];
-			if (!cache || cachedId === ev.id) return reuse(recent);
+			// Trust while the cache hasn't indexed frontmatter yet, or while it
+			// still carries this event's id. A different cached id means the
+			// path was reclaimed — drop the stale session entry too.
+			if (!cache?.frontmatter || cachedId === ev.id) {
+				return reuse(recent);
+			}
+			sessionEventIdByPath.delete(recentPath);
 		}
 		recentNoteByEventId.delete(ev.id);
 	}
@@ -676,7 +772,7 @@ export async function createMeetingNote(
 	const folder = resolveMeetingFolderFromScan(entries, ev, cfg);
 	await ensureFolder(app, folder);
 
-	const notePath = resolveNotePath(
+	const notePath = await resolveNotePath(
 		app,
 		folder,
 		meetingBasename(ev, cfg.titlePattern),

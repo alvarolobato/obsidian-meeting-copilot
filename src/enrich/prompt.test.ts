@@ -3,8 +3,11 @@ import {
 	ADHOC_TITLE_PROMPT_SUFFIX,
 	DEFAULT_ENRICH_PROMPT,
 	effectiveEnrichPrompt,
+	estimateTokens,
 	extractEmbeddedTitle,
 	fillPrompt,
+	TRANSCRIPT_TRUNCATION_MARKER,
+	truncateTranscriptForBudget,
 } from "./prompt";
 
 describe("fillPrompt", () => {
@@ -55,6 +58,44 @@ describe("fillPrompt", () => {
 			}
 		);
 		expect(out).toBe("(none)|(none)|(none)|(none)");
+	});
+
+	it("middle-truncates a long transcript when over budget", () => {
+		const head = "START ".repeat(200);
+		const mid = "MIDDLE ".repeat(2000);
+		const tail = " END".repeat(200);
+		const transcript = head + mid + tail;
+		const out = fillPrompt(
+			"{{transcript}}",
+			{
+				title: "t",
+				date: "d",
+				attendees: "",
+				notes: "",
+				actionItems: "",
+				followUps: "",
+				transcript,
+			},
+			{ maxTranscriptTokens: 200 }
+		);
+		expect(out).toContain(TRANSCRIPT_TRUNCATION_MARKER.trim());
+		expect(out.startsWith("START")).toBe(true);
+		expect(out.trimEnd().endsWith("END")).toBe(true);
+		expect(out).not.toContain("MIDDLE MIDDLE MIDDLE");
+		expect(estimateTokens(out)).toBeLessThanOrEqual(220);
+	});
+});
+
+describe("truncateTranscriptForBudget", () => {
+	it("is a no-op under budget or when maxTokens is 0", () => {
+		expect(truncateTranscriptForBudget("short", 100)).toEqual({
+			text: "short",
+			truncated: false,
+		});
+		expect(truncateTranscriptForBudget("x".repeat(1000), 0)).toEqual({
+			text: "x".repeat(1000),
+			truncated: false,
+		});
 	});
 });
 

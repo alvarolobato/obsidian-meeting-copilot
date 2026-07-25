@@ -100,12 +100,29 @@ export async function chatComplete(p: ChatParams): Promise<string> {
 		if (onAbort) p.signal?.removeEventListener("abort", onAbort);
 	}
 
-	const data = res.json as ChatResponse | undefined;
+	// Status before `.json`: Obsidian's getter parses on access, so a 502 HTML
+	// body would throw SyntaxError instead of a useful LLM status error (#119).
 	if (res.status < 200 || res.status >= 300) {
-		const detail =
-			data?.error?.message ??
-			(typeof res.text === "string" ? res.text.slice(0, 300) : "");
+		let detail = "";
+		try {
+			const errBody = res.json as ChatResponse | undefined;
+			detail = errBody?.error?.message ?? "";
+		} catch {
+			/* non-JSON error body */
+		}
+		if (!detail && typeof res.text === "string") {
+			detail = res.text.slice(0, 300);
+		}
 		throw new Error(`LLM request failed (${res.status}): ${detail}`);
+	}
+
+	let data: ChatResponse | undefined;
+	try {
+		data = res.json as ChatResponse | undefined;
+	} catch {
+		throw new Error(
+			`LLM request failed (${res.status}): response was not JSON`
+		);
 	}
 
 	const content = data?.choices?.[0]?.message?.content;

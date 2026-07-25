@@ -14,7 +14,6 @@ export interface GCalEvent {
 	location: string;
 	start: Date;
 	end: Date;
-	allDay: boolean;
 	meetLink: string | null;
 	htmlLink: string;
 	/** Display names (falling back to email) of human attendees, excluding rooms/resources. */
@@ -259,16 +258,13 @@ export async function listEvents(
 		.filter((ev) => ev.status !== "cancelled") // drop cancelled meetings
 		.filter((ev) => !isDeclinedByUser(ev.attendees)) // drop meetings the user declined
 		.filter((ev) => isMeetingEventType(ev.eventType))
-		.filter((ev) => !ev.start?.date) // drop all-day events (date-only start)
+		// All-day events (date-only start) are dropped deliberately (#121 option B):
+		// they are not meetings we record, and we do not surface them in the agenda.
+		.filter((ev) => !ev.start?.date)
 		.filter((ev) => !matchesExclusionKeyword(ev.summary ?? "", exclusionKeywords))
 		.map((ev) => {
-		const isAllDay = !!ev.start?.date;
-		const start = isAllDay
-			? new Date((ev.start?.date ?? "") + "T00:00:00")
-			: new Date(ev.start?.dateTime ?? "");
-		const end = isAllDay
-			? new Date((ev.end?.date ?? "") + "T00:00:00")
-			: new Date(ev.end?.dateTime ?? "");
+		const start = new Date(ev.start?.dateTime ?? "");
+		const end = new Date(ev.end?.dateTime ?? "");
 		const organizer =
 			(ev.organizer?.displayName || ev.organizer?.email || "").trim() || null;
 		return {
@@ -277,7 +273,6 @@ export async function listEvents(
 			location: ev.location ?? "",
 			start,
 			end,
-			allDay: isAllDay,
 			meetLink:
 				extractMeetLink(ev) ??
 				extractMeetingUrlFromText(ev.location, ev.description),

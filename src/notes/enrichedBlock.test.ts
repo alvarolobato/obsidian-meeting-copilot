@@ -30,6 +30,16 @@ describe("withEnrichedBlock", () => {
 		expect(out.startsWith("---\ntitle: M\n---\n")).toBe(true);
 		expect(out.indexOf("---", 3)).toBeLessThan(out.indexOf("[!ai-notes]"));
 	});
+
+	it("keeps empty frontmatter and EOF-closing fences above the callout", () => {
+		const empty = withEnrichedBlock("---\n---\n# M\n\nbody\n", "summary");
+		expect(empty.startsWith("---\n---\n")).toBe(true);
+		expect(empty.indexOf("---", 3)).toBeLessThan(empty.indexOf("[!ai-notes]"));
+
+		const eof = withEnrichedBlock("---\ntitle: M\n---", "summary");
+		expect(eof.startsWith("---\ntitle: M\n---")).toBe(true);
+		expect(eof.indexOf("[!ai-notes]")).toBeGreaterThan(eof.indexOf("---", 3));
+	});
 });
 
 describe("stripEnriched", () => {
@@ -74,6 +84,19 @@ describe("extractTranscript", () => {
 		const content =
 			"# M\n\n> [!quote]- Transcript\n> Ann: hi\n>\n> Bob: yo\n";
 		expect(extractTranscript(content)).toBe("Ann: hi\n\nBob: yo");
+	});
+
+	it("ignores a hand-made Transcript callout of another type", () => {
+		const content = [
+			"# M",
+			"",
+			"> [!note] Transcript",
+			"> my annotations",
+			"",
+			"> [!quote]- Transcript",
+			"> Ann: hi",
+		].join("\n");
+		expect(extractTranscript(content)).toBe("Ann: hi");
 	});
 
 	it("falls back to a legacy '## Transcript' section", () => {
