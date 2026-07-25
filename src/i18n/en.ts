@@ -424,7 +424,7 @@ export const en = {
 		},
 		excludeWithoutMeetingLink: {
 			name: "Exclude meetings without a conference link",
-			desc: "Hide events that have no Google Meet, Zoom, Teams, or Webex link in the conference data, location, or description. Uses the same detection as 'Open meeting link automatically'. Off by default.",
+			desc: "Hide events that have no Google Meet, Zoom, Teams, or Webex link in the conference data, location, or description.",
 		},
 		openMeet: {
 			name: "Open meeting link automatically",
