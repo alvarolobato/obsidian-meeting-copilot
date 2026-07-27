@@ -29,11 +29,11 @@ export interface EndpointSettingsSlice {
 	fallbackEnrichModel: string;
 }
 
-/** True when the user configured a usable fallback base URL (+ key). */
+/** True when the user set a fallback base URL (API key is optional). */
 export function isFallbackEndpointConfigured(
 	s: EndpointSettingsSlice
 ): boolean {
-	return s.fallbackApiBaseUrl.trim().length > 0 && s.fallbackApiKey.trim().length > 0;
+	return s.fallbackApiBaseUrl.trim().length > 0;
 }
 
 /** Primary shared endpoint from settings. */

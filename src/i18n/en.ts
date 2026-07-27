@@ -482,27 +482,35 @@ export const en = {
 		},
 		fallbackEndpoint: {
 			summary: "Fallback endpoint (when primary is down)",
-			desc: "Optional second OpenAI-compatible service. Used automatically when the primary fails with a service error (timeout, network, 5xx, auth). Models can differ when the fallback gateway uses different names. For local transcription, enable “Fall back to remote on failure” so a local failure can reach the primary remote and then this fallback.",
+			desc: "Optional second OpenAI-compatible service. Used automatically when the primary fails with a service error (timeout, network, 5xx, auth). Pick fallback models under each primary model below. For local transcription, enable “Fall back to remote on failure” so a local failure can reach the primary remote and then this fallback.",
 		},
 		fallbackApiBaseUrl: {
-			name: "Fallback API base URL",
+			name: "API base URL",
 			desc: "Leave empty to disable fallback. Example: https://api.openai.com/v1 or http://localhost:11434/v1.",
 		},
 		fallbackApiKey: {
-			name: "Fallback API key",
-			desc: "Required when a fallback URL is set. Use any non-empty value for local servers that ignore keys.",
+			name: "API key",
+			desc: "Optional. Leave empty for local servers that ignore keys; set it when the fallback gateway requires auth.",
 		},
-		fallbackSttModel: {
-			name: "Fallback transcription model",
-			desc: "Wire model id on the fallback endpoint. Leave empty to reuse the primary transcription model name.",
+		fallbackModel: {
+			summary: "Fallback model",
+			descStt:
+				"When the primary endpoint fails. “Same as primary” reuses the transcription model name above.",
+			descEnrich:
+				"When the primary endpoint fails. “Same as primary” reuses the enrichment model name above.",
+			usePrimary: "Same as primary",
 		},
-		fallbackEnrichModel: {
-			name: "Fallback enrichment model",
-			desc: "Chat model id on the fallback endpoint. Leave empty to reuse the primary enrichment model name.",
+		remoteFallbackModel: {
+			name: "Remote transcription model",
+			desc: "Model used on the primary remote endpoint when local transcription fails. Run ‘Load models’ above to list what the endpoint exposes — type to filter.",
 		},
 		endpointActions: {
 			name: "Connection",
-			desc: "Verify the endpoint and load the models available for transcription and enrichment.",
+			desc: "Verify the primary endpoint (and the fallback, when configured) and load model lists for the pickers below.",
+		},
+		endpointStatus: {
+			ok: "Connected — models loaded",
+			error: "Connection failed",
 		},
 		transcriptionHeading: "Transcription",
 		transcriptionEngine: {
@@ -544,11 +552,11 @@ export const en = {
 		},
 		localFallback: {
 			name: "Fall back to remote on failure",
-			desc: "If local transcription fails, transcribe with the remote endpoint instead — when one is configured.",
+			desc: "If local transcription fails, transcribe with the remote endpoint instead — when one is configured. When on, pick the remote model (and optional fallback model) below.",
 		},
 		sttModel: {
 			name: "Transcription model",
-			desc: "Model sent to the endpoint. Run 'Load models' above to list the models your endpoint exposes — when it reports capabilities, the list is narrowed to speech-to-text models.",
+			desc: "Model sent to the endpoint. Run 'Load models' above to list the models your endpoint exposes — when it reports capabilities, the list is narrowed to speech-to-text models. Type to filter the list.",
 		},
 		sttApiType: {
 			name: "Engine (advanced)",
@@ -625,7 +633,11 @@ export const en = {
 		},
 		enrichModel: {
 			name: "Enrichment model",
-			desc: "Chat model used for enrichment. Use 'Load models' above to load the models your endpoint exposes, then pick one from the dropdown.",
+			desc: "Chat model used for enrichment. Use 'Load models' above to load the models your endpoint exposes, then pick one — type to filter the list.",
+		},
+		modelCombobox: {
+			placeholder: "Type to filter models…",
+			placeholderEmpty: "Model id",
 		},
 		testConnection: {
 			button: "Load models",
@@ -633,7 +645,15 @@ export const en = {
 			noBaseUrl: "Set the API base URL first.",
 			success: (n: number) =>
 				`Connected. Loaded ${n} model${n === 1 ? "" : "s"}.`,
+			successWithFallback: (primary: number, fallback: number) =>
+				`Connected. Loaded ${primary} primary and ${fallback} fallback model${fallback === 1 ? "" : "s"}.`,
 			empty: "Connected, but the endpoint returned no models.",
+			fallbackFailed: (msg: string) =>
+				`Primary models loaded; fallback endpoint failed: ${msg}`,
+			primaryFailedFallbackOk: (msg: string, n: number) =>
+				`Primary endpoint failed (${msg}). Loaded ${n} fallback model${n === 1 ? "" : "s"}.`,
+			primaryFailedNoFallback: (primaryMsg: string, fallbackMsg: string) =>
+				`Primary failed (${primaryMsg}); fallback failed (${fallbackMsg}).`,
 			failure: (msg: string) => `Connection failed: ${msg}`,
 		},
 		enrichOnTranscribe: {

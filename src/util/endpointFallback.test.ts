@@ -18,14 +18,20 @@ const base = {
 };
 
 describe("endpointFallback", () => {
-	it("reports unconfigured when URL or key is empty", () => {
+	it("reports unconfigured when URL is empty", () => {
 		expect(isFallbackEndpointConfigured(base)).toBe(false);
+		expect(
+			isFallbackEndpointConfigured({
+				...base,
+				fallbackApiKey: "fk",
+			})
+		).toBe(false);
 		expect(
 			isFallbackEndpointConfigured({
 				...base,
 				fallbackApiBaseUrl: "https://fb.example/v1",
 			})
-		).toBe(false);
+		).toBe(true);
 		expect(
 			isFallbackEndpointConfigured({
 				...base,
@@ -39,11 +45,10 @@ describe("endpointFallback", () => {
 		const fb = fallbackEndpoint({
 			...base,
 			fallbackApiBaseUrl: "https://fb.example/v1",
-			fallbackApiKey: "fk",
 		});
 		expect(fb).toEqual({
 			baseUrl: "https://fb.example/v1",
-			apiKey: "fk",
+			apiKey: "",
 			sttModel: "gpt-4o-transcribe",
 			sttApiType: "gpt-4o-transcribe",
 			enrichModel: "gpt-4o",

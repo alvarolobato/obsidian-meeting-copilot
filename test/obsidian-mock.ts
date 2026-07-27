@@ -70,6 +70,29 @@ export class Setting {
 	addDropdown(): this {
 		return this;
 	}
+	addSearch(): this {
+		return this;
+	}
+}
+
+/** Minimal stand-in so settings code that attaches model type-ahead can import. */
+export abstract class AbstractInputSuggest<T> {
+	limit = 100;
+	constructor(_app?: unknown, _inputEl?: unknown) {}
+	setValue(_value: string): void {}
+	getValue(): string {
+		return "";
+	}
+	close(): void {}
+	onSelect(_callback: (value: T, evt: MouseEvent | KeyboardEvent) => unknown): this {
+		return this;
+	}
+	protected abstract getSuggestions(query: string): T[] | Promise<T[]>;
+	abstract renderSuggestion(value: T, el: HTMLElement): void;
+	abstract selectSuggestion(
+		value: T,
+		evt: MouseEvent | KeyboardEvent
+	): void;
 }
 
 // --- requestUrl: tests swap in an implementation via __setRequestUrl ---

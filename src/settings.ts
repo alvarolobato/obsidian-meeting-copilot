@@ -33,6 +33,8 @@ import {
 } from "./transcribe/localModels";
 import { t, type Messages } from "./i18n";
 import { describeVersion } from "./buildInfo";
+import { mcLog } from "./util/logLine";
+import { ModelIdSuggest, type ModelOption } from "./ui/modelSuggest";
 
 export interface SystemRecordingSettings {
 	/** `{{placeholder}}` folder template for one-off meetings, e.g. "Meetings/{{year}}". */
@@ -391,10 +393,18 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
     plugin: SystemRecordingPlugin;
     /** Which settings pane is currently shown; preserved across `display()` re-renders. */
     private activeTab: SettingsTabId = "general";
-    /** Model ids fetched from the endpoint (populated by "Load models"), shared by transcription + enrichment. */
+    /** Model ids fetched from the primary endpoint (populated by "Load models"). */
     private models: string[] = [];
-    /** Per-model capabilities from the endpoint (LiteLLM), or null when the endpoint doesn't expose them (plain OpenAI). Drives the transcription-model filter. */
+    /** Model ids from the fallback endpoint (when configured + loaded). */
+    private fallbackModels: string[] = [];
+    /** Per-model capabilities from the primary endpoint (LiteLLM), or null when unavailable. */
     private capabilities: Map<string, ModelCapability> | null = null;
+    /** Capabilities from the fallback endpoint, or null. */
+    private fallbackCapabilities: Map<string, ModelCapability> | null = null;
+    /** Last Load-models result for the primary URL (session only). */
+    private primaryEndpointStatus: "idle" | "ok" | "error" = "idle";
+    /** Last Load-models result for the fallback URL (session only). */
+    private fallbackEndpointStatus: "idle" | "ok" | "error" = "idle";
     /** The `${baseUrl}::${model}` key currently being auto-assessed, so the badges can show "checking…". */
     private probingKey: string | null = null;
     /** Endpoint+model keys already auto-assessed this session, so re-renders don't re-fire the probe (even after an "unknown" result). */
@@ -404,6 +414,14 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
     private sttTimestampBadgeEl: HTMLElement | null = null;
     /** The engine-family dropdown, so a model change can update its value in place. */
     private sttEngineDropdown: DropdownComponent | null = null;
+    /** Host for remote vs local transcription rows — rebuilt in place on engine switch (no full-tab jump). */
+    private transcriptionEngineBodyEl: HTMLElement | null = null;
+    /** Engine remote/local dropdown — disabled in place while a local model downloads. */
+    private transcriptionEngineDropdown: DropdownComponent | null = null;
+    /** Host under the local→remote toggle for remote + fallback model pickers. */
+    private localFallbackModelsEl: HTMLElement | null = null;
+    /** Which fallback `<details>` were open before the last full `display()` (keyed by data-mc-details). */
+    private openDetailsKeys = new Set<string>();
     /** Input devices last enumerated from the helper, for the Microphone picker. Empty until listed. */
     private inputDevices: InputDevice[] = [];
     /** True while a device enumeration is in flight, so the button can show progress and re-entry is blocked. */
@@ -425,6 +443,8 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
     display(): void {
         const { containerEl } = this;
         const s = t();
+        this.captureOpenDetails();
+        const scrollTop = containerEl.scrollTop;
         containerEl.empty();
         containerEl.addClass("meeting-copilot-settings");
 
@@ -469,6 +489,28 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                 this.renderEnrichmentTab(pane);
                 break;
         }
+        this.restoreOpenDetails();
+        containerEl.scrollTop = scrollTop;
+    }
+
+    /** Remember which fallback `<details>` are open before a full re-render. */
+    private captureOpenDetails(): void {
+        this.openDetailsKeys.clear();
+        this.containerEl
+            .querySelectorAll<HTMLDetailsElement>("details[data-mc-details]")
+            .forEach((el) => {
+                const key = el.getAttribute("data-mc-details");
+                if (key && el.open) this.openDetailsKeys.add(key);
+            });
+    }
+
+    private restoreOpenDetails(): void {
+        this.containerEl
+            .querySelectorAll<HTMLDetailsElement>("details[data-mc-details]")
+            .forEach((el) => {
+                const key = el.getAttribute("data-mc-details");
+                if (key && this.openDetailsKeys.has(key)) el.open = true;
+            });
     }
 
     private renderTabBar(containerEl: HTMLElement): void {
@@ -572,23 +614,24 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 
         new Setting(containerEl).setName(s.settings.endpointHeading).setHeading();
 
-        new Setting(containerEl)
-            .setName(s.settings.apiBaseUrl.name)
-            .setDesc(s.settings.apiBaseUrl.desc)
-            .addText((text) =>
-                text
-                    .setPlaceholder("https://api.openai.com/v1")
-                    .setValue(this.plugin.settings.apiBaseUrl)
-                    .onChange(async (value) => {
-                        this.plugin.settings.apiBaseUrl = value.trim();
-                        await this.plugin.saveSettings();
-                        // The stored verdict is keyed on the old base URL, so the
-                        // badges now read "not checked yet"; repaint them and let
-                        // a re-probe run on the next model change / tab reopen.
-                        this.probedKeys.clear();
-                        this.refreshSttBadges();
-                    })
-            );
+        this.addEndpointUrlSetting(
+            containerEl,
+            s.settings.apiBaseUrl.name,
+            s.settings.apiBaseUrl.desc,
+            this.plugin.settings.apiBaseUrl,
+            "https://api.openai.com/v1",
+            this.primaryEndpointStatus,
+            async (value) => {
+                this.plugin.settings.apiBaseUrl = value.trim();
+                await this.plugin.saveSettings();
+                this.primaryEndpointStatus = "idle";
+                // The stored verdict is keyed on the old base URL, so the
+                // badges now read "not checked yet"; repaint them and let
+                // a re-probe run on the next model change / tab reopen.
+                this.probedKeys.clear();
+                this.refreshSttBadges();
+            }
+        );
 
         new Setting(containerEl)
             .setName(s.settings.apiKey.name)
@@ -605,15 +648,17 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                         // re-probed against the new credential.
                         this.plugin.settings.sttTimestampsProbeKey = "";
                         await this.plugin.saveSettings();
+                        this.primaryEndpointStatus = "idle";
                         this.probedKeys.clear();
                         this.refreshSttBadges();
                     });
             });
 
         // Optional failover endpoint — collapsed so the common single-service
-        // setup stays short.
+        // setup stays short. Model pickers live under each primary model below.
         const fallbackDetails = containerEl.createEl("details", {
             cls: "mc-fallback-endpoint",
+            attr: { "data-mc-details": "endpoint" },
         });
         fallbackDetails.createEl("summary", {
             text: s.settings.fallbackEndpoint.summary,
@@ -624,18 +669,19 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         });
         fallbackDesc.setText(s.settings.fallbackEndpoint.desc);
 
-        new Setting(fallbackDetails)
-            .setName(s.settings.fallbackApiBaseUrl.name)
-            .setDesc(s.settings.fallbackApiBaseUrl.desc)
-            .addText((text) =>
-                text
-                    .setPlaceholder("https://api.example.com/v1")
-                    .setValue(this.plugin.settings.fallbackApiBaseUrl)
-                    .onChange(async (value) => {
-                        this.plugin.settings.fallbackApiBaseUrl = value.trim();
-                        await this.plugin.saveSettings();
-                    })
-            );
+        this.addEndpointUrlSetting(
+            fallbackDetails,
+            s.settings.fallbackApiBaseUrl.name,
+            s.settings.fallbackApiBaseUrl.desc,
+            this.plugin.settings.fallbackApiBaseUrl,
+            "https://api.example.com/v1",
+            this.fallbackEndpointStatus,
+            async (value) => {
+                this.plugin.settings.fallbackApiBaseUrl = value.trim();
+                await this.plugin.saveSettings();
+                this.fallbackEndpointStatus = "idle";
+            }
+        );
 
         new Setting(fallbackDetails)
             .setName(s.settings.fallbackApiKey.name)
@@ -647,41 +693,13 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     .onChange(async (value) => {
                         this.plugin.settings.fallbackApiKey = value.trim();
                         await this.plugin.saveSettings();
+                        this.fallbackEndpointStatus = "idle";
                     });
             });
 
-        new Setting(fallbackDetails)
-            .setName(s.settings.fallbackSttModel.name)
-            .setDesc(s.settings.fallbackSttModel.desc)
-            .addText((text) =>
-                text
-                    .setPlaceholder(this.plugin.settings.sttModel || "whisper-1")
-                    .setValue(this.plugin.settings.fallbackSttModel)
-                    .onChange(async (value) => {
-                        this.plugin.settings.fallbackSttModel = value.trim();
-                        await this.plugin.saveSettings();
-                    })
-            );
-
-        new Setting(fallbackDetails)
-            .setName(s.settings.fallbackEnrichModel.name)
-            .setDesc(s.settings.fallbackEnrichModel.desc)
-            .addText((text) =>
-                text
-                    .setPlaceholder(
-                        this.plugin.settings.enrichModel || "gpt-4o"
-                    )
-                    .setValue(this.plugin.settings.fallbackEnrichModel)
-                    .onChange(async (value) => {
-                        this.plugin.settings.fallbackEnrichModel = value.trim();
-                        await this.plugin.saveSettings();
-                    })
-            );
-
-        // Endpoint actions: one button that verifies the endpoint and loads the
-        // shared model list + capabilities used by both the transcription and
-        // enrichment pickers. Kept as the last row of the endpoint section so
-        // the credentials sit above it.
+        // Endpoint actions: one button that verifies primary (+ fallback when
+        // set) and loads model lists for both. Kept as the last row of the
+        // endpoint section so the credentials sit above it.
         new Setting(containerEl)
             .setName(s.settings.endpointActions.name)
             .setDesc(s.settings.endpointActions.desc)
@@ -690,34 +708,14 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     .setButtonText(s.settings.testConnection.button)
                     .setCta()
                     .onClick(async () => {
-                        const { apiBaseUrl, apiKey } = this.plugin.settings;
-                        if (!apiBaseUrl) {
+                        if (!this.plugin.settings.apiBaseUrl) {
                             new Notice(s.settings.testConnection.noBaseUrl);
                             return;
                         }
                         button.setButtonText(s.settings.testConnection.testing);
                         button.setDisabled(true);
                         try {
-                            // One round-trip: fetch the model list and, when the
-                            // endpoint exposes them (LiteLLM), per-model
-                            // capabilities so the STT picker can filter to real
-                            // transcription models.
-                            this.models = await listModels(apiBaseUrl, apiKey);
-                            this.capabilities = await fetchModelCapabilities(
-                                apiBaseUrl,
-                                apiKey
-                            );
-                            new Notice(
-                                this.models.length === 0
-                                    ? s.settings.testConnection.empty
-                                    : s.settings.testConnection.success(
-                                            this.models.length
-                                        )
-                            );
-                            // Transcription/timestamp support is assessed
-                            // automatically when the model changes (and on open),
-                            // not here — this button only verifies the endpoint
-                            // and loads the model list + capabilities.
+                            await this.loadEndpointModels();
                             this.display();
                         } catch (e) {
                             new Notice(
@@ -736,11 +734,12 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         new Setting(containerEl).setName(s.settings.modelsHeading).setHeading();
 
         // Engine selector: remote OpenAI-compatible endpoint vs. on-device Whisper.
-        // Switching re-renders so only the chosen engine's model rows show.
+        // Switching rebuilds only the engine body below so the tab doesn't jump.
         new Setting(containerEl)
             .setName(s.settings.transcriptionEngine.name)
             .setDesc(s.settings.transcriptionEngine.desc)
             .addDropdown((dd) => {
+                this.transcriptionEngineDropdown = dd;
                 dd.addOption("remote", s.settings.transcriptionEngine.remote);
                 dd.addOption("local", s.settings.transcriptionEngine.local);
                 dd
@@ -752,15 +751,14 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                         this.plugin.settings.transcriptionBackend =
                             value === "local" ? "local" : "remote";
                         await this.plugin.saveSettings();
-                        this.display();
+                        this.renderTranscriptionEngineBody();
                     });
             });
 
-        if (this.plugin.settings.transcriptionBackend === "local") {
-            this.renderLocalTranscription(containerEl);
-        } else {
-            this.renderRemoteTranscription(containerEl);
-        }
+        this.transcriptionEngineBodyEl = containerEl.createDiv({
+            cls: "mc-transcription-engine-body",
+        });
+        this.renderTranscriptionEngineBody();
 
         this.addModelPicker(
             new Setting(containerEl)
@@ -772,6 +770,203 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                 await this.plugin.saveSettings();
             }
         );
+        this.addFallbackModelDetails(containerEl, {
+            detailsKey: "fallback-enrich",
+            desc: s.settings.fallbackModel.descEnrich,
+            current: this.plugin.settings.fallbackEnrichModel,
+            onChange: async (value) => {
+                this.plugin.settings.fallbackEnrichModel = value;
+                await this.plugin.saveSettings();
+            },
+        });
+    }
+
+    /** Rebuild remote vs local transcription rows without re-rendering the whole tab. */
+    private renderTranscriptionEngineBody(): void {
+        const el = this.transcriptionEngineBodyEl;
+        if (!el) return;
+        this.sttEngineDropdown = null;
+        this.sttTranscriptionBadgeEl = null;
+        this.sttTimestampBadgeEl = null;
+        this.modelDownloadRow = null;
+        this.localFallbackModelsEl = null;
+        el.empty();
+        if (this.plugin.settings.transcriptionBackend === "local") {
+            this.renderLocalTranscription(el);
+        } else {
+            this.renderRemoteTranscription(el);
+        }
+    }
+
+    /**
+     * Fetch primary (+ optional fallback) `/models` lists and capabilities.
+     * Both endpoints are probed in parallel so a down primary (e.g. 503) cannot
+     * block or abort the fallback load — that is a primary use case. Throws
+     * only when every attempted endpoint fails (or primary fails and no
+     * fallback URL is set).
+     */
+    private async loadEndpointModels(): Promise<void> {
+        const s = t();
+        const { apiBaseUrl, apiKey } = this.plugin.settings;
+        const fbUrl = this.plugin.settings.fallbackApiBaseUrl.trim();
+        // Key is optional — many local/gateway servers ignore auth (same as
+        // fetchModelIds omitting Authorization when the key is empty).
+        const fbKey = this.plugin.settings.fallbackApiKey.trim();
+
+        type LoadOk = {
+            ok: true;
+            models: string[];
+            caps: Map<string, ModelCapability> | null;
+        };
+        type LoadErr = { ok: false; error: string };
+        type LoadResult = LoadOk | LoadErr;
+
+        const loadOne = async (
+            baseUrl: string,
+            key: string
+        ): Promise<LoadResult> => {
+            try {
+                const models = await listModels(baseUrl, key);
+                const caps = await fetchModelCapabilities(baseUrl, key);
+                return { ok: true, models, caps };
+            } catch (e) {
+                return {
+                    ok: false,
+                    error: e instanceof Error ? e.message : String(e),
+                };
+            }
+        };
+
+        const [primary, fallback] = await Promise.all([
+            loadOne(apiBaseUrl, apiKey),
+            fbUrl
+                ? loadOne(fbUrl, fbKey)
+                : Promise.resolve<LoadResult | null>(null),
+        ]);
+
+        if (primary.ok) {
+            this.models = primary.models;
+            this.capabilities = primary.caps;
+            this.primaryEndpointStatus = "ok";
+        } else {
+            this.models = [];
+            this.capabilities = null;
+            this.primaryEndpointStatus = "error";
+        }
+
+        let fallbackError: string | null = null;
+        if (fallback === null) {
+            this.fallbackModels = [];
+            this.fallbackCapabilities = null;
+            this.fallbackEndpointStatus = "idle";
+        } else if (fallback.ok) {
+            this.fallbackModels = fallback.models;
+            this.fallbackCapabilities = fallback.caps;
+            this.fallbackEndpointStatus = "ok";
+        } else {
+            this.fallbackModels = [];
+            this.fallbackCapabilities = null;
+            this.fallbackEndpointStatus = "error";
+            fallbackError = fallback.error;
+        }
+
+        mcLog("settings", "load-models", {
+            primaryOk: primary.ok,
+            primaryModels: primary.ok ? primary.models.length : 0,
+            primaryError: primary.ok ? undefined : primary.error,
+            fallbackConfigured: Boolean(fbUrl),
+            fallbackOk: fallback === null ? null : fallback.ok,
+            fallbackModels: fallback?.ok ? fallback.models.length : 0,
+            fallbackError: fallbackError ?? undefined,
+        });
+
+        if (!primary.ok && !fbUrl) {
+            throw new Error(primary.error);
+        }
+        if (!primary.ok && fallbackError) {
+            throw new Error(
+                s.settings.testConnection.primaryFailedNoFallback(
+                    primary.error,
+                    fallbackError
+                )
+            );
+        }
+        if (!primary.ok) {
+            new Notice(
+                s.settings.testConnection.primaryFailedFallbackOk(
+                    primary.error,
+                    this.fallbackModels.length
+                )
+            );
+            return;
+        }
+        if (fallbackError) {
+            new Notice(
+                s.settings.testConnection.fallbackFailed(fallbackError)
+            );
+            return;
+        }
+        if (fbUrl) {
+            new Notice(
+                this.models.length === 0 && this.fallbackModels.length === 0
+                    ? s.settings.testConnection.empty
+                    : s.settings.testConnection.successWithFallback(
+                            this.models.length,
+                            this.fallbackModels.length
+                        )
+            );
+            return;
+        }
+        new Notice(
+            this.models.length === 0
+                ? s.settings.testConnection.empty
+                : s.settings.testConnection.success(this.models.length)
+        );
+    }
+
+    /**
+     * API base URL row with an optional ✓/✗ next to the name after Load models.
+     */
+    private addEndpointUrlSetting(
+        parent: HTMLElement,
+        name: string,
+        desc: string,
+        value: string,
+        placeholder: string,
+        status: "idle" | "ok" | "error",
+        onChange: (value: string) => Promise<void>
+    ): void {
+        const setting = new Setting(parent).setName(name).setDesc(desc);
+        this.decorateEndpointStatus(setting, status);
+        setting.addText((text) =>
+            text
+                .setPlaceholder(placeholder)
+                .setValue(value)
+                .onChange(async (v) => {
+                    await onChange(v);
+                })
+        );
+    }
+
+    private decorateEndpointStatus(
+        setting: Setting,
+        status: "idle" | "ok" | "error"
+    ): void {
+        if (status === "idle") return;
+        const s = t();
+        const mark = setting.nameEl.createSpan({
+            cls:
+                "mc-endpoint-status" +
+                (status === "ok" ? " is-ok" : " is-error"),
+            text: status === "ok" ? "✓" : "✗",
+            attr: {
+                title:
+                    status === "ok"
+                        ? s.settings.endpointStatus.ok
+                        : s.settings.endpointStatus.error,
+            },
+        });
+        void mark;
     }
 
     private renderCalendarTab(containerEl: HTMLElement): void {
@@ -1116,8 +1311,8 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 
     /**
      * The remote (OpenAI-compatible endpoint) transcription identity rows:
-     * model picker, support badges, and engine-family override. Shown on the
-     * General tab as part of setup.
+     * model picker, optional fallback model, support badges, and engine-family
+     * override. Shown on the General tab as part of setup.
      */
     private renderRemoteTranscription(containerEl: HTMLElement): void {
         const s = t();
@@ -1150,6 +1345,19 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                 ? (id) => this.capabilities?.get(id)?.transcription === true
                 : undefined
         );
+        this.addFallbackModelDetails(containerEl, {
+            detailsKey: "fallback-stt",
+            desc: s.settings.fallbackModel.descStt,
+            current: this.plugin.settings.fallbackSttModel,
+            onChange: async (value) => {
+                this.plugin.settings.fallbackSttModel = value;
+                await this.plugin.saveSettings();
+            },
+            filter: this.fallbackCapabilities
+                ? (id) =>
+                      this.fallbackCapabilities?.get(id)?.transcription === true
+                : undefined,
+        });
 
         // Transcription support, with timestamp support shown as a sub-detail
         // beneath it (it only matters for speaker separation). Both lines live
@@ -1287,9 +1495,9 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     .onChange(async (value) => {
                         this.plugin.settings.localWhisperModel = value;
                         await this.plugin.saveSettings();
-                        // Re-render so the download row reflects the new model's
-                        // presence/size.
-                        this.display();
+                        // Rebuild only the engine body so the download row
+                        // reflects the new model without scroll-jumping the tab.
+                        this.renderTranscriptionEngineBody();
                     });
             });
 
@@ -1312,8 +1520,59 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     .onChange(async (value) => {
                         this.plugin.settings.localFallbackToRemote = value;
                         await this.plugin.saveSettings();
+                        this.renderLocalFallbackModels();
                     })
             );
+
+        this.localFallbackModelsEl = containerEl.createDiv({
+            cls: "mc-local-fallback-models",
+        });
+        this.renderLocalFallbackModels();
+    }
+
+    /**
+     * Remote + fallback STT pickers shown under “Fall back to remote” when that
+     * toggle is on (local engine). Updated in place so toggling doesn't jump.
+     * Both pickers are always visible here — the toggle already opted into
+     * failover, so a nested collapsible would be redundant.
+     */
+    private renderLocalFallbackModels(): void {
+        const el = this.localFallbackModelsEl;
+        if (!el) return;
+        el.empty();
+        if (!this.plugin.settings.localFallbackToRemote) return;
+        const s = t();
+
+        this.addModelPicker(
+            new Setting(el)
+                .setName(s.settings.remoteFallbackModel.name)
+                .setDesc(s.settings.remoteFallbackModel.desc),
+            this.plugin.settings.sttModel,
+            async (value) => {
+                this.plugin.settings.sttModel = value;
+                this.plugin.settings.sttApiType = inferSttApiType(value);
+                await this.plugin.saveSettings();
+            },
+            this.capabilities
+                ? (id) => this.capabilities?.get(id)?.transcription === true
+                : undefined
+        );
+        this.addModelPicker(
+            new Setting(el)
+                .setName(s.settings.fallbackModel.summary)
+                .setDesc(s.settings.fallbackModel.descStt),
+            this.plugin.settings.fallbackSttModel,
+            async (value) => {
+                this.plugin.settings.fallbackSttModel = value;
+                await this.plugin.saveSettings();
+            },
+            this.fallbackCapabilities
+                ? (id) =>
+                      this.fallbackCapabilities?.get(id)?.transcription === true
+                : undefined,
+            this.fallbackModels,
+            { label: s.settings.fallbackModel.usePrimary }
+        );
     }
 
     /**
@@ -1380,8 +1639,10 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         this.downloadProgress = 0;
         const abort = new AbortController();
         this.modelDownloadAbort = abort;
-        // Re-render so the engine/model dropdowns lock and the row shows 0%.
-        this.display();
+        // Lock the engine switch and rebuild the body so the model dropdown
+        // locks and the download row shows 0% — without scrolling the tab.
+        this.transcriptionEngineDropdown?.setDisabled(true);
+        this.renderTranscriptionEngineBody();
         try {
             await this.plugin.ensureLocalModel(
                 spec,
@@ -1412,8 +1673,8 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         } finally {
             this.downloadingModel = false;
             this.modelDownloadAbort = null;
-            // Re-render to unlock the dropdowns and repaint the final state.
-            this.display();
+            this.transcriptionEngineDropdown?.setDisabled(false);
+            this.renderTranscriptionEngineBody();
         }
     }
 
@@ -1979,41 +2240,104 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
     }
 
     /**
-     * Model picker used by both transcription and enrichment. Shows a dropdown
-     * of the models fetched from the endpoint (via "Load models"), keeping
-     * the current value selectable even if the endpoint didn't list it. Falls
-     * back to a free-text field when no models have been loaded yet so the user
-     * can still type a model id offline. An optional `filter` narrows the
-     * offered options (e.g. transcription-only for the STT picker); the current
-     * value is always kept selectable even if it wouldn't pass the filter.
+     * Model picker used by both transcription and enrichment. Filterable
+     * combobox (Obsidian {@link ModelIdSuggest}) once models are loaded via
+     * "Load models"; free-text otherwise so a model id can still be typed
+     * offline. An optional `filter` narrows the offered options (e.g.
+     * transcription-only for the STT picker); the current value is always kept
+     * selectable even if it wouldn't pass the filter.
+     *
+     * Pass `modelList` to use the fallback endpoint's list. When `allowEmpty`
+     * is set, the list includes a "Same as primary" option that stores "".
      */
     private addModelPicker(
         setting: Setting,
         current: string,
         onChange: (value: string) => Promise<void>,
-        filter?: (modelId: string) => boolean
+        filter?: (modelId: string) => boolean,
+        modelList?: string[],
+        allowEmpty?: { label: string }
     ): void {
-        const offered = filter ? this.models.filter(filter) : this.models;
-        if (offered.length > 0 || (current && this.models.length > 0)) {
-            const options: Record<string, string> = {};
-            for (const m of offered) options[m] = m;
-            if (current && !options[current]) options[current] = current;
-            setting.addDropdown((dd) => {
-                dd.selectEl.addClass("meeting-copilot-model-dropdown");
-                dd
-                    .addOptions(options)
-                    .setValue(current)
-                    .onChange(async (value) => {
-                        await onChange(value);
-                    });
-            });
-        } else {
-            setting.addText((text) =>
-                text.setValue(current).onChange(async (value) => {
-                    await onChange(value.trim());
-                })
-            );
+        const source = modelList ?? this.models;
+        const offered = filter ? source.filter(filter) : source;
+        const hasList =
+            offered.length > 0 ||
+            (Boolean(current) && source.length > 0) ||
+            (Boolean(allowEmpty) && source.length > 0);
+
+        const options: ModelOption[] = [];
+        if (allowEmpty) {
+            options.push({ value: "", label: allowEmpty.label });
         }
+        for (const m of offered) {
+            options.push({ value: m, label: m });
+        }
+        if (current && !options.some((o) => o.value === current)) {
+            options.push({ value: current, label: current });
+        }
+
+        setting.addText((text) => {
+            text.inputEl.addClass("meeting-copilot-model-combobox");
+            text.setPlaceholder(
+                allowEmpty?.label ??
+                    (hasList
+                        ? t().settings.modelCombobox.placeholder
+                        : t().settings.modelCombobox.placeholderEmpty)
+            );
+            text.setValue(current);
+            text.onChange(async (value) => {
+                await onChange(value.trim());
+            });
+            if (hasList) {
+                new ModelIdSuggest(
+                    this.app,
+                    text.inputEl,
+                    () => options,
+                    (value) => {
+                        text.setValue(value);
+                        void onChange(value);
+                    }
+                );
+            }
+        });
+    }
+
+    /**
+     * Collapsible fallback-model picker nested under a primary model row.
+     * Uses the fallback endpoint's loaded model list when available.
+     */
+    private addFallbackModelDetails(
+        parent: HTMLElement,
+        opts: {
+            detailsKey: string;
+            desc: string;
+            current: string;
+            onChange: (value: string) => Promise<void>;
+            filter?: (modelId: string) => boolean;
+        }
+    ): void {
+        const s = t();
+        const details = parent.createEl("details", {
+            cls: "mc-fallback-model",
+            attr: { "data-mc-details": opts.detailsKey },
+        });
+        details.createEl("summary", {
+            text: s.settings.fallbackModel.summary,
+            cls: "mc-fallback-model-summary",
+        });
+        // Stacked Setting (desc above control) — avoids the empty name column
+        // that left a huge gap next to the picker in the default two-column row.
+        const setting = new Setting(details)
+            .setDesc(opts.desc)
+            .setClass("mc-fallback-model-row");
+        this.addModelPicker(
+            setting,
+            opts.current,
+            opts.onChange,
+            opts.filter,
+            this.fallbackModels,
+            { label: s.settings.fallbackModel.usePrimary }
+        );
     }
 
     /**
