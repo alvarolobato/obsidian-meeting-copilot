@@ -178,4 +178,78 @@ describe("mapAttendeesExpanded", () => {
 		);
 		expect(labels).toEqual(["Ash", "Bob"]);
 	});
+
+	it("prefers a direct invitee's displayName when the group is listed first", async () => {
+		const dir = fakeDir({
+			groups: { "elg@x.com": "groups/elg" },
+			members: {
+				"groups/elg": [
+					{ email: "ash@x.com", type: "USER" },
+					{ email: "bob@x.com", type: "USER" },
+				],
+			},
+		});
+		const labels = await mapAttendeesExpanded(
+			[
+				{ email: "elg@x.com", displayName: "ELG" },
+				{ email: "ash@x.com", displayName: "Ash K" },
+			],
+			dir
+		);
+		expect(labels).toEqual(["Ash K", "Bob"]);
+	});
+
+	it("keeps cached group members after a later failure disables the API", async () => {
+		let listCalls = 0;
+		const dir: GroupDirectory = {
+			async lookup(email: string) {
+				if (email === "elg@x.com") return "groups/elg";
+				if (email === "other@x.com") return "groups/other";
+				return null;
+			},
+			async listMembers(resource: string) {
+				listCalls += 1;
+				if (resource === "groups/elg") {
+					return [
+						{ email: "a@x.com", type: "USER" },
+						{ email: "b@x.com", type: "USER" },
+					];
+				}
+				throw new Error("memberships.list failed");
+			},
+		};
+		const cache = new GroupExpandCache();
+		const first = await mapAttendeesExpanded(
+			[{ email: "elg@x.com", displayName: "ELG" }],
+			dir,
+			{},
+			cache
+		);
+		expect(first).toEqual(["A", "B"]);
+		const second = await mapAttendeesExpanded(
+			[{ email: "other@x.com", displayName: "Other Team" }],
+			dir,
+			{},
+			cache
+		);
+		expect(cache.disabled).toBe(true);
+		expect(second).toEqual(["Other Team"]);
+		const third = await mapAttendeesExpanded(
+			[{ email: "elg@x.com", displayName: "ELG" }],
+			dir,
+			{},
+			cache
+		);
+		expect(third).toEqual(["A", "B"]);
+		expect(listCalls).toBe(2);
+	});
+
+	it("keeps raw email for people without a displayName", async () => {
+		const dir = fakeDir({});
+		const labels = await mapAttendeesExpanded(
+			[{ email: "jsmith@x.com" }],
+			dir
+		);
+		expect(labels).toEqual(["jsmith@x.com"]);
+	});
 });

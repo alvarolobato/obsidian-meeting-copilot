@@ -45,7 +45,7 @@ export class GroupExpandCache {
 	kind = new Map<string, EmailKind>();
 	groupResource = new Map<string, string>();
 	members = new Map<string, GroupMember[]>();
-	/** Set when Groups API is disabled / hard-fails — skip further lookups. */
+	/** Set when Groups API is disabled / hard-fails — skip further *network* lookups. */
 	disabled = false;
 }
 
@@ -55,7 +55,8 @@ function normEmail(email: string): string {
 
 /**
  * Expand a single email into person emails. Nested groups (`type=GROUP`) are
- * walked up to `maxDepth`. Failures leave the address unexpanded.
+ * walked up to `maxDepth`. Failures leave the address unexpanded. Cached
+ * expansions remain usable even after `cache.disabled` flips.
  */
 export async function expandEmailToPeople(
 	email: string,
@@ -69,8 +70,8 @@ export async function expandEmailToPeople(
 	const key = normEmail(email);
 	if (!key.includes("@")) return [email.trim()].filter(Boolean);
 
-	if (cache.disabled) return [key];
-
+	// Prefer cache before honoring `disabled`, so a later failure in the same
+	// sync does not collapse an already-expanded group back to its address.
 	const cachedKind = cache.kind.get(key);
 	if (cachedKind === "person") return [key];
 	if (cachedKind === "group") {
@@ -79,6 +80,7 @@ export async function expandEmailToPeople(
 		return expandGroupResource(resource, dir, opts, cache, depth, maxPeople);
 	}
 
+	if (cache.disabled) return [key];
 	if (depth > maxDepth) return [key];
 
 	let resource: string | null;
@@ -114,6 +116,7 @@ async function expandGroupResource(
 	const maxDepth = opts.maxDepth ?? 3;
 	let members = cache.members.get(resource);
 	if (!members) {
+		if (cache.disabled) return [];
 		try {
 			members = await dir.listMembers(resource);
 		} catch (err) {
@@ -173,53 +176,66 @@ export async function mapAttendeesExpanded(
 	opts: ExpandOptions = {},
 	cache: GroupExpandCache = new GroupExpandCache()
 ): Promise<string[]> {
-	const labels: string[] = [];
-	const seen = new Set<string>();
+	const labelByEmail = new Map<string, string>();
+	const nameless: string[] = [];
+	const order: string[] = [];
+
+	const remember = (emailKey: string, label: string): void => {
+		if (!emailKey || labelByEmail.has(emailKey)) return;
+		labelByEmail.set(emailKey, label);
+		order.push(emailKey);
+	};
+
+	// Direct invitee display names win over humanized expansions (group may
+	// appear before the same person as a direct guest).
+	const directDisplay = new Map<string, string>();
+	for (const a of raw ?? []) {
+		if (a.resource) continue;
+		const email = normEmail(a.email ?? "");
+		const display = (a.displayName ?? "").trim();
+		if (email && display) directDisplay.set(email, display);
+	}
 
 	for (const a of raw ?? []) {
 		if (a.resource) continue;
 		const email = (a.email ?? "").trim();
 		const display = (a.displayName ?? "").trim();
 		if (!email) {
-			if (display && !seen.has(display.toLowerCase())) {
-				seen.add(display.toLowerCase());
-				labels.push(display);
-			}
+			if (display && !nameless.includes(display)) nameless.push(display);
 			continue;
 		}
 
+		const key = normEmail(email);
 		const people = await expandEmailToPeople(email, dir, opts, cache);
-		const wasGroup = cache.kind.get(normEmail(email)) === "group";
+		const wasGroup = cache.kind.get(key) === "group";
 
 		if (!wasGroup) {
-			const label = display || humanizeEmailName(email) || email;
-			const dedupeKey = normEmail(email);
-			if (!seen.has(dedupeKey)) {
-				seen.add(dedupeKey);
-				labels.push(label);
-			}
+			// Match legacy mapAttendees: prefer displayName, else raw email.
+			remember(key, display || email);
 			continue;
 		}
 
 		if (people.length === 0) {
-			const label = display || email;
-			const dedupeKey = normEmail(email);
-			if (!seen.has(dedupeKey)) {
-				seen.add(dedupeKey);
-				labels.push(label);
-			}
+			remember(key, display || email);
 			continue;
 		}
 
 		for (const personEmail of people) {
-			const key = normEmail(personEmail);
-			if (!key || seen.has(key)) continue;
-			seen.add(key);
-			labels.push(humanizeEmailName(personEmail));
+			const pKey = normEmail(personEmail);
+			if (!pKey) continue;
+			remember(
+				pKey,
+				directDisplay.get(pKey) ?? humanizeEmailName(personEmail)
+			);
 		}
 	}
 
-	return labels;
+	// Overlay direct display names in case the group was expanded first.
+	for (const [email, display] of directDisplay) {
+		if (labelByEmail.has(email)) labelByEmail.set(email, display);
+	}
+
+	return [...nameless, ...order.map((k) => labelByEmail.get(k)!)];
 }
 
 /**
