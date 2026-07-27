@@ -1,5 +1,11 @@
 import { requestUrl } from "obsidian";
 import type { GoogleOAuth } from "../auth/googleOAuth";
+import { humanizeEmailName } from "./attendeeNames";
+import {
+	createCloudIdentityDirectory,
+	GroupExpandCache,
+	mapAttendeesExpanded,
+} from "./expandGroupAttendees";
 import { extractMeetLink, RawConferenceEvent } from "./meetLink";
 import { extractMeetingUrlFromText } from "./meetingUrl";
 import {
@@ -7,6 +13,8 @@ import {
 	isMeetingEventType,
 	matchesExclusionKeyword,
 } from "./eventFilter";
+
+export { humanizeEmailName } from "./attendeeNames";
 
 export interface GCalEvent {
 	id: string;
@@ -103,14 +111,6 @@ interface RawEvent extends RawConferenceEvent {
 	end?: { date?: string; dateTime?: string };
 }
 
-/** Maps raw attendees to display names, dropping meeting rooms and other resources. */
-function mapAttendees(raw: RawAttendee[] | undefined): string[] {
-	return (raw ?? [])
-		.filter((a) => !a.resource)
-		.map((a) => (a.displayName || a.email || "").trim())
-		.filter((name) => name.length > 0);
-}
-
 /** How a raw event's 1:1 shape is judged, beyond the attendee list itself. */
 export interface OneOnOneContext {
 	/** True when the signed-in user organized the event (`organizer.self`). */
@@ -145,21 +145,6 @@ function oneOnOneOther(
 	const selves = humans.filter((a) => a.self === true);
 	if (selves.length !== 1) return null;
 	return humans.find((a) => a.self !== true) ?? null;
-}
-
-/**
- * Turns an email address into a human-friendly name for folder/label use, e.g.
- * "sophie.smith@acme.com" → "Sophie Smith". Only a fallback for attendees that
- * carry no display name — we never want a raw address as a 1:1 folder name.
- */
-export function humanizeEmailName(email: string): string {
-	const local = (email.split("@")[0] ?? "").trim();
-	const words = local
-		.split(/[._+-]+/)
-		.map((w) => w.trim())
-		.filter((w) => w.length > 0)
-		.map((w) => w.charAt(0).toUpperCase() + w.slice(1));
-	return words.join(" ") || email.trim();
 }
 
 /**
@@ -254,20 +239,27 @@ export async function listEvents(
 			nextPageToken?: string;
 		};
 	});
-	const mapped = rawEvents
+	const filtered = rawEvents
 		.filter((ev) => ev.status !== "cancelled") // drop cancelled meetings
 		.filter((ev) => !isDeclinedByUser(ev.attendees)) // drop meetings the user declined
 		.filter((ev) => isMeetingEventType(ev.eventType))
 		// All-day events (date-only start) are dropped deliberately (#121 option B):
 		// they are not meetings we record, and we do not surface them in the agenda.
 		.filter((ev) => !ev.start?.date)
-		.filter((ev) => !matchesExclusionKeyword(ev.summary ?? "", exclusionKeywords))
-		.map((ev) => {
+		.filter((ev) => !matchesExclusionKeyword(ev.summary ?? "", exclusionKeywords));
+
+	// Expand Google Group invitees (e.g. elg@…) into people via Cloud Identity
+	// Groups. Shared cache so the same group across events is looked up once.
+	// Soft-fails to the raw group label when the API is unavailable.
+	const groups = createCloudIdentityDirectory(oauth);
+	const expandCache = new GroupExpandCache();
+	const mapped: GCalEvent[] = [];
+	for (const ev of filtered) {
 		const start = new Date(ev.start?.dateTime ?? "");
 		const end = new Date(ev.end?.dateTime ?? "");
 		const organizer =
 			(ev.organizer?.displayName || ev.organizer?.email || "").trim() || null;
-		return {
+		mapped.push({
 			id: ev.id ?? "",
 			summary: ev.summary ?? "(no title)",
 			location: ev.location ?? "",
@@ -277,10 +269,16 @@ export async function listEvents(
 				extractMeetLink(ev) ??
 				extractMeetingUrlFromText(ev.location, ev.description),
 			htmlLink: ev.htmlLink ?? "",
-			attendees: mapAttendees(ev.attendees),
+			attendees: await mapAttendeesExpanded(
+				ev.attendees,
+				groups,
+				{},
+				expandCache
+			),
 			organizer,
 			iCalUID: ev.iCalUID ?? null,
 			recurringEventId: ev.recurringEventId ?? null,
+			// 1:1 detection stays on the raw invite (a user+group is not a 1:1).
 			oneOnOnePartner: oneOnOnePartner(ev.attendees, {
 				organizerIsSelf: ev.organizer?.self === true,
 				attendeesOmitted: ev.attendeesOmitted === true,
@@ -289,7 +287,7 @@ export async function listEvents(
 				organizerIsSelf: ev.organizer?.self === true,
 				attendeesOmitted: ev.attendeesOmitted === true,
 			}),
-		};
-	});
+		});
+	}
 	return filterRequireMeetingLink(mapped, requireMeetingLink);
 }

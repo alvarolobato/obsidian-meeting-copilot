@@ -8,6 +8,8 @@
 
 Client secret and OAuth tokens are stored in per-vault local storage on this device — not in synced `data.json`. Declined meetings are ignored. If the connection expires, the agenda shows **Reconnect**.
 
+Auth also requests Cloud Identity Groups (read-only) so group invitees on a calendar event (e.g. `elg@…`) can be expanded into people when you’re allowed to see the group’s members. If the API isn’t enabled or you can’t view the group, the group label is kept as-is.
+
 ## AI endpoint (shared)
 
 In *Settings → Meeting Copilot → AI endpoint (shared)*, set the **API base URL** and **API key**. Used for enrichment and remote transcription — any OpenAI-compatible server, local (`http://localhost:…`) or remote. Leave blank if you only use on-device Whisper and skip enrichment.
