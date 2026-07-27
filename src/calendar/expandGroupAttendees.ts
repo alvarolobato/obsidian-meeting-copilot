@@ -133,12 +133,14 @@ async function expandGroupResource(
 	const out: string[] = [];
 	const seen = new Set<string>();
 
-	const pushPerson = (email: string): void => {
+	const pushPerson = (email: string, markPerson = true): void => {
 		const p = normEmail(email);
 		if (!p || seen.has(p) || out.length >= maxPeople) return;
 		seen.add(p);
 		out.push(p);
-		cache.kind.set(p, "person");
+		// Only mark confirmed people — a depth-capped nested GROUP must not be
+		// cached as "person" or a later root invite of the same address won't expand.
+		if (markPerson) cache.kind.set(p, "person");
 	};
 
 	for (const member of members) {
@@ -147,8 +149,12 @@ async function expandGroupResource(
 		if (!memberEmail) continue;
 
 		const isGroup = member.type.toUpperCase() === "GROUP";
-		if (!isGroup || depth >= maxDepth) {
-			pushPerson(memberEmail);
+		if (isGroup && depth >= maxDepth) {
+			pushPerson(memberEmail, false);
+			continue;
+		}
+		if (!isGroup) {
+			pushPerson(memberEmail, true);
 			continue;
 		}
 
@@ -159,7 +165,7 @@ async function expandGroupResource(
 			cache,
 			depth + 1
 		);
-		for (const person of nested) pushPerson(person);
+		for (const person of nested) pushPerson(person, true);
 	}
 	return out;
 }

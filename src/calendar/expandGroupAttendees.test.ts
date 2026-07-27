@@ -112,16 +112,33 @@ describe("expandEmailToPeople", () => {
 		expect(lookup).toHaveBeenCalledTimes(1);
 	});
 
-	it("caches person/group kind across calls", async () => {
-		const lookup = vi.fn().mockResolvedValue(null);
+	it("does not cache depth-capped nested GROUPs as person", async () => {
+		const lookup = vi.fn(async (email: string) => {
+			if (email === "team@x.com") return "groups/team";
+			if (email === "sub@x.com") return "groups/sub";
+			return null;
+		});
 		const dir: GroupDirectory = {
 			lookup,
-			listMembers: async () => [],
+			async listMembers(resource: string) {
+				if (resource === "groups/team") {
+					return [{ email: "sub@x.com", type: "GROUP" }];
+				}
+				if (resource === "groups/sub") {
+					return [{ email: "leaf@x.com", type: "USER" }];
+				}
+				return [];
+			},
 		};
 		const cache = new GroupExpandCache();
-		await expandEmailToPeople("bob@x.com", dir, {}, cache);
-		await expandEmailToPeople("bob@x.com", dir, {}, cache);
-		expect(lookup).toHaveBeenCalledTimes(1);
+		// Depth 0 only: nested GROUP emitted without expand, must not poison cache.
+		const capped = await expandEmailToPeople("team@x.com", dir, { maxDepth: 0 }, cache);
+		expect(capped).toEqual(["sub@x.com"]);
+		expect(cache.kind.get("sub@x.com")).toBeUndefined();
+		// Same sync: sub@ as a root invitee should still expand.
+		const asRoot = await expandEmailToPeople("sub@x.com", dir, {}, cache);
+		expect(asRoot).toEqual(["leaf@x.com"]);
+		expect(lookup).toHaveBeenCalledWith("sub@x.com");
 	});
 });
 
