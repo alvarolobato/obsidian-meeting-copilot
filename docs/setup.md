@@ -10,9 +10,9 @@ Client secret and OAuth tokens are stored in per-vault local storage on this dev
 
 ## AI endpoint (shared)
 
-In *Settings → Meeting Copilot → AI endpoint (shared)*, set the **API base URL** and **API key**. Used for enrichment and remote transcription. Leave blank if you only use local transcription and skip enrichment.
+In *Settings → Meeting Copilot → AI endpoint (shared)*, set the **API base URL** and **API key**. Used for enrichment and remote transcription. Point it at a cloud provider or a local server (Ollama, LiteLLM, etc.). Leave blank if you only use on-device Whisper and skip enrichment.
 
-Remote transcription needs `/audio/transcriptions`; enrichment needs `/chat/completions`. OpenAI and LiteLLM serve both. Ollama works for enrichment only. Azure needs the `/openai/v1` OpenAI-compatible surface.
+Remote transcription needs `/audio/transcriptions`; enrichment needs `/chat/completions`. OpenAI and LiteLLM serve both. Ollama works for enrichment (local chat models) but has no transcription endpoint. Azure needs the `/openai/v1` OpenAI-compatible surface.
 
 Optional **Fallback endpoint**: if the primary returns a service-level error (network, timeout, 5xx / 401 / 403 / 429), enrich and remote STT retry once on the fallback URL.
 
