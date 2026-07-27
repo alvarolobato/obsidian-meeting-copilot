@@ -50,6 +50,21 @@ describe("endpointFallback", () => {
 		});
 	});
 
+	it("keeps primary sttApiType when inheriting an opaque primary STT model", () => {
+		// Gateway ids often don't hint the family; the user sets sttApiType
+		// explicitly. Re-inferring would wrong-route the fallback.
+		const fb = fallbackEndpoint({
+			...base,
+			sttModel: "company/asr-v2",
+			sttApiType: "whisper-1-ts",
+			fallbackApiBaseUrl: "https://fb.example/v1",
+			fallbackApiKey: "fk",
+			fallbackSttModel: "",
+		});
+		expect(fb?.sttModel).toBe("company/asr-v2");
+		expect(fb?.sttApiType).toBe("whisper-1-ts");
+	});
+
 	it("uses distinct fallback models and infers STT family from the name", () => {
 		const fb = fallbackEndpoint({
 			...base,

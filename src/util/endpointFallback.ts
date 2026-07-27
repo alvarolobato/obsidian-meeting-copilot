@@ -55,17 +55,20 @@ export function fallbackEndpoint(
 	s: EndpointSettingsSlice
 ): EndpointConfig | null {
 	if (!isFallbackEndpointConfigured(s)) return null;
-	const sttModel =
-		s.fallbackSttModel.trim() || s.sttModel.trim();
+	const fallbackStt = s.fallbackSttModel.trim();
+	const sttModel = fallbackStt || s.sttModel.trim();
 	const enrichModel =
 		s.fallbackEnrichModel.trim() || s.enrichModel.trim();
 	return {
 		baseUrl: s.fallbackApiBaseUrl.trim(),
 		apiKey: s.fallbackApiKey.trim(),
 		sttModel,
-		// Infer from the fallback wire name — primary's engine family may not
-		// match a differently named gateway model.
-		sttApiType: inferSttApiType(sttModel),
+		// Inherit the user's explicit primary engine family when reusing the
+		// primary wire model (gateway ids often don't hint "whisper"/"mini").
+		// Only infer when the user set a distinct fallback STT model.
+		sttApiType: fallbackStt
+			? inferSttApiType(fallbackStt)
+			: s.sttApiType,
 		enrichModel,
 	};
 }
