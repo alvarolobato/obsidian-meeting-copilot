@@ -40,11 +40,14 @@ function httpStatusFromMessage(msg: string): number | null {
 
 function looksLikeTimeout(msg: string): boolean {
 	const lower = msg.toLowerCase();
+	// Prefer explicit request/LLM timeout phrasing over a bare "timeout"
+	// substring (avoids treating "invalid timeout value" client errors as
+	// service failures when no HTTP status was parsed).
 	return (
 		lower.includes("timed out") ||
-		lower.includes("timeout") ||
-		// EnrichTimeoutError name surfaces via stack rarely; message is enough.
-		lower.includes("enrichtimeouterror")
+		lower.includes("request timed out") ||
+		/\brequest timeout\b/.test(lower) ||
+		/\bllm request timed out\b/.test(lower)
 	);
 }
 
@@ -60,9 +63,10 @@ function isUserCancel(error: unknown): boolean {
 	return (
 		name === "ChatAbortError" ||
 		name === "AbortError" ||
-		msg.includes("cancelled") ||
-		msg.includes("canceled") ||
-		msg.includes("aborted")
+		msg.includes("cancelled by user") ||
+		msg.includes("canceled by user") ||
+		msg === "llm request cancelled" ||
+		msg.includes("transcription cancelled")
 	);
 }
 
@@ -73,11 +77,8 @@ export function isServiceFailure(error: unknown): boolean {
 	if (isUserCancel(error)) return false;
 	const msg = messageOf(error);
 	if (!msg) return false;
-	if (looksLikeTimeout(msg)) return true;
-	if (looksLikeNetwork(msg)) return true;
-	const status = httpStatusFromMessage(msg);
-	if (status !== null) return SERVICE_HTTP.has(status);
-	// Named timeout errors from our code / vendor without a status code.
+
+	// Named timeout errors from our code / vendor — always service-level.
 	if (
 		error instanceof Error &&
 		(error.name === "EnrichTimeoutError" ||
@@ -85,5 +86,13 @@ export function isServiceFailure(error: unknown): boolean {
 	) {
 		return true;
 	}
+
+	// When an HTTP status is present, it wins over substring heuristics so a
+	// 400 whose body mentions "timeout" does not spuriously fail over.
+	const status = httpStatusFromMessage(msg);
+	if (status !== null) return SERVICE_HTTP.has(status);
+
+	if (looksLikeTimeout(msg)) return true;
+	if (looksLikeNetwork(msg)) return true;
 	return false;
 }

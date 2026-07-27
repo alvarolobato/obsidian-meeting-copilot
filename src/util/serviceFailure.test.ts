@@ -47,7 +47,40 @@ describe("isServiceFailure", () => {
 		expect(
 			isServiceFailure(new Error("LLM request failed (400): bad request"))
 		).toBe(false);
+		expect(
+			isServiceFailure(
+				new Error("LLM request failed (400): invalid timeout value")
+			)
+		).toBe(false);
 		expect(isServiceFailure(new Error("LLM returned no content"))).toBe(
+			false
+		);
+	});
+
+	it("treats EnrichTimeoutError / RequestTimeoutError by name", () => {
+		const enrich = new Error("LLM request timed out after 120s");
+		enrich.name = "EnrichTimeoutError";
+		expect(isServiceFailure(enrich)).toBe(true);
+		const req = new Error("Request timed out after 60s");
+		req.name = "RequestTimeoutError";
+		expect(isServiceFailure(req)).toBe(true);
+	});
+
+	it("lets HTTP status win over a timeout substring in the body", () => {
+		expect(
+			isServiceFailure(
+				new Error("LLM request failed (422): parameter timeout invalid")
+			)
+		).toBe(false);
+		expect(
+			isServiceFailure(
+				new Error("API Error 502: upstream timed out")
+			)
+		).toBe(true);
+	});
+
+	it("does not treat a bare 'timeout' word as a service failure", () => {
+		expect(isServiceFailure(new Error("invalid timeout value"))).toBe(
 			false
 		);
 	});

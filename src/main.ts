@@ -4193,6 +4193,8 @@ export default class SystemRecordingPlugin extends Plugin {
                     fromError: unknown
                 ): Promise<string | null> => {
                     if (
+                        isDiarizationCancelled(fromError, signal) ||
+                        signal.aborted ||
                         !isServiceFailure(fromError) ||
                         !isFallbackEndpointConfigured(this.settings)
                     ) {
@@ -4205,7 +4207,11 @@ export default class SystemRecordingPlugin extends Plugin {
                                 ? fromError.message
                                 : String(fromError),
                     });
-                    new Notice(t().notices.endpointFallbackTranscribe);
+                    new Notice(
+                        wantDiarized
+                            ? t().notices.endpointFallbackTranscribeNoDiarization
+                            : t().notices.endpointFallbackTranscribe
+                    );
                     return runRemoteMixed("fallback");
                 };
 

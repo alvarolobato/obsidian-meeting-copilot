@@ -78,6 +78,8 @@ export const en = {
 			"Primary AI endpoint failed — retrying enrichment on the fallback…",
 		endpointFallbackTranscribe:
 			"Primary AI endpoint failed — retrying transcription on the fallback…",
+		endpointFallbackTranscribeNoDiarization:
+			"Primary AI endpoint failed — retrying transcription on the fallback (without speaker separation)…",
 		enrichNotConfigured:
 			"Set the AI endpoint (base URL + API key) and an enrichment model in settings first.",
 		enrichDisabled: "AI enrichment is disabled in settings.",
@@ -480,7 +482,7 @@ export const en = {
 		},
 		fallbackEndpoint: {
 			summary: "Fallback endpoint (when primary is down)",
-			desc: "Optional second OpenAI-compatible service. Used automatically when the primary fails with a service error (timeout, network, 5xx, auth). Models can differ when the fallback gateway uses different names.",
+			desc: "Optional second OpenAI-compatible service. Used automatically when the primary fails with a service error (timeout, network, 5xx, auth). Models can differ when the fallback gateway uses different names. For local transcription, enable “Fall back to remote on failure” so a local failure can reach the primary remote and then this fallback.",
 		},
 		fallbackApiBaseUrl: {
 			name: "Fallback API base URL",
