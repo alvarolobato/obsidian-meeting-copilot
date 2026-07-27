@@ -1324,3 +1324,26 @@ ul.mc-action-tasks {
 	color: var(--text-muted);
 	margin: 0 0 var(--size-4-2);
 }
+
+/* Fallback AI endpoint collapsible (under primary endpoint) */
+.mc-fallback-endpoint {
+	margin: var(--size-4-2) 0 var(--size-4-3);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	padding: 0 var(--size-4-3);
+}
+.mc-fallback-endpoint-summary {
+	cursor: pointer;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+	padding: var(--size-4-2) 0;
+	user-select: none;
+}
+.mc-fallback-endpoint-summary:hover {
+	color: var(--text-normal);
+}
+.mc-fallback-endpoint-desc {
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+	margin: 0 0 var(--size-4-2);
+}

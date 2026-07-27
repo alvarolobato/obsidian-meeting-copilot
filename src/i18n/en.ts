@@ -74,6 +74,10 @@ export const en = {
 		enrichError: (msg: string) => `Enrichment failed: ${msg}`,
 		enrichTimeout: (note: string, seconds: number) =>
 			`Enrichment timed out for ${note} after ${seconds}s — increase the timeout in settings or retry`,
+		endpointFallbackEnrich:
+			"Primary AI endpoint failed — retrying enrichment on the fallback…",
+		endpointFallbackTranscribe:
+			"Primary AI endpoint failed — retrying transcription on the fallback…",
 		enrichNotConfigured:
 			"Set the AI endpoint (base URL + API key) and an enrichment model in settings first.",
 		enrichDisabled: "AI enrichment is disabled in settings.",
@@ -473,6 +477,26 @@ export const en = {
 		apiKey: {
 			name: "API key",
 			desc: "Use 'Load models' to verify it and load the available models.",
+		},
+		fallbackEndpoint: {
+			summary: "Fallback endpoint (when primary is down)",
+			desc: "Optional second OpenAI-compatible service. Used automatically when the primary fails with a service error (timeout, network, 5xx, auth). Models can differ when the fallback gateway uses different names.",
+		},
+		fallbackApiBaseUrl: {
+			name: "Fallback API base URL",
+			desc: "Leave empty to disable fallback. Example: https://api.openai.com/v1 or http://localhost:11434/v1.",
+		},
+		fallbackApiKey: {
+			name: "Fallback API key",
+			desc: "Required when a fallback URL is set. Use any non-empty value for local servers that ignore keys.",
+		},
+		fallbackSttModel: {
+			name: "Fallback transcription model",
+			desc: "Wire model id on the fallback endpoint. Leave empty to reuse the primary transcription model name.",
+		},
+		fallbackEnrichModel: {
+			name: "Fallback enrichment model",
+			desc: "Chat model id on the fallback endpoint. Leave empty to reuse the primary enrichment model name.",
 		},
 		endpointActions: {
 			name: "Connection",

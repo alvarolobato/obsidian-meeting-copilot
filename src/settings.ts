@@ -137,6 +137,17 @@ export interface SystemRecordingSettings {
 	// Shared OpenAI-compatible endpoint + credentials (transcription + enrichment).
 	apiBaseUrl: string;
 	apiKey: string;
+	/**
+	 * Optional fallback OpenAI-compatible endpoint used when the primary fails
+	 * with a service-level error (network, timeout, 5xx/401/403/429). Empty URL
+	 * disables fallback.
+	 */
+	fallbackApiBaseUrl: string;
+	fallbackApiKey: string;
+	/** Fallback STT wire model; empty inherits primary `sttModel`. */
+	fallbackSttModel: string;
+	/** Fallback enrich chat model; empty inherits primary `enrichModel`. */
+	fallbackEnrichModel: string;
 	// Transcription backend selection (issue #34).
 	/** Where audio is transcribed: the remote OpenAI-compatible endpoint, or a local on-device Whisper model. */
 	transcriptionBackend: "remote" | "local";
@@ -260,6 +271,10 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	dashboardFollowupsPageSize: 10,
 	apiBaseUrl: "https://api.openai.com/v1",
 	apiKey: "",
+	fallbackApiBaseUrl: "",
+	fallbackApiKey: "",
+	fallbackSttModel: "",
+	fallbackEnrichModel: "",
 	transcriptionBackend: "local",
 	localWhisperModel: DEFAULT_LOCAL_MODEL_ID,
 	localFallbackToRemote: false,
@@ -594,6 +609,74 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                         this.refreshSttBadges();
                     });
             });
+
+        // Optional failover endpoint — collapsed so the common single-service
+        // setup stays short.
+        const fallbackDetails = containerEl.createEl("details", {
+            cls: "mc-fallback-endpoint",
+        });
+        fallbackDetails.createEl("summary", {
+            text: s.settings.fallbackEndpoint.summary,
+            cls: "mc-fallback-endpoint-summary",
+        });
+        const fallbackDesc = fallbackDetails.createEl("p", {
+            cls: "mc-fallback-endpoint-desc",
+        });
+        fallbackDesc.setText(s.settings.fallbackEndpoint.desc);
+
+        new Setting(fallbackDetails)
+            .setName(s.settings.fallbackApiBaseUrl.name)
+            .setDesc(s.settings.fallbackApiBaseUrl.desc)
+            .addText((text) =>
+                text
+                    .setPlaceholder("https://api.example.com/v1")
+                    .setValue(this.plugin.settings.fallbackApiBaseUrl)
+                    .onChange(async (value) => {
+                        this.plugin.settings.fallbackApiBaseUrl = value.trim();
+                        await this.plugin.saveSettings();
+                    })
+            );
+
+        new Setting(fallbackDetails)
+            .setName(s.settings.fallbackApiKey.name)
+            .setDesc(s.settings.fallbackApiKey.desc)
+            .addText((text) => {
+                text.inputEl.type = "password";
+                text
+                    .setValue(this.plugin.settings.fallbackApiKey)
+                    .onChange(async (value) => {
+                        this.plugin.settings.fallbackApiKey = value.trim();
+                        await this.plugin.saveSettings();
+                    });
+            });
+
+        new Setting(fallbackDetails)
+            .setName(s.settings.fallbackSttModel.name)
+            .setDesc(s.settings.fallbackSttModel.desc)
+            .addText((text) =>
+                text
+                    .setPlaceholder(this.plugin.settings.sttModel || "whisper-1")
+                    .setValue(this.plugin.settings.fallbackSttModel)
+                    .onChange(async (value) => {
+                        this.plugin.settings.fallbackSttModel = value.trim();
+                        await this.plugin.saveSettings();
+                    })
+            );
+
+        new Setting(fallbackDetails)
+            .setName(s.settings.fallbackEnrichModel.name)
+            .setDesc(s.settings.fallbackEnrichModel.desc)
+            .addText((text) =>
+                text
+                    .setPlaceholder(
+                        this.plugin.settings.enrichModel || "gpt-4o"
+                    )
+                    .setValue(this.plugin.settings.fallbackEnrichModel)
+                    .onChange(async (value) => {
+                        this.plugin.settings.fallbackEnrichModel = value.trim();
+                        await this.plugin.saveSettings();
+                    })
+            );
 
         // Endpoint actions: one button that verifies the endpoint and loads the
         // shared model list + capabilities used by both the transcription and
