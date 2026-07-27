@@ -34,6 +34,13 @@ See [Setup](docs/setup.md) for Google Calendar, AI endpoint, transcription, and 
 - [Development](docs/development.md) — build, release, debugging
 - [Organizing meeting notes](docs/organizing-meeting-notes.md)
 
+## Requirements
+
+- macOS 13.3+ (Apple Silicon)
+- Obsidian Desktop
+- Google account (calendar)
+- OpenAI-compatible endpoint for enrichment and/or remote transcription (not needed for local-only transcription with enrichment off)
+
 ## Attribution
 
 Meeting Copilot builds on generously-licensed open-source work:
@@ -46,10 +53,3 @@ See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for full credits.
 ## License
 
 0BSD — see [`LICENSE`](LICENSE) and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
-
-## Requirements
-
-- macOS 13.3+ (Apple Silicon)
-- Obsidian Desktop
-- Google account (calendar)
-- OpenAI-compatible endpoint for enrichment and/or remote transcription (not needed for local-only transcription with enrichment off)
