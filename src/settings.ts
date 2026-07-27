@@ -954,7 +954,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
     ): void {
         if (status === "idle") return;
         const s = t();
-        const mark = setting.nameEl.createSpan({
+        setting.nameEl.createSpan({
             cls:
                 "mc-endpoint-status" +
                 (status === "ok" ? " is-ok" : " is-error"),
