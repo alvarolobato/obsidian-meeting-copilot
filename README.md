@@ -1,6 +1,6 @@
 # Meeting Copilot
 
-Granola-style meeting capture for Obsidian on macOS: Google Calendar → dual-channel recording → transcription (remote or on-device Whisper) → AI enrichment (cloud or local OpenAI-compatible models). No extra audio driver.
+Granola-style meeting capture for Obsidian on macOS: Google Calendar → dual-channel recording → transcription (remote or on-device Whisper) → AI enrichment. No extra audio driver.
 
 ![Meetings Dashboard and agenda sidebar](docs/screenshot-dashboard.png)
 
@@ -39,7 +39,7 @@ See [Setup](docs/setup.md) for Google Calendar, AI endpoint, transcription, and 
 - macOS 13.3+ (Apple Silicon)
 - Obsidian Desktop
 - Google account (calendar)
-- OpenAI-compatible endpoint when you use enrichment and/or remote transcription (cloud or local — e.g. OpenAI, LiteLLM, Ollama). Not needed for on-device Whisper transcription with enrichment off.
+- OpenAI-compatible endpoint (local or remote) when you use enrichment and/or remote transcription. Not needed for on-device Whisper with enrichment off.
 
 ## Attribution
 
