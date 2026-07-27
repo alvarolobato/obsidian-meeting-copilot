@@ -88,6 +88,11 @@ import { normalizeManualNotes } from "./notes/manualNotes";
 import { applyEnrichToContent } from "./notes/applyEnrich";
 import { mcLog } from "./util/logLine";
 import {
+	fallbackEndpoint,
+	isFallbackEndpointConfigured,
+} from "./util/endpointFallback";
+import { isServiceFailure } from "./util/serviceFailure";
+import {
     ACTIONS_BLOCK_LANG,
     ATTENTION_BLOCK_LANG,
     buildDashboardBlock,
@@ -749,6 +754,16 @@ export default class SystemRecordingPlugin extends Plugin {
         // Normalize the shared endpoint (tolerate hand-edited data.json).
         this.settings.apiBaseUrl = (this.settings.apiBaseUrl ?? "").trim();
         this.settings.apiKey = (this.settings.apiKey ?? "").trim();
+        this.settings.fallbackApiBaseUrl = (
+            this.settings.fallbackApiBaseUrl ?? ""
+        ).trim();
+        this.settings.fallbackApiKey = (this.settings.fallbackApiKey ?? "").trim();
+        this.settings.fallbackSttModel = (
+            this.settings.fallbackSttModel ?? ""
+        ).trim();
+        this.settings.fallbackEnrichModel = (
+            this.settings.fallbackEnrichModel ?? ""
+        ).trim();
         // Clamp the transcription engine + local model to known values so a
         // hand-edited/corrupt data.json can't persist an unknown engine (which
         // would fall through to remote in the UI but stay wrong on disk) or a
@@ -3665,8 +3680,33 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /** Maps plugin settings onto the vendored transcription engine's config. */
-    private buildTranscribeConfig(): TranscribeConfig {
+    private buildTranscribeConfig(
+        which: "primary" | "fallback" = "primary"
+    ): TranscribeConfig {
         const s = this.settings;
+        if (which === "fallback") {
+            const fb = fallbackEndpoint(s);
+            if (!fb) {
+                // Caller should have checked; degrade to primary rather than throw.
+                return this.buildTranscribeConfig("primary");
+            }
+            // Fallback STT is mixed-only: we never probed timestamps on that
+            // gateway, so never advertise whisper-1-ts here.
+            const family =
+                fb.sttApiType === "whisper-1-ts" ? "whisper-1" : fb.sttApiType;
+            return {
+                baseUrl: fb.baseUrl,
+                apiKey: fb.apiKey,
+                model: family as TranscriptionModel,
+                modelOverride: fb.sttModel,
+                chatModel: fb.enrichModel,
+                language: s.sttLanguage || "auto",
+                postProcessingEnabled: s.postProcessingEnabled,
+                dictionaryCorrectionEnabled: s.dictionaryCorrectionEnabled,
+                userDictionaries: parseDictionary(s.dictionary),
+                debugMode: s.debugLogging,
+            };
+        }
         return {
             baseUrl: s.apiBaseUrl,
             apiKey: s.apiKey,
@@ -4127,28 +4167,82 @@ export default class SystemRecordingPlugin extends Plugin {
                 // against it — a degraded but working transcript beats none.
                 // Diarization isn't retried remotely: its timestamp support isn't
                 // probed on this path, and a mixed transcript is the safe floor.
-                if (!(useLocal && this.canFallbackToRemote(e, signal))) throw e;
-                mcLog("transcribe", "local→remote fallback", {
-                    recording: recording.path,
-                    error: e instanceof Error ? e.message : String(e),
-                });
-                // Say diarization was dropped when the user asked for it: the
-                // remote fallback is always a plain mixed pass, so a forced
-                // speaker-separated request silently becomes mixed otherwise.
-                new Notice(
-                    wantDiarized
-                        ? t().notices.localFallbackNoDiarization
-                        : t().notices.localFallback
-                );
-                // Reset the bar so the remote pass ramps 0→100 instead of jumping
-                // backward from wherever the failed local attempt left it.
-                onProgress(0);
-                const remote = new OpenAICompatibleBackend(
-                    this.app,
-                    this.buildTranscribeConfig()
-                );
-                diarized = false;
-                rawText = await transcribeAudio(recording, remote, signal, onProgress);
+                //
+                // A separate *endpoint* fallback covers primary remote service
+                // outages (and a primary-remote attempt that itself fails after
+                // local→remote), always as mixed.
+                if (isDiarizationCancelled(e, signal)) throw e;
+
+                const runRemoteMixed = async (
+                    which: "primary" | "fallback"
+                ): Promise<string> => {
+                    onProgress(0);
+                    const remote = new OpenAICompatibleBackend(
+                        this.app,
+                        this.buildTranscribeConfig(which)
+                    );
+                    return transcribeAudio(
+                        recording,
+                        remote,
+                        signal,
+                        onProgress
+                    );
+                };
+
+                const tryEndpointFallback = async (
+                    fromError: unknown
+                ): Promise<string | null> => {
+                    if (
+                        isDiarizationCancelled(fromError, signal) ||
+                        signal.aborted ||
+                        !isServiceFailure(fromError) ||
+                        !isFallbackEndpointConfigured(this.settings)
+                    ) {
+                        return null;
+                    }
+                    mcLog("transcribe", "primary→fallback endpoint", {
+                        recording: recording.name,
+                        error:
+                            fromError instanceof Error
+                                ? fromError.message
+                                : String(fromError),
+                    });
+                    new Notice(
+                        wantDiarized
+                            ? t().notices.endpointFallbackTranscribeNoDiarization
+                            : t().notices.endpointFallbackTranscribe
+                    );
+                    return runRemoteMixed("fallback");
+                };
+
+                if (useLocal && this.canFallbackToRemote(e, signal)) {
+                    mcLog("transcribe", "local→remote fallback", {
+                        recording: recording.path,
+                        error: e instanceof Error ? e.message : String(e),
+                    });
+                    new Notice(
+                        wantDiarized
+                            ? t().notices.localFallbackNoDiarization
+                            : t().notices.localFallback
+                    );
+                    try {
+                        diarized = false;
+                        rawText = await runRemoteMixed("primary");
+                    } catch (e2) {
+                        if (isDiarizationCancelled(e2, signal)) throw e2;
+                        const fbText = await tryEndpointFallback(e2);
+                        if (fbText === null) throw e2;
+                        diarized = false;
+                        rawText = fbText;
+                    }
+                } else if (!useLocal) {
+                    const fbText = await tryEndpointFallback(e);
+                    if (fbText === null) throw e;
+                    diarized = false;
+                    rawText = fbText;
+                } else {
+                    throw e;
+                }
             }
             const totalSecs = ((Date.now() - transcribeStart) / 1000).toFixed(1);
             console.warn(
@@ -5464,35 +5558,72 @@ export default class SystemRecordingPlugin extends Plugin {
                 transcriptChars: (transcript ?? "").length,
                 timeoutMs,
             });
-            let rawOutput: string;
-            let attempt = 0;
-            for (;;) {
-                try {
-                    rawOutput = await chatComplete({
-                        baseUrl: apiBaseUrl,
-                        apiKey: apiKey,
-                        model: enrichModel,
-                        system: ENRICH_SYSTEM_PROMPT,
-                        user: userPrompt,
-                        signal,
-                        timeoutMs,
-                    });
-                    break;
-                } catch (e) {
-                    if (
-                        e instanceof EnrichTimeoutError &&
-                        attempt === 0 &&
-                        !signal.aborted
-                    ) {
-                        attempt = 1;
-                        mcLog("enrich", "timeout retry", {
-                            note: file.basename,
+            const runEnrichChat = async (
+                baseUrl: string,
+                key: string,
+                model: string
+            ): Promise<string> => {
+                let attempt = 0;
+                for (;;) {
+                    try {
+                        return await chatComplete({
+                            baseUrl,
+                            apiKey: key,
+                            model,
+                            system: ENRICH_SYSTEM_PROMPT,
+                            user: userPrompt,
+                            signal,
                             timeoutMs,
                         });
-                        continue;
+                    } catch (e) {
+                        if (
+                            e instanceof EnrichTimeoutError &&
+                            attempt === 0 &&
+                            !signal.aborted
+                        ) {
+                            attempt = 1;
+                            mcLog("enrich", "timeout retry", {
+                                note: file.basename,
+                                model,
+                                timeoutMs,
+                            });
+                            continue;
+                        }
+                        throw e;
                     }
+                }
+            };
+            let rawOutput: string;
+            let usedModel = enrichModel;
+            try {
+                rawOutput = await runEnrichChat(
+                    apiBaseUrl,
+                    apiKey,
+                    enrichModel
+                );
+            } catch (e) {
+                const fb = fallbackEndpoint(this.settings);
+                if (
+                    !fb ||
+                    !isServiceFailure(e) ||
+                    signal.aborted ||
+                    this.isEnrichCancelled(e, signal)
+                ) {
                     throw e;
                 }
+                mcLog("enrich", "primary→fallback endpoint", {
+                    note: file.basename,
+                    primaryModel: enrichModel,
+                    fallbackModel: fb.enrichModel,
+                    error: e instanceof Error ? e.message : String(e),
+                });
+                new Notice(t().notices.endpointFallbackEnrich);
+                usedModel = fb.enrichModel;
+                rawOutput = await runEnrichChat(
+                    fb.baseUrl,
+                    fb.apiKey,
+                    fb.enrichModel
+                );
             }
             // Only parse/strip a title trailer when we asked for one — calendar
             // enrichments must never feed RenameModal (scheduled titles stay).
@@ -5544,9 +5675,8 @@ export default class SystemRecordingPlugin extends Plugin {
             const elapsedMs = Date.now() - enrichStarted;
             mcLog("enrich", "ok", {
                 note: file.basename,
-                model: enrichModel,
+                model: usedModel,
                 elapsedMs,
-                attempts: attempt + 1,
             });
             new Notice(t().notices.enrichDone(file.basename));
             this.setEnrichStatus(t().statusBar.enriched, "success");

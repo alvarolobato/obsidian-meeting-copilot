@@ -289,13 +289,17 @@
     margin-top: 2px;
 }
 
-/* Model pickers render as a dropdown that should take ~40% of the row. */
+/* Model pickers: filterable combobox (text + AbstractInputSuggest). */
+.meeting-copilot-settings .setting-item-control:has(> .meeting-copilot-model-combobox),
 .meeting-copilot-settings .setting-item-control:has(> .meeting-copilot-model-dropdown) {
     flex: 0 0 40%;
+    min-width: 40%;
 }
 
+.meeting-copilot-settings .meeting-copilot-model-combobox,
 .meeting-copilot-settings .meeting-copilot-model-dropdown {
     width: 100%;
+    box-sizing: border-box;
 }
 
 /* =========================================================================
@@ -1323,4 +1327,89 @@ ul.mc-action-tasks {
 	font-size: var(--font-ui-small);
 	color: var(--text-muted);
 	margin: 0 0 var(--size-4-2);
+}
+
+.mc-endpoint-status {
+	margin-left: 0.4em;
+	font-weight: var(--font-bold);
+	font-size: var(--font-ui-small);
+}
+.mc-endpoint-status.is-ok {
+	color: var(--text-success, var(--color-green));
+}
+.mc-endpoint-status.is-error {
+	color: var(--text-error, var(--color-red));
+}
+.mc-fallback-endpoint {
+	margin: var(--size-4-2) 0 var(--size-4-3);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	padding: 0 var(--size-4-3);
+}
+.mc-fallback-endpoint-summary {
+	cursor: pointer;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+	padding: var(--size-4-2) 0;
+	user-select: none;
+}
+.mc-fallback-endpoint-summary:hover {
+	color: var(--text-normal);
+}
+.mc-fallback-endpoint-desc {
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+	margin: 0 0 var(--size-4-2);
+}
+
+/* Fallback model collapsible — same bordered card as Fallback endpoint */
+.mc-fallback-model {
+	margin: var(--size-4-2) 0 var(--size-4-3);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	padding: 0 var(--size-4-3);
+	background: transparent;
+}
+.mc-fallback-model-summary {
+	cursor: pointer;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+	padding: var(--size-4-2) 0;
+	user-select: none;
+}
+.mc-fallback-model-summary:hover {
+	color: var(--text-normal);
+}
+/* Stack desc above the control so we don't get an empty name column + gap */
+.meeting-copilot-settings .mc-fallback-model-row.setting-item {
+	flex-direction: column;
+	align-items: stretch;
+	gap: 0.35em;
+	padding: 0 0 var(--size-4-2);
+	border-top: none;
+}
+.meeting-copilot-settings .mc-fallback-model-row .setting-item-info {
+	margin-right: 0;
+	flex: none;
+	width: 100%;
+}
+.meeting-copilot-settings .mc-fallback-model-row .setting-item-name {
+	display: none;
+}
+.meeting-copilot-settings .mc-fallback-model-row .setting-item-description {
+	font-size: var(--font-ui-smaller);
+}
+.meeting-copilot-settings .mc-fallback-model-row .setting-item-control {
+	justify-content: flex-start;
+	padding: 0;
+}
+/* Nested under “Fall back to remote” — same card chrome, not a left rail */
+.mc-local-fallback-models {
+	margin: var(--size-4-2) 0 var(--size-4-3);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	padding: 0 var(--size-4-3) var(--size-4-2);
+}
+.mc-local-fallback-models > .setting-item:first-child {
+	border-top: none;
 }
