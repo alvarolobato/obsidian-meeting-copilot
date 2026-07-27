@@ -165,7 +165,14 @@ async function expandGroupResource(
 			cache,
 			depth + 1
 		);
-		for (const person of nested) pushPerson(person, true);
+		// Append nested results without re-marking cache.kind — a depth-capped
+		// GROUP placeholder must stay unmarked so a later root invite can expand.
+		for (const person of nested) {
+			const p = normEmail(person);
+			if (!p || seen.has(p) || out.length >= maxPeople) continue;
+			seen.add(p);
+			out.push(p);
+		}
 	}
 	return out;
 }

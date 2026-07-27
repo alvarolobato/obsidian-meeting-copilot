@@ -140,6 +140,36 @@ describe("expandEmailToPeople", () => {
 		expect(asRoot).toEqual(["leaf@x.com"]);
 		expect(lookup).toHaveBeenCalledWith("sub@x.com");
 	});
+
+	it("does not re-poison depth-capped GROUPs when merging nested results", async () => {
+		const lookup = vi.fn(async (email: string) => {
+			if (email === "team@x.com") return "groups/team";
+			if (email === "sub@x.com") return "groups/sub";
+			if (email === "deeper@x.com") return "groups/deeper";
+			return null;
+		});
+		const dir: GroupDirectory = {
+			lookup,
+			async listMembers(resource: string) {
+				if (resource === "groups/team") {
+					return [{ email: "sub@x.com", type: "GROUP" }];
+				}
+				if (resource === "groups/sub") {
+					return [{ email: "deeper@x.com", type: "GROUP" }];
+				}
+				if (resource === "groups/deeper") {
+					return [{ email: "leaf@x.com", type: "USER" }];
+				}
+				return [];
+			},
+		};
+		const cache = new GroupExpandCache();
+		const capped = await expandEmailToPeople("team@x.com", dir, { maxDepth: 1 }, cache);
+		expect(capped).toEqual(["deeper@x.com"]);
+		expect(cache.kind.get("deeper@x.com")).toBeUndefined();
+		const asRoot = await expandEmailToPeople("deeper@x.com", dir, {}, cache);
+		expect(asRoot).toEqual(["leaf@x.com"]);
+	});
 });
 
 describe("mapAttendeesExpanded", () => {
