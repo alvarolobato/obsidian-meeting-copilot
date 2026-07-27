@@ -305,8 +305,8 @@ current (e.g. `actions/checkout@v5`, `actions/setup-node@v5`).
   `[mc:notif] …` traces (via `console.warn`, so console-export tools capture
   them) and registers a dev-only "Debug test meeting notification" command in
   `main.ts`. Nothing ships to end users while the flag is off; changing it needs
-  a plugin reload. User-facing steps live under *Debugging notifications* in the
-  README.
+  a plugin reload. User-facing steps live under *Debugging notifications* in
+  [`docs/development.md`](./docs/development.md).
 - **Retention safety:** audio is pruned only when the owning note has the
   managed `transcript_saved` frontmatter flag (set by `insertTranscript`), never
   by sniffing the note body — a template placeholder must not cause data loss.
