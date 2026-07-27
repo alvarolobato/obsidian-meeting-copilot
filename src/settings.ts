@@ -966,7 +966,6 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                         : s.settings.endpointStatus.error,
             },
         });
-        void mark;
     }
 
     private renderCalendarTab(containerEl: HTMLElement): void {
@@ -2285,10 +2284,13 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                         : t().settings.modelCombobox.placeholderEmpty)
             );
             text.setValue(current);
-            text.onChange(async (value) => {
-                await onChange(value.trim());
-            });
             if (hasList) {
+                // Persist on pick or blur only — not every keystroke while the
+                // user is filtering, which would write partial model ids into
+                // settings and break transcription/enrichment.
+                text.inputEl.addEventListener("blur", () => {
+                    void onChange(text.inputEl.value.trim());
+                });
                 new ModelIdSuggest(
                     this.app,
                     text.inputEl,
@@ -2298,6 +2300,10 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                         void onChange(value);
                     }
                 );
+            } else {
+                text.onChange(async (value) => {
+                    await onChange(value.trim());
+                });
             }
         });
     }
