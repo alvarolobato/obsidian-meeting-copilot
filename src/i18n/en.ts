@@ -364,7 +364,7 @@ export const en = {
 		},
 		retentionDays: {
 			name: "Recording retention (days)",
-			desc: "Move recordings older than this many days to the trash (audio only). A recording linked to a meeting note is kept until that note is transcribed or enriched, so you never lose audio you haven't captured yet. Runs on startup and via the 'Clean up old recordings' command. 0 keeps recordings forever.",
+			desc: "Move recordings older than this many days to the trash (audio only). A recording linked to a meeting note is kept until that note is transcribed or enriched, so you never lose audio you haven't captured yet. Runs on startup and via the 'Clean up old recordings' command. 0 keeps recordings forever. Default for new installs is 15 days (existing settings are unchanged).",
 		},
 		actionItemsAsTasks: {
 			name: "Action items as tasks",

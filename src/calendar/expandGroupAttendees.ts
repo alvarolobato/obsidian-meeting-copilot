@@ -33,10 +33,12 @@ export interface ListMembersOptions {
  */
 export interface GroupDirectory {
 	/**
-	 * Resolve an email to a Cloud Identity group resource name (`groups/…`),
-	 * or `null` when the address is not a group the caller can see.
+	 * Resolve an email to a Cloud Identity group resource name (`groups/…`).
+	 * - `string` — confirmed group
+	 * - `null` — confirmed not a group (safe to session-cache as person)
+	 * - `undefined` — inconclusive (e.g. 403 missing scope); do not cache as person
 	 */
-	lookup(email: string): Promise<string | null>;
+	lookup(email: string): Promise<string | null | undefined>;
 	/** Members for a group resource name. */
 	listMembers(
 		groupResourceName: string,
@@ -113,7 +115,7 @@ export async function expandEmailToPeople(
 	if (cache.disabled) return [key];
 	if (depth > maxDepth) return [key];
 
-	let resource: string | null;
+	let resource: string | null | undefined;
 	try {
 		resource = await dir.lookup(key);
 	} catch (err) {
@@ -125,6 +127,11 @@ export async function expandEmailToPeople(
 		return [key];
 	}
 
+	if (resource === undefined) {
+		// Inconclusive (e.g. 403) — leave unexpanded and allow a later retry
+		// after reauth without pinning "person" for the rest of the session.
+		return [key];
+	}
 	if (!resource) {
 		cache.kind.set(key, "person");
 		return [key];
@@ -309,7 +316,7 @@ export function createCloudIdentityDirectory(
 	directoryCache?: DirectoryCache
 ): GroupDirectory {
 	return {
-		async lookup(email: string): Promise<string | null> {
+		async lookup(email: string): Promise<string | null | undefined> {
 			const key = email.trim().toLowerCase();
 			const cached = directoryCache?.getGroup(key);
 			if (cached !== undefined) return cached.resource;
@@ -340,8 +347,9 @@ export function createCloudIdentityDirectory(
 					);
 				}
 				// Not allowed / missing scope — do NOT persist as "not a group"
-				// or a pre-reauth 403 would poison the week-long disk cache.
-				return null;
+				// (disk) and return undefined so the session cache does not pin
+				// "person" either (reauth can retry in the same session).
+				return undefined;
 			}
 			if (res.status >= 400) {
 				throw new Error(

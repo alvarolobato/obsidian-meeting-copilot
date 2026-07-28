@@ -63,4 +63,21 @@ describe("resolveAttendeeLabel", () => {
 			resolveAttendeeLabel("other@elastic.co", "", people, cache)
 		).resolves.toBe("Other");
 	});
+
+	it("does not session-cache inconclusive (undefined) directory results", async () => {
+		const resolveDisplayName = vi
+			.fn()
+			.mockResolvedValueOnce(undefined)
+			.mockResolvedValueOnce("Nicolas Ruflin");
+		const people: PersonDirectory = { resolveDisplayName };
+		const cache = new PersonNameCache();
+		await expect(
+			resolveAttendeeLabel("ruflin@elastic.co", undefined, people, cache)
+		).resolves.toBe("Ruflin");
+		expect(cache.miss.has("ruflin@elastic.co")).toBe(false);
+		await expect(
+			resolveAttendeeLabel("ruflin@elastic.co", undefined, people, cache)
+		).resolves.toBe("Nicolas Ruflin");
+		expect(resolveDisplayName).toHaveBeenCalledTimes(2);
+	});
 });

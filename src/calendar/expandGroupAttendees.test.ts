@@ -334,4 +334,27 @@ describe("mapAttendeesExpanded", () => {
 		);
 		expect(labels).toEqual(["Jsmith"]);
 	});
+
+	it("does not session-cache inconclusive lookups (undefined) as person", async () => {
+		const lookup = vi
+			.fn()
+			.mockResolvedValueOnce(undefined)
+			.mockResolvedValueOnce("groups/elg");
+		const dir: GroupDirectory = {
+			lookup,
+			async listMembers() {
+				return [{ email: "a@x.com", type: "USER" }];
+			},
+		};
+		const cache = new GroupExpandCache();
+		await expect(
+			expandEmailToPeople("elg@x.com", dir, {}, cache)
+		).resolves.toEqual(["elg@x.com"]);
+		expect(cache.kind.has("elg@x.com")).toBe(false);
+		await expect(
+			expandEmailToPeople("elg@x.com", dir, {}, cache)
+		).resolves.toEqual(["a@x.com"]);
+		expect(lookup).toHaveBeenCalledTimes(2);
+		expect(cache.kind.get("elg@x.com")).toBe("group");
+	});
 });

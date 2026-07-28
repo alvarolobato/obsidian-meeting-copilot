@@ -15,10 +15,12 @@ const PEOPLE_API = "https://people.googleapis.com/v1";
  */
 export interface PersonDirectory {
 	/**
-	 * Resolve a workspace user's display name from their email, or `null` when
-	 * the directory has no usable name for that address.
+	 * Resolve a workspace user's display name from their email.
+	 * - `string` — directory hit
+	 * - `null` — confirmed miss (safe to session-cache)
+	 * - `undefined` — inconclusive (e.g. 403); do not session-cache as a miss
 	 */
-	resolveDisplayName(email: string): Promise<string | null>;
+	resolveDisplayName(email: string): Promise<string | null | undefined>;
 }
 
 /** Session cache shared across attendee-name resolutions. */
@@ -63,7 +65,8 @@ export async function resolveAttendeeLabel(
 			cache.names.set(key, name);
 			return name;
 		}
-		cache.miss.add(key);
+		// Confirmed miss only — undefined means inconclusive (403), so retry later.
+		if (name === null) cache.miss.add(key);
 	} catch (err) {
 		cache.disabled = true;
 		console.warn(
@@ -91,13 +94,15 @@ export function createPeopleDirectory(
 ): PersonDirectory {
 	const { directoryCache, rateLimiter } = opts;
 	return {
-		async resolveDisplayName(email: string): Promise<string | null> {
+		async resolveDisplayName(
+			email: string
+		): Promise<string | null | undefined> {
 			const key = normEmail(email);
 			const cached = directoryCache?.getPerson(key);
 			if (cached !== undefined) return cached.name;
 
 			if (directoryCache?.peopleIsRateLimited()) {
-				return null;
+				return undefined;
 			}
 
 			if (rateLimiter) {
@@ -142,8 +147,9 @@ export function createPeopleDirectory(
 						`People API directory lookup failed (HTTP 403): ${res.text}`
 					);
 				}
-				// Missing scope / not allowed — don't persist a year-long miss.
-				return null;
+				// Missing scope / not allowed — don't persist a year-long miss
+				// and don't session-cache (undefined = inconclusive).
+				return undefined;
 			}
 			if (res.status === 404) {
 				directoryCache?.setPerson(key, null);
