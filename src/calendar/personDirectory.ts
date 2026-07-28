@@ -100,16 +100,12 @@ export function createPeopleDirectory(oauth: GoogleOAuth): PersonDirectory {
 							})
 						: null;
 				const reason = body?.error?.details?.[0]?.reason;
-				const status = body?.error?.status;
-				if (
-					reason === "SERVICE_DISABLED" ||
-					status === "PERMISSION_DENIED"
-				) {
+				if (reason === "SERVICE_DISABLED") {
 					throw new Error(
 						`People API directory lookup failed (HTTP 403): ${res.text}`
 					);
 				}
-				// Not allowed to see this person — treat as a miss.
+				// Other 403s (e.g. not allowed to see this person) — miss.
 				return null;
 			}
 			if (res.status === 404) return null;
@@ -134,8 +130,9 @@ export function createPeopleDirectory(oauth: GoogleOAuth): PersonDirectory {
 				const emails = (person.emailAddresses ?? [])
 					.map((e) => normEmail(e.value ?? ""))
 					.filter(Boolean);
-				// Prefer an exact email match when the directory returns addresses.
-				if (emails.length > 0 && !emails.includes(want)) continue;
+				// searchDirectoryPeople is prefix-based — only accept an exact
+				// email match so a neighboring hit can't steal the label.
+				if (!emails.includes(want)) continue;
 				const name = (
 					person.names?.[0]?.displayName ||
 					person.names?.[0]?.unstructuredName ||

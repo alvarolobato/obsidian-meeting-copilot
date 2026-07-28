@@ -2011,6 +2011,10 @@ export default class SystemRecordingPlugin extends Plugin {
 		}>,
 		generation: number
 	): Promise<void> {
+		// Allow one network retry per background pass after a prior soft-fail
+		// (e.g. API enabled / scopes granted mid-session).
+		this.groupExpandCache.disabled = false;
+		this.personNameCache.disabled = false;
 		const dir = createCloudIdentityDirectory(this.oauth);
 		const people = createPeopleDirectory(this.oauth);
 		const opts = {
@@ -2026,7 +2030,6 @@ export default class SystemRecordingPlugin extends Plugin {
 			const fp = inviteeFingerprint(ev.invitees);
 			const existing = this.expandedAttendeesByEventId.get(ev.id);
 			if (existing && existing.fingerprint === fp) continue;
-			const disabledBefore = this.groupExpandCache.disabled;
 			try {
 				const labels = await mapAttendeesExpanded(
 					ev.invitees,
@@ -2037,22 +2040,19 @@ export default class SystemRecordingPlugin extends Plugin {
 					this.personNameCache
 				);
 				if (generation !== this.groupExpandGeneration) return;
-				// Soft-fail: API flipped disabled during this attempt and we
-				// got no expansion — don't cache, so a later poll / reauth can retry.
-				if (this.groupExpandCache.disabled && !disabledBefore) {
-					const unchanged =
-						labels.length === ev.attendees.length &&
-						labels.every((l, i) => l === ev.attendees[i]);
-					if (unchanged) continue;
+				const unchanged =
+					labels.length === ev.attendees.length &&
+					labels.every((l, i) => l === ev.attendees[i]);
+				// Soft-fail: Groups API disabled and labels unchanged — don't
+				// cache, so the next poll (which clears `disabled`) can retry.
+				if (this.groupExpandCache.disabled && unchanged) {
+					continue;
 				}
 				this.expandedAttendeesByEventId.set(ev.id, {
 					fingerprint: fp,
 					labels,
 				});
-				if (
-					labels.length !== ev.attendees.length ||
-					labels.some((l, i) => l !== ev.attendees[i])
-				) {
+				if (!unchanged) {
 					ev.attendees = labels;
 					changed = true;
 				}
@@ -2091,7 +2091,9 @@ export default class SystemRecordingPlugin extends Plugin {
 		const cached = this.expandedAttendeesByEventId.get(opts.id);
 		if (cached && cached.fingerprint === fp) return cached.labels;
 		if (opts.invitees.length === 0) return opts.attendees;
-		const disabledBefore = this.groupExpandCache.disabled;
+		// Allow a foreground note-create to retry after a prior soft-fail.
+		this.groupExpandCache.disabled = false;
+		this.personNameCache.disabled = false;
 		try {
 			const labels = await mapAttendeesExpanded(
 				opts.invitees,
@@ -2107,11 +2109,11 @@ export default class SystemRecordingPlugin extends Plugin {
 				createPeopleDirectory(this.oauth),
 				this.personNameCache
 			);
-			if (this.groupExpandCache.disabled && !disabledBefore) {
-				const unchanged =
-					labels.length === opts.attendees.length &&
-					labels.every((l, i) => l === opts.attendees[i]);
-				if (unchanged) return opts.attendees;
+			const unchanged =
+				labels.length === opts.attendees.length &&
+				labels.every((l, i) => l === opts.attendees[i]);
+			if (this.groupExpandCache.disabled && unchanged) {
+				return opts.attendees;
 			}
 			this.expandedAttendeesByEventId.set(opts.id, {
 				fingerprint: fp,
