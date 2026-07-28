@@ -1,6 +1,10 @@
 import { requestUrl } from "obsidian";
 import type { GoogleOAuth } from "../auth/googleOAuth";
-import { humanizeEmailName } from "./attendeeNames";
+import {
+	PersonNameCache,
+	resolveAttendeeLabel,
+	type PersonDirectory,
+} from "./personDirectory";
 
 const CI_API = "https://cloudidentity.googleapis.com/v1";
 
@@ -62,6 +66,20 @@ export class GroupExpandCache {
 
 function normEmail(email: string): string {
 	return email.trim().toLowerCase();
+}
+
+/** Stable fingerprint of invitees so session cache invalidates when Calendar changes. */
+export function inviteeFingerprint(
+	invitees: ExpandableAttendee[] | undefined
+): string {
+	return (invitees ?? [])
+		.map((a) => {
+			const email = normEmail(a.email ?? "");
+			const display = (a.displayName ?? "").trim();
+			return `${email}|${display}`;
+		})
+		.sort()
+		.join("\n");
 }
 
 /**
@@ -197,12 +215,17 @@ async function expandGroupResource(
  * member people when Cloud Identity allows. Resources are dropped. Order is
  * stable; duplicates (by lowercased email) are removed. Soft-fails to the
  * original displayName/email when expansion is unavailable.
+ *
+ * Labels prefer Calendar `displayName`, then People directory name, then a
+ * humanized local-part — never a bare email when a better label exists.
  */
 export async function mapAttendeesExpanded(
 	raw: ExpandableAttendee[] | undefined,
 	dir: GroupDirectory,
 	opts: ExpandOptions = {},
-	cache: GroupExpandCache = new GroupExpandCache()
+	cache: GroupExpandCache = new GroupExpandCache(),
+	people: PersonDirectory | null = null,
+	personCache: PersonNameCache = new PersonNameCache()
 ): Promise<string[]> {
 	const labelByEmail = new Map<string, string>();
 	const nameless: string[] = [];
@@ -214,8 +237,7 @@ export async function mapAttendeesExpanded(
 		order.push(emailKey);
 	};
 
-	// Direct invitee display names win over humanized expansions (group may
-	// appear before the same person as a direct guest).
+	// Direct invitee display names win over directory/humanized expansions.
 	const directDisplay = new Map<string, string>();
 	for (const a of raw ?? []) {
 		if (a.resource) continue;
@@ -234,26 +256,36 @@ export async function mapAttendeesExpanded(
 		}
 
 		const key = normEmail(email);
-		const people = await expandEmailToPeople(email, dir, opts, cache);
+		const peopleEmails = await expandEmailToPeople(email, dir, opts, cache);
 		const wasGroup = cache.kind.get(key) === "group";
 
 		if (!wasGroup) {
-			// Match legacy mapAttendees: prefer displayName, else raw email.
-			remember(key, display || email);
+			remember(
+				key,
+				await resolveAttendeeLabel(email, display, people, personCache)
+			);
 			continue;
 		}
 
-		if (people.length === 0) {
-			remember(key, display || email);
+		if (peopleEmails.length === 0) {
+			remember(
+				key,
+				await resolveAttendeeLabel(email, display, people, personCache)
+			);
 			continue;
 		}
 
-		for (const personEmail of people) {
+		for (const personEmail of peopleEmails) {
 			const pKey = normEmail(personEmail);
 			if (!pKey) continue;
 			remember(
 				pKey,
-				directDisplay.get(pKey) ?? humanizeEmailName(personEmail)
+				await resolveAttendeeLabel(
+					personEmail,
+					directDisplay.get(pKey),
+					people,
+					personCache
+				)
 			);
 		}
 	}

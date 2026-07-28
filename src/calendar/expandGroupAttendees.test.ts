@@ -210,6 +210,25 @@ describe("mapAttendeesExpanded", () => {
 		expect(labels).toEqual(["Ash", "Alvaro Lobato"]);
 	});
 
+	it("resolves directory names for emails Calendar left nameless", async () => {
+		const dir = fakeDir({});
+		const people = {
+			resolveDisplayName: async (email: string) =>
+				email === "ruflin@elastic.co" ? "Nicolas Ruflin" : null,
+		};
+		const labels = await mapAttendeesExpanded(
+			[
+				{ email: "ruflin@elastic.co" },
+				{ email: "alvaro.lobato@elastic.co", displayName: "Alvaro Lobato" },
+			],
+			dir,
+			{},
+			undefined,
+			people
+		);
+		expect(labels).toEqual(["Nicolas Ruflin", "Alvaro Lobato"]);
+	});
+
 	it("keeps the group label when membership list fails empty after disable", async () => {
 		const dir = fakeDir({
 			groups: { "elg@x.com": "groups/elg" },
@@ -307,12 +326,12 @@ describe("mapAttendeesExpanded", () => {
 		expect(listCalls).toBe(2);
 	});
 
-	it("keeps raw email for people without a displayName", async () => {
+	it("humanizes email local-part when Calendar and directory have no name", async () => {
 		const dir = fakeDir({});
 		const labels = await mapAttendeesExpanded(
 			[{ email: "jsmith@x.com" }],
 			dir
 		);
-		expect(labels).toEqual(["jsmith@x.com"]);
+		expect(labels).toEqual(["Jsmith"]);
 	});
 });

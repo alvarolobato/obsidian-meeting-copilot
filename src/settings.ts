@@ -1094,7 +1094,9 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 						const n = Number.parseInt(value, 10);
 						this.plugin.settings.groupExpandMaxMembers =
 							Number.isFinite(n) && n >= 1 ? Math.min(n, 500) : 50;
+						this.plugin.resetGroupAttendeeExpansion();
 						await this.plugin.saveSettings();
+						this.plugin.refreshAgenda();
 					});
 			});
 

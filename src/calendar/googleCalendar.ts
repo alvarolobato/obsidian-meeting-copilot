@@ -251,6 +251,9 @@ export async function listEvents(
 			maxResults: String(maxResults),
 			singleEvents: "true",
 			orderBy: "startTime",
+			// Without this, large meetings can come back with attendeesOmitted
+			// and only the signed-in user — blocking group expansion entirely.
+			maxAttendees: "500",
 		});
 		if (pageToken) params.set("pageToken", pageToken);
 		const url = `${API}/calendars/${encodeURIComponent(calendarId)}/events?${params.toString()}`;

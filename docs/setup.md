@@ -8,7 +8,7 @@
 
 Client secret and OAuth tokens are stored in per-vault local storage on this device — not in synced `data.json`. Declined meetings are ignored. If the connection expires, the agenda shows **Reconnect**.
 
-Auth also requests Cloud Identity Groups (read-only) so group invitees on a calendar event (e.g. `elg@…`) can be expanded into people when you’re allowed to see the group’s members. Expansion runs in the background after the agenda loads (so the calendar UI isn’t blocked) and is capped by **Max group members to expand** in settings (default 50). If the API isn’t enabled or you can’t view the group, the group label is kept as-is. Enable the Cloud Identity API on your Google Cloud project if lookups fail with `SERVICE_DISABLED`.
+Auth also requests Cloud Identity Groups (read-only) and People directory (read-only) so group invitees on a calendar event (e.g. `elg@…`) can be expanded into people with real display names when you’re allowed to see them. Expansion and name lookup run in the background after the agenda loads (so the calendar UI isn’t blocked) and are capped by **Max group members to expand** in settings (default 50). If either API isn’t enabled or you can’t view the group/person, labels fall back gracefully (group email / humanized local-part). Enable the **Cloud Identity API** and **People API** on your Google Cloud project if lookups fail with `SERVICE_DISABLED`, then **Re-authenticate** so the new scopes are granted.
 
 ## AI endpoint (shared)
 

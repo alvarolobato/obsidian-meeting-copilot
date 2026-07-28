@@ -38,14 +38,15 @@ export class AuthInvalidatedError extends Error {
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 /**
- * Calendar events plus Cloud Identity Groups (read-only). Groups is the
- * non-admin API that can list members of groups the signed-in user is allowed
- * to see — used to expand group invitees (e.g. elg@…) into people. Admin
- * Directory scopes are intentionally not requested.
+ * Calendar events, Cloud Identity Groups (read-only), and People directory
+ * (read-only). Groups expands group invitees into people; People resolves
+ * display names when Calendar omits them. Admin Directory scopes are
+ * intentionally not requested.
  */
 const SCOPE = [
 	"https://www.googleapis.com/auth/calendar.readonly",
 	"https://www.googleapis.com/auth/cloud-identity.groups.readonly",
+	"https://www.googleapis.com/auth/directory.readonly",
 ].join(" ");
 
 export class GoogleOAuth {
