@@ -434,7 +434,7 @@ export const en = {
 		},
 		groupExpandMaxMembers: {
 			name: "Max group members to expand",
-			desc: "When a calendar invite lists a Google Group, expand it into at most this many people (via Cloud Identity). Runs in the background after the agenda loads. Larger groups keep the group label plus the first N members. Default 50; max 500.",
+			desc: "When a calendar invite lists a Google Group, expand it into at most this many people (via Cloud Identity). Runs in the background after the agenda loads. Larger groups are represented by the first N members only (the group label is replaced). Default 50; max 500.",
 		},
 		excludeWithoutMeetingLink: {
 			name: "Exclude meetings without a conference link",

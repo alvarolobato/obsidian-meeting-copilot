@@ -1292,12 +1292,15 @@ export default class SystemRecordingPlugin extends Plugin {
 	}
 
 	/** Drop session expansion state so the next fetch re-looks up groups/names.
-	 * Persistent {@link directoryCache} is kept (people/groups survive reauth). */
+	 * Persistent positive hits stay; negative (miss) disk entries are cleared so
+	 * a re-auth after enabling APIs/scopes can retry. */
 	resetGroupAttendeeExpansion(): void {
 		this.groupExpandGeneration++;
 		this.groupExpandCache = new GroupExpandCache();
 		this.personNameCache = new PersonNameCache();
 		this.expandedAttendeesByEventId.clear();
+		this.directoryCache.clearNegativeEntries();
+		void this.directoryCache.flush();
 	}
 
 	/** Load `<pluginDir>/directory-cache.json` into {@link directoryCache}. */

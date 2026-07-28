@@ -339,8 +339,8 @@ export function createCloudIdentityDirectory(
 						`Cloud Identity API disabled (HTTP 403): ${res.text}`
 					);
 				}
-				// Not allowed to see this group — treat as a non-group label.
-				directoryCache?.setGroupLookup(key, null);
+				// Not allowed / missing scope — do NOT persist as "not a group"
+				// or a pre-reauth 403 would poison the week-long disk cache.
 				return null;
 			}
 			if (res.status >= 400) {

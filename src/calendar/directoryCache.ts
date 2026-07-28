@@ -186,6 +186,24 @@ export class DirectoryCache {
 		this.markDirty();
 	}
 
+	/** Drop negative (miss) entries so a re-auth can retry lookups. */
+	clearNegativeEntries(): void {
+		let changed = false;
+		for (const [email, entry] of this.people) {
+			if (entry.name === null) {
+				this.people.delete(email);
+				changed = true;
+			}
+		}
+		for (const [email, entry] of this.groups) {
+			if (entry.resource === null) {
+				this.groups.delete(email);
+				changed = true;
+			}
+		}
+		if (changed) this.markDirty();
+	}
+
 	peopleIsRateLimited(): boolean {
 		return this.now() < this.peopleRateLimitedUntil;
 	}

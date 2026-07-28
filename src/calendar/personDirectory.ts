@@ -142,7 +142,7 @@ export function createPeopleDirectory(
 						`People API directory lookup failed (HTTP 403): ${res.text}`
 					);
 				}
-				directoryCache?.setPerson(key, null);
+				// Missing scope / not allowed — don't persist a year-long miss.
 				return null;
 			}
 			if (res.status === 404) {

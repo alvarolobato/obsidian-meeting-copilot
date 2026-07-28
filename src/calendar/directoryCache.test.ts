@@ -82,6 +82,19 @@ describe("DirectoryCache", () => {
 		t += 60_001;
 		expect(cache.peopleIsRateLimited()).toBe(false);
 	});
+
+	it("clearNegativeEntries drops miss entries but keeps hits", () => {
+		const cache = new DirectoryCache(null, () => 1_000, 0);
+		cache.setPerson("hit@x.com", "Hit");
+		cache.setPerson("miss@x.com", null);
+		cache.setGroupLookup("group@x.com", "groups/g");
+		cache.setGroupLookup("notgroup@x.com", null);
+		cache.clearNegativeEntries();
+		expect(cache.getPerson("hit@x.com")?.name).toBe("Hit");
+		expect(cache.getPerson("miss@x.com")).toBeUndefined();
+		expect(cache.getGroup("group@x.com")?.resource).toBe("groups/g");
+		expect(cache.getGroup("notgroup@x.com")).toBeUndefined();
+	});
 });
 
 describe("PeopleApiRateLimiter", () => {
