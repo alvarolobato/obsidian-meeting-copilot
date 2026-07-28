@@ -1,6 +1,11 @@
 import { requestUrl } from "obsidian";
 import type { GoogleOAuth } from "../auth/googleOAuth";
 import { humanizeEmailName } from "./attendeeNames";
+import {
+	DirectoryCache,
+	PeopleApiRateLimiter,
+	sleep,
+} from "./directoryCache";
 
 const PEOPLE_API = "https://people.googleapis.com/v1";
 
@@ -69,12 +74,38 @@ export async function resolveAttendeeLabel(
 	return humanizeEmailName(key) || key;
 }
 
+export interface PeopleDirectoryOptions {
+	/** Persistent people/groups cache (plugin-dir JSON). */
+	directoryCache?: DirectoryCache;
+	/** Caps People calls under the 90/min quota. */
+	rateLimiter?: PeopleApiRateLimiter;
+}
+
 /**
  * Live People API client (searchDirectoryPeople) backed by the plugin's OAuth.
+ * Honors {@link DirectoryCache} + {@link PeopleApiRateLimiter} when provided.
  */
-export function createPeopleDirectory(oauth: GoogleOAuth): PersonDirectory {
+export function createPeopleDirectory(
+	oauth: GoogleOAuth,
+	opts: PeopleDirectoryOptions = {}
+): PersonDirectory {
+	const { directoryCache, rateLimiter } = opts;
 	return {
 		async resolveDisplayName(email: string): Promise<string | null> {
+			const key = normEmail(email);
+			const cached = directoryCache?.getPerson(key);
+			if (cached !== undefined) return cached.name;
+
+			if (directoryCache?.peopleIsRateLimited()) {
+				return null;
+			}
+
+			if (rateLimiter) {
+				const wait = rateLimiter.waitMs();
+				if (wait > 0) await sleep(wait);
+				rateLimiter.record();
+			}
+
 			const token = await oauth.getAccessToken();
 			const url =
 				`${PEOPLE_API}/people:searchDirectoryPeople` +
@@ -89,6 +120,12 @@ export function createPeopleDirectory(oauth: GoogleOAuth): PersonDirectory {
 				headers: { Authorization: `Bearer ${token}` },
 				throw: false,
 			});
+			if (res.status === 429) {
+				directoryCache?.markPeopleRateLimited(60_000);
+				throw new Error(
+					`People API searchDirectoryPeople HTTP 429: ${res.text}`
+				);
+			}
 			if (res.status === 403) {
 				const body =
 					typeof res.json === "object" && res.json
@@ -105,10 +142,13 @@ export function createPeopleDirectory(oauth: GoogleOAuth): PersonDirectory {
 						`People API directory lookup failed (HTTP 403): ${res.text}`
 					);
 				}
-				// Other 403s (e.g. not allowed to see this person) — miss.
+				directoryCache?.setPerson(key, null);
 				return null;
 			}
-			if (res.status === 404) return null;
+			if (res.status === 404) {
+				directoryCache?.setPerson(key, null);
+				return null;
+			}
 			if (res.status >= 400) {
 				throw new Error(
 					`People API searchDirectoryPeople HTTP ${res.status}: ${res.text}`
@@ -125,21 +165,24 @@ export function createPeopleDirectory(oauth: GoogleOAuth): PersonDirectory {
 					}>;
 				}
 			)?.people;
-			const want = normEmail(email);
 			for (const person of people ?? []) {
 				const emails = (person.emailAddresses ?? [])
 					.map((e) => normEmail(e.value ?? ""))
 					.filter(Boolean);
 				// searchDirectoryPeople is prefix-based — only accept an exact
 				// email match so a neighboring hit can't steal the label.
-				if (!emails.includes(want)) continue;
+				if (!emails.includes(key)) continue;
 				const name = (
 					person.names?.[0]?.displayName ||
 					person.names?.[0]?.unstructuredName ||
 					""
 				).trim();
-				if (name) return name;
+				if (name) {
+					directoryCache?.setPerson(key, name);
+					return name;
+				}
 			}
+			directoryCache?.setPerson(key, null);
 			return null;
 		},
 	};

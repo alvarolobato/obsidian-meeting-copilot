@@ -1,5 +1,6 @@
 import { requestUrl } from "obsidian";
 import type { GoogleOAuth } from "../auth/googleOAuth";
+import type { DirectoryCache } from "./directoryCache";
 import {
 	PersonNameCache,
 	resolveAttendeeLabel,
@@ -300,12 +301,19 @@ export async function mapAttendeesExpanded(
 
 /**
  * Live Cloud Identity Groups client backed by the plugin's Google OAuth token.
+ * When a {@link DirectoryCache} is provided, lookups/memberships are persisted
+ * for {@link import("./directoryCache").GROUP_TTL_MS}.
  */
 export function createCloudIdentityDirectory(
-	oauth: GoogleOAuth
+	oauth: GoogleOAuth,
+	directoryCache?: DirectoryCache
 ): GroupDirectory {
 	return {
 		async lookup(email: string): Promise<string | null> {
+			const key = email.trim().toLowerCase();
+			const cached = directoryCache?.getGroup(key);
+			if (cached !== undefined) return cached.resource;
+
 			const token = await oauth.getAccessToken();
 			const url = `${CI_API}/groups:lookup?groupKey.id=${encodeURIComponent(email)}`;
 			const res = await requestUrl({
@@ -314,7 +322,10 @@ export function createCloudIdentityDirectory(
 				headers: { Authorization: `Bearer ${token}` },
 				throw: false,
 			});
-			if (res.status === 404) return null;
+			if (res.status === 404) {
+				directoryCache?.setGroupLookup(key, null);
+				return null;
+			}
 			if (res.status === 403) {
 				const body =
 					typeof res.json === "object" && res.json
@@ -329,6 +340,7 @@ export function createCloudIdentityDirectory(
 					);
 				}
 				// Not allowed to see this group — treat as a non-group label.
+				directoryCache?.setGroupLookup(key, null);
 				return null;
 			}
 			if (res.status >= 400) {
@@ -337,13 +349,24 @@ export function createCloudIdentityDirectory(
 				);
 			}
 			const name = (res.json as { name?: string })?.name;
-			return name && name.startsWith("groups/") ? name : null;
+			const resource =
+				name && name.startsWith("groups/") ? name : null;
+			directoryCache?.setGroupLookup(key, resource);
+			return resource;
 		},
 
 		async listMembers(
 			groupResourceName: string,
 			opts: ListMembersOptions = {}
 		): Promise<GroupMember[]> {
+			const cached = directoryCache?.getGroupByResource(groupResourceName);
+			if (cached?.members) {
+				const limit = opts.limit;
+				return limit !== undefined
+					? cached.members.slice(0, limit)
+					: cached.members;
+			}
+
 			const token = await oauth.getAccessToken();
 			const limit = opts.limit;
 			const pageSize =
@@ -352,6 +375,7 @@ export function createCloudIdentityDirectory(
 					: 200;
 			const members: GroupMember[] = [];
 			let pageToken: string | undefined;
+			let truncated = false;
 			for (let page = 0; page < 20; page++) {
 				const params = new URLSearchParams({
 					pageSize: String(pageSize),
@@ -385,11 +409,21 @@ export function createCloudIdentityDirectory(
 						type: (m.type ?? "USER").toUpperCase(),
 					});
 					if (limit !== undefined && members.length >= limit) {
-						return members;
+						truncated = true;
+						break;
 					}
 				}
+				if (truncated) break;
 				pageToken = json.nextPageToken || undefined;
 				if (!pageToken) break;
+			}
+			// Only persist complete membership lists — a limit-truncated fetch
+			// must not poison the week-long cache.
+			if (!truncated) {
+				directoryCache?.setGroupMembersByResource(
+					groupResourceName,
+					members
+				);
 			}
 			return members;
 		},

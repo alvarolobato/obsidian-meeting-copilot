@@ -134,6 +134,11 @@ import {
 	createPeopleDirectory,
 	PersonNameCache,
 } from "./calendar/personDirectory";
+import {
+	DIRECTORY_CACHE_FILENAME,
+	DirectoryCache,
+	PeopleApiRateLimiter,
+} from "./calendar/directoryCache";
 import { findExpiredRecordings, underFolder } from "./recordings/retention";
 
 /** Note section that holds personal action-item checkboxes (obsidian-tasks compatible). */
@@ -393,6 +398,13 @@ export default class SystemRecordingPlugin extends Plugin {
 	private groupExpandCache = new GroupExpandCache();
 	/** Session cache for People directory display-name lookups. */
 	private personNameCache = new PersonNameCache();
+	/**
+	 * Persistent People/Groups directory cache
+	 * (`<pluginDir>/directory-cache.json`). Loaded on startup; flushed on unload.
+	 */
+	private directoryCache = new DirectoryCache(null);
+	/** Caps People API calls under the 90/min per-user quota. */
+	private peopleRateLimiter = new PeopleApiRateLimiter();
 	/** Expanded attendee labels keyed by Google event id + invitee fingerprint. */
 	private expandedAttendeesByEventId = new Map<
 		string,
@@ -411,6 +423,7 @@ export default class SystemRecordingPlugin extends Plugin {
             `${this.manifest.name} v${describeVersion(this.manifest.version)}`
         );
         await this.loadSettings();
+		await this.initDirectoryCache();
         // Prime the vendored transcription engine (i18n + plugin dir).
         initTranscribeEngine(this.manifest.dir ?? null);
 
@@ -736,6 +749,7 @@ export default class SystemRecordingPlugin extends Plugin {
         }
         this.clearDurationTimer();
         this.clearActionStatus();
+		void this.directoryCache.flush();
         if (this.retentionTimeout !== null) {
             window.clearTimeout(this.retentionTimeout);
             this.retentionTimeout = null;
@@ -1277,12 +1291,42 @@ export default class SystemRecordingPlugin extends Plugin {
 		}
 	}
 
-	/** Drop session expansion state so the next fetch re-looks up groups/names. */
+	/** Drop session expansion state so the next fetch re-looks up groups/names.
+	 * Persistent {@link directoryCache} is kept (people/groups survive reauth). */
 	resetGroupAttendeeExpansion(): void {
 		this.groupExpandGeneration++;
 		this.groupExpandCache = new GroupExpandCache();
 		this.personNameCache = new PersonNameCache();
 		this.expandedAttendeesByEventId.clear();
+	}
+
+	/** Load `<pluginDir>/directory-cache.json` into {@link directoryCache}. */
+	private async initDirectoryCache(): Promise<void> {
+		const dir = this.manifest.dir;
+		if (!dir) return;
+		const path = normalizePath(`${dir}/${DIRECTORY_CACHE_FILENAME}`);
+		const adapter = this.app.vault.adapter;
+		this.directoryCache = new DirectoryCache({
+			read: async () => {
+				if (!(await adapter.exists(path))) return null;
+				return adapter.read(path);
+			},
+			write: async (json) => {
+				await adapter.write(path, json);
+			},
+		});
+		await this.directoryCache.load();
+	}
+
+	private createGroupDirectory() {
+		return createCloudIdentityDirectory(this.oauth, this.directoryCache);
+	}
+
+	private createPersonDirectory() {
+		return createPeopleDirectory(this.oauth, {
+			directoryCache: this.directoryCache,
+			rateLimiter: this.peopleRateLimiter,
+		});
 	}
 
 	/**
@@ -2012,11 +2056,14 @@ export default class SystemRecordingPlugin extends Plugin {
 		generation: number
 	): Promise<void> {
 		// Allow one network retry per background pass after a prior soft-fail
-		// (e.g. API enabled / scopes granted mid-session).
+		// (e.g. API enabled / scopes granted mid-session). Keep People disabled
+		// while a 429 cooldown is active so we don't re-blast the quota.
 		this.groupExpandCache.disabled = false;
-		this.personNameCache.disabled = false;
-		const dir = createCloudIdentityDirectory(this.oauth);
-		const people = createPeopleDirectory(this.oauth);
+		if (!this.directoryCache.peopleIsRateLimited()) {
+			this.personNameCache.disabled = false;
+		}
+		const dir = this.createGroupDirectory();
+		const people = this.createPersonDirectory();
 		const opts = {
 			maxPeople: Math.max(
 				1,
@@ -2093,11 +2140,13 @@ export default class SystemRecordingPlugin extends Plugin {
 		if (opts.invitees.length === 0) return opts.attendees;
 		// Allow a foreground note-create to retry after a prior soft-fail.
 		this.groupExpandCache.disabled = false;
-		this.personNameCache.disabled = false;
+		if (!this.directoryCache.peopleIsRateLimited()) {
+			this.personNameCache.disabled = false;
+		}
 		try {
 			const labels = await mapAttendeesExpanded(
 				opts.invitees,
-				createCloudIdentityDirectory(this.oauth),
+				this.createGroupDirectory(),
 				{
 					maxPeople: Math.max(
 						1,
@@ -2106,7 +2155,7 @@ export default class SystemRecordingPlugin extends Plugin {
 					),
 				},
 				this.groupExpandCache,
-				createPeopleDirectory(this.oauth),
+				this.createPersonDirectory(),
 				this.personNameCache
 			);
 			const unchanged =
