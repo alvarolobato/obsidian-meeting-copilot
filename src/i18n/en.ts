@@ -432,6 +432,10 @@ export const en = {
 			name: "Exclusion keywords",
 			desc: "Events whose title contains any of these words are excluded from the calendar entirely — not shown in the agenda and not recorded (separate by newline or comma; case-insensitive).",
 		},
+		groupExpandMaxMembers: {
+			name: "Max group members to expand",
+			desc: "When a calendar invite lists a Google Group, expand it into at most this many people (via Cloud Identity). Runs in the background after the agenda loads. Larger groups keep the group label plus the first N members. Default 50; max 500.",
+		},
 		excludeWithoutMeetingLink: {
 			name: "Exclude meetings without a conference link",
 			desc: "Hide events that have no Google Meet, Zoom, Teams, or Webex link in the conference data, location, or description.",

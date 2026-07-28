@@ -19,6 +19,7 @@ function evt(over: Partial<ScheduledEvent> = {}): ScheduledEvent {
 		location: "",
 		htmlLink: "",
 		attendees: [],
+		invitees: [],
 		organizer: null,
 		iCalUID: null,
 		recurringEventId: null,

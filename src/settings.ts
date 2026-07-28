@@ -79,6 +79,11 @@ export interface SystemRecordingSettings {
 	noteTemplateCustomize: boolean;
 	noteTemplate: string;
 	retentionDays: number;
+	/**
+	 * Cap on people expanded from a single Google Group invitee via Cloud
+	 * Identity. Excess members are omitted from attendee labels / notes.
+	 */
+	groupExpandMaxMembers: number;
 	insertTranscript: boolean;
 	autoTranscribe: boolean;
 	/** Auto-discard a just-stopped recording that had no speech (needs auto-transcribe). */
@@ -243,7 +248,8 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	noteTitlePattern: "",
 	noteTemplateCustomize: false,
 	noteTemplate: "",
-	retentionDays: 90,
+	retentionDays: 15,
+	groupExpandMaxMembers: 50,
 	insertTranscript: true,
 	autoTranscribe: true,
 	discardSilentRecordings: true,
@@ -1076,6 +1082,21 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 						this.plugin.refreshAgenda();
 					})
 			);
+
+		new Setting(containerEl)
+			.setName(s.settings.groupExpandMaxMembers.name)
+			.setDesc(s.settings.groupExpandMaxMembers.desc)
+			.addText((text) => {
+				text.inputEl.type = "number";
+				text
+					.setValue(String(this.plugin.settings.groupExpandMaxMembers))
+					.onChange(async (value) => {
+						const n = Number.parseInt(value, 10);
+						this.plugin.settings.groupExpandMaxMembers =
+							Number.isFinite(n) && n >= 1 ? Math.min(n, 500) : 50;
+						await this.plugin.saveSettings();
+					});
+			});
 
 		new Setting(containerEl)
 			.setName(s.settings.agendaLookAhead.name)

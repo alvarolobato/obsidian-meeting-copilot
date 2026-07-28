@@ -45,7 +45,6 @@ import {
 import * as path from "path";
 import * as fs from "fs";
 import { GoogleOAuth, type StoredTokens } from "./auth/googleOAuth";
-import { listEvents } from "./calendar/googleCalendar";
 import { parseKeywords } from "./calendar/eventFilter";
 import { CalendarScheduler, GRACE_MS, ScheduledEvent } from "./calendar/scheduler";
 import { eventEndStopAction } from "./calendar/eventEnd";
@@ -122,7 +121,14 @@ import {
     type ActionNoteGroup,
     type ActionTask,
 } from "./notes/dashboardActions";
-import type { GCalEvent } from "./calendar/googleCalendar";
+import { listEvents, type GCalEvent } from "./calendar/googleCalendar";
+import {
+	createCloudIdentityDirectory,
+	DEFAULT_GROUP_EXPAND_MAX_MEMBERS,
+	GroupExpandCache,
+	mapAttendeesExpanded,
+	type ExpandableAttendee,
+} from "./calendar/expandGroupAttendees";
 import { findExpiredRecordings, underFolder } from "./recordings/retention";
 
 /** Note section that holds personal action-item checkboxes (obsidian-tasks compatible). */
@@ -374,6 +380,15 @@ export default class SystemRecordingPlugin extends Plugin {
 	private retentionTimeout: number | null = null;
 	/** Serializes retention sweeps so the startup timer and the command can't overlap. */
 	private cleanupRunning = false;
+	/**
+	 * Session cache for Cloud Identity group expansion. Shared across polls so
+	 * the same group/person isn't looked up again until the plugin reloads.
+	 */
+	private groupExpandCache = new GroupExpandCache();
+	/** Expanded attendee labels keyed by Google event id. */
+	private expandedAttendeesByEventId = new Map<string, string[]>();
+	/** Bumped to cancel an in-flight background expansion when a newer fetch wins. */
+	private groupExpandGeneration = 0;
 	private agendaEvents = new TypedEventBus<AgendaViewEvents>();
 
     async onload() {
@@ -1899,6 +1914,8 @@ export default class SystemRecordingPlugin extends Plugin {
 			parseKeywords(this.settings.exclusionKeywords),
 			this.settings.excludeWithoutMeetingLink
 		);
+		this.applyCachedExpandedAttendees(events);
+		this.scheduleGroupAttendeeExpand(events);
 		return events.map((e) => ({
 			id: e.id,
 			summary: e.summary,
@@ -1908,12 +1925,136 @@ export default class SystemRecordingPlugin extends Plugin {
 			location: e.location,
 			htmlLink: e.htmlLink,
 			attendees: e.attendees,
+			invitees: e.invitees,
 			organizer: e.organizer,
 			iCalUID: e.iCalUID,
 			recurringEventId: e.recurringEventId,
 			oneOnOnePartner: e.oneOnOnePartner,
 			oneOnOnePartnerEmail: e.oneOnOnePartnerEmail,
 		}));
+	}
+
+	/**
+	 * Overlay any already-expanded attendee labels onto freshly fetched events
+	 * so a re-poll doesn't flash raw group labels after a prior expansion.
+	 */
+	private applyCachedExpandedAttendees(
+		events: Array<{ id: string; attendees: string[] }>
+	): void {
+		for (const ev of events) {
+			const expanded = this.expandedAttendeesByEventId.get(ev.id);
+			if (expanded) ev.attendees = expanded;
+		}
+	}
+
+	/**
+	 * Expand Google Group invitees in the background after the calendar UI has
+	 * already rendered with raw labels. Soft-fails; results are cached for the
+	 * session and trigger an agenda/dashboard refresh when anything changes.
+	 */
+	private scheduleGroupAttendeeExpand(
+		events: Array<{
+			id: string;
+			attendees: string[];
+			invitees: ExpandableAttendee[];
+		}>
+	): void {
+		const pending = events.filter(
+			(ev) =>
+				ev.invitees.length > 0 &&
+				!this.expandedAttendeesByEventId.has(ev.id)
+		);
+		if (pending.length === 0) return;
+		const generation = ++this.groupExpandGeneration;
+		void this.runGroupAttendeeExpand(pending, generation);
+	}
+
+	private async runGroupAttendeeExpand(
+		events: Array<{
+			id: string;
+			attendees: string[];
+			invitees: ExpandableAttendee[];
+		}>,
+		generation: number
+	): Promise<void> {
+		const dir = createCloudIdentityDirectory(this.oauth);
+		const opts = {
+			maxPeople: Math.max(
+				1,
+				this.settings.groupExpandMaxMembers ||
+					DEFAULT_GROUP_EXPAND_MAX_MEMBERS
+			),
+		};
+		let changed = false;
+		for (const ev of events) {
+			if (generation !== this.groupExpandGeneration) return;
+			if (this.expandedAttendeesByEventId.has(ev.id)) continue;
+			try {
+				const labels = await mapAttendeesExpanded(
+					ev.invitees,
+					dir,
+					opts,
+					this.groupExpandCache
+				);
+				if (generation !== this.groupExpandGeneration) return;
+				this.expandedAttendeesByEventId.set(ev.id, labels);
+				if (
+					labels.length !== ev.attendees.length ||
+					labels.some((l, i) => l !== ev.attendees[i])
+				) {
+					ev.attendees = labels;
+					changed = true;
+				}
+			} catch (err) {
+				console.warn(
+					"[Meeting Copilot] Background group attendee expansion failed.",
+					err
+				);
+				return;
+			}
+		}
+		if (changed && generation === this.groupExpandGeneration) {
+			// Refresh agenda/dashboard so expanded people replace group labels.
+			this.agendaEvents.emit("changed", undefined);
+		}
+	}
+
+	/**
+	 * Await expansion for a single meeting before writing a note so attendees
+	 * don't land as an unexpanded group label when the user creates a note
+	 * before the background pass finishes.
+	 */
+	private async ensureAttendeesExpanded(opts: {
+		id: string;
+		attendees: string[];
+		invitees: ExpandableAttendee[];
+	}): Promise<string[]> {
+		const cached = this.expandedAttendeesByEventId.get(opts.id);
+		if (cached) return cached;
+		if (opts.invitees.length === 0) return opts.attendees;
+		try {
+			const labels = await mapAttendeesExpanded(
+				opts.invitees,
+				createCloudIdentityDirectory(this.oauth),
+				{
+					maxPeople: Math.max(
+						1,
+						this.settings.groupExpandMaxMembers ||
+							DEFAULT_GROUP_EXPAND_MAX_MEMBERS
+					),
+				},
+				this.groupExpandCache
+			);
+			this.expandedAttendeesByEventId.set(opts.id, labels);
+			opts.attendees = labels;
+			return labels;
+		} catch (err) {
+			console.warn(
+				"[Meeting Copilot] Group attendee expansion failed for note; using raw labels.",
+				err
+			);
+			return opts.attendees;
+		}
 	}
 
 	/**
@@ -1945,7 +2086,9 @@ export default class SystemRecordingPlugin extends Plugin {
 			this.dismissMeetingNotice(SystemRecordingPlugin.CAL_NOTICE_PREFIX + event.id);
 			if (this.currentRecordingEventId !== event.id) {
 				new Notice(t().event.autoStarted(event.summary));
-				void this.startMeetingRecording(this.toMeetingInfo(event), event.end);
+				void this.toMeetingInfoExpanded(event).then((info) =>
+					this.startMeetingRecording(info, event.end)
+				);
 			}
 			return;
 		}
@@ -1991,10 +2134,15 @@ export default class SystemRecordingPlugin extends Plugin {
 			subtitle,
 			meetLink: event.meetLink,
 			onRecord: () =>
-				void this.startMeetingRecording(this.toMeetingInfo(event), event.end),
+				void this.toMeetingInfoExpanded(event).then((info) =>
+					this.startMeetingRecording(info, event.end)
+				),
 			// Open (or create) the meeting note without recording — the "Open
 			// note" affordance, mirroring the agenda card.
-			onOpenNote: () => void this.openOrCreateEventNote(this.toMeetingInfo(event)),
+			onOpenNote: () =>
+				void this.toMeetingInfoExpanded(event).then((info) =>
+					this.openOrCreateEventNote(info)
+				),
 			// A manual Join opens the link, so don't let the auto-open fire again
 			// when the start boundary is crossed.
 			onLinkOpened: () => this.openedLinkEventIds.add(event.id),
@@ -2080,7 +2228,12 @@ export default class SystemRecordingPlugin extends Plugin {
 				m.end instanceof Date ? m.end.getTime() : undefined
 			);
 		} else {
-			void this.startMeetingRecording(agendaToMeetingInfo(m));
+			void this.ensureAttendeesExpanded(m).then((attendees) =>
+				this.startMeetingRecording({
+					...agendaToMeetingInfo(m),
+					attendees,
+				})
+			);
 		}
 	}
 
@@ -2186,6 +2339,17 @@ export default class SystemRecordingPlugin extends Plugin {
 			...e,
 			start: new Date(e.start),
 			end: new Date(e.end),
+		};
+	}
+
+	/** Like {@link toMeetingInfo}, but awaits group expansion first when needed. */
+	private async toMeetingInfoExpanded(
+		e: ScheduledEvent
+	): Promise<MeetingEventInfo> {
+		const attendees = await this.ensureAttendeesExpanded(e);
+		return {
+			...this.toMeetingInfo(e),
+			attendees,
 		};
 	}
 
@@ -2499,7 +2663,9 @@ export default class SystemRecordingPlugin extends Plugin {
             this.settings.excludeWithoutMeetingLink
         )
             .then((events) => {
+                this.applyCachedExpandedAttendees(events);
                 this.dashboardEventsCache = { at: Date.now(), events };
+                this.scheduleGroupAttendeeExpand(events);
                 return events;
             })
             .finally(() => {
@@ -3437,6 +3603,7 @@ export default class SystemRecordingPlugin extends Plugin {
             attendees: Array.isArray(fm["attendees"])
                 ? (fm["attendees"] as unknown[]).map((x) => String(x))
                 : [],
+            invitees: [],
             organizer: str("organizer") || null,
             iCalUID: str("ical_uid") || null,
             recurringEventId: str("recurring_event_id") || null,
@@ -3484,6 +3651,8 @@ export default class SystemRecordingPlugin extends Plugin {
             parseKeywords(this.settings.exclusionKeywords),
             this.settings.excludeWithoutMeetingLink
         );
+        this.applyCachedExpandedAttendees(events);
+        this.scheduleGroupAttendeeExpand(events);
         const index = buildNoteIndex(this.app);
         return events
             .map((e) => toAgendaMeeting(e, index))
@@ -3500,9 +3669,10 @@ export default class SystemRecordingPlugin extends Plugin {
 
     private async createNoteOnly(m: AgendaMeeting): Promise<void> {
         try {
+            const attendees = await this.ensureAttendeesExpanded(m);
             const ref = await createMeetingNote(
                 this.app,
-                agendaToMeetingInfo(m),
+                { ...agendaToMeetingInfo(m), attendees },
                 this.noteConfig()
             );
             await this.app.workspace.getLeaf(false).openFile(ref.file);

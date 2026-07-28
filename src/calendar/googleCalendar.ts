@@ -1,11 +1,7 @@
 import { requestUrl } from "obsidian";
 import type { GoogleOAuth } from "../auth/googleOAuth";
 import { humanizeEmailName } from "./attendeeNames";
-import {
-	createCloudIdentityDirectory,
-	GroupExpandCache,
-	mapAttendeesExpanded,
-} from "./expandGroupAttendees";
+import type { ExpandableAttendee } from "./expandGroupAttendees";
 import { extractMeetLink, RawConferenceEvent } from "./meetLink";
 import { extractMeetingUrlFromText } from "./meetingUrl";
 import {
@@ -26,6 +22,11 @@ export interface GCalEvent {
 	htmlLink: string;
 	/** Display names (falling back to email) of human attendees, excluding rooms/resources. */
 	attendees: string[];
+	/**
+	 * Raw non-resource invitees (email + displayName). Kept for deferred Cloud
+	 * Identity group expansion after the UI has already rendered.
+	 */
+	invitees: ExpandableAttendee[];
 	organizer: string | null;
 	/** Stable identifier shared across every instance of a recurring series. */
 	iCalUID: string | null;
@@ -117,6 +118,25 @@ export interface OneOnOneContext {
 	organizerIsSelf?: boolean;
 	/** True when Google truncated the attendee list; nothing can be inferred then. */
 	attendeesOmitted?: boolean;
+}
+
+/** Maps raw attendees to display names, dropping meeting rooms and other resources. */
+function mapAttendees(raw: RawAttendee[] | undefined): string[] {
+	return (raw ?? [])
+		.filter((a) => !a.resource)
+		.map((a) => (a.displayName || a.email || "").trim())
+		.filter((name) => name.length > 0);
+}
+
+/** Non-resource invitees kept for deferred group expansion. */
+function mapInvitees(raw: RawAttendee[] | undefined): ExpandableAttendee[] {
+	return (raw ?? [])
+		.filter((a) => !a.resource)
+		.map((a) => ({
+			email: a.email,
+			displayName: a.displayName,
+			resource: a.resource,
+		}));
 }
 
 /**
@@ -248,18 +268,12 @@ export async function listEvents(
 		.filter((ev) => !ev.start?.date)
 		.filter((ev) => !matchesExclusionKeyword(ev.summary ?? "", exclusionKeywords));
 
-	// Expand Google Group invitees (e.g. elg@…) into people via Cloud Identity
-	// Groups. Shared cache so the same group across events is looked up once.
-	// Soft-fails to the raw group label when the API is unavailable.
-	const groups = createCloudIdentityDirectory(oauth);
-	const expandCache = new GroupExpandCache();
-	const mapped: GCalEvent[] = [];
-	for (const ev of filtered) {
+	const mapped: GCalEvent[] = filtered.map((ev) => {
 		const start = new Date(ev.start?.dateTime ?? "");
 		const end = new Date(ev.end?.dateTime ?? "");
 		const organizer =
 			(ev.organizer?.displayName || ev.organizer?.email || "").trim() || null;
-		mapped.push({
+		return {
 			id: ev.id ?? "",
 			summary: ev.summary ?? "(no title)",
 			location: ev.location ?? "",
@@ -269,12 +283,10 @@ export async function listEvents(
 				extractMeetLink(ev) ??
 				extractMeetingUrlFromText(ev.location, ev.description),
 			htmlLink: ev.htmlLink ?? "",
-			attendees: await mapAttendeesExpanded(
-				ev.attendees,
-				groups,
-				{},
-				expandCache
-			),
+			// Fast path: raw Calendar labels only. Group expansion runs in the
+			// background after the UI has rendered (see main.ts).
+			attendees: mapAttendees(ev.attendees),
+			invitees: mapInvitees(ev.attendees),
 			organizer,
 			iCalUID: ev.iCalUID ?? null,
 			recurringEventId: ev.recurringEventId ?? null,
@@ -287,7 +299,7 @@ export async function listEvents(
 				organizerIsSelf: ev.organizer?.self === true,
 				attendeesOmitted: ev.attendeesOmitted === true,
 			}),
-		});
-	}
+		};
+	});
 	return filterRequireMeetingLink(mapped, requireMeetingLink);
 }

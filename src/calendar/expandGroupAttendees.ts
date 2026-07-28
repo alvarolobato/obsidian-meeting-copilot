@@ -17,6 +17,11 @@ export interface GroupMember {
 	type: string;
 }
 
+export interface ListMembersOptions {
+	/** Stop paging once at least this many members are collected. */
+	limit?: number;
+}
+
 /**
  * Minimal Cloud Identity Groups surface used to expand group invitees into
  * people. Implementations may hit the network or be fakes in tests.
@@ -28,13 +33,19 @@ export interface GroupDirectory {
 	 */
 	lookup(email: string): Promise<string | null>;
 	/** Members for a group resource name. */
-	listMembers(groupResourceName: string): Promise<GroupMember[]>;
+	listMembers(
+		groupResourceName: string,
+		opts?: ListMembersOptions
+	): Promise<GroupMember[]>;
 }
+
+/** Default cap on people expanded from one group invitee. */
+export const DEFAULT_GROUP_EXPAND_MAX_MEMBERS = 50;
 
 export interface ExpandOptions {
 	/** Max nested-group depth (root group = depth 0). Default 3. */
 	maxDepth?: number;
-	/** Cap on expanded people for one root attendee. Default 500. */
+	/** Cap on expanded people for one root attendee. Default 50. */
 	maxPeople?: number;
 }
 
@@ -66,7 +77,7 @@ export async function expandEmailToPeople(
 	depth = 0
 ): Promise<string[]> {
 	const maxDepth = opts.maxDepth ?? 3;
-	const maxPeople = opts.maxPeople ?? 500;
+	const maxPeople = opts.maxPeople ?? DEFAULT_GROUP_EXPAND_MAX_MEMBERS;
 	const key = normEmail(email);
 	if (!key.includes("@")) return [email.trim()].filter(Boolean);
 
@@ -118,7 +129,11 @@ async function expandGroupResource(
 	if (!members) {
 		if (cache.disabled) return [];
 		try {
-			members = await dir.listMembers(resource);
+			// Fetch a little past maxPeople so nested GROUP rows still appear
+			// when mixed into a large flat membership list.
+			members = await dir.listMembers(resource, {
+				limit: Math.max(maxPeople * 2, maxPeople + 25),
+			});
 		} catch (err) {
 			cache.disabled = true;
 			console.warn(
@@ -293,13 +308,21 @@ export function createCloudIdentityDirectory(
 			return name && name.startsWith("groups/") ? name : null;
 		},
 
-		async listMembers(groupResourceName: string): Promise<GroupMember[]> {
+		async listMembers(
+			groupResourceName: string,
+			opts: ListMembersOptions = {}
+		): Promise<GroupMember[]> {
 			const token = await oauth.getAccessToken();
+			const limit = opts.limit;
+			const pageSize =
+				limit !== undefined
+					? Math.min(200, Math.max(1, limit))
+					: 200;
 			const members: GroupMember[] = [];
 			let pageToken: string | undefined;
 			for (let page = 0; page < 20; page++) {
 				const params = new URLSearchParams({
-					pageSize: "200",
+					pageSize: String(pageSize),
 					view: "FULL",
 				});
 				if (pageToken) params.set("pageToken", pageToken);
@@ -329,6 +352,9 @@ export function createCloudIdentityDirectory(
 						email: id,
 						type: (m.type ?? "USER").toUpperCase(),
 					});
+					if (limit !== undefined && members.length >= limit) {
+						return members;
+					}
 				}
 				pageToken = json.nextPageToken || undefined;
 				if (!pageToken) break;

@@ -92,6 +92,22 @@ describe("expandEmailToPeople", () => {
 		expect(people).toEqual(["u0@x.com", "u1@x.com", "u2@x.com"]);
 	});
 
+	it("defaults maxPeople to 50", async () => {
+		const dir = fakeDir({
+			groups: { "big@x.com": "groups/big" },
+			members: {
+				"groups/big": Array.from({ length: 80 }, (_, i) => ({
+					email: `u${i}@x.com`,
+					type: "USER",
+				})),
+			},
+		});
+		const people = await expandEmailToPeople("big@x.com", dir);
+		expect(people).toHaveLength(50);
+		expect(people[0]).toBe("u0@x.com");
+		expect(people[49]).toBe("u49@x.com");
+	});
+
 	it("disables further lookups after a hard lookup failure", async () => {
 		const lookup = vi
 			.fn()

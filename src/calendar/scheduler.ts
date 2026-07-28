@@ -1,3 +1,5 @@
+import type { ExpandableAttendee } from "./expandGroupAttendees";
+
 export interface ScheduledEvent {
 	id: string;
 	summary: string;
@@ -7,6 +9,8 @@ export interface ScheduledEvent {
 	location: string;
 	htmlLink: string;
 	attendees: string[];
+	/** Raw invitees for deferred Cloud Identity group expansion. */
+	invitees: ExpandableAttendee[];
 	organizer: string | null;
 	iCalUID: string | null;
 	recurringEventId: string | null;
