@@ -24,7 +24,7 @@ git tag -a 0.5.1 -m "0.5.1"
 git push origin 0.5.1
 ```
 
-[`.github/workflows/release.yml`](../.github/workflows/release.yml) builds, signs, pins checksums, and publishes `main.js`, `manifest.json`, `styles.css`, `system-recorder`, `whisper`, and `fvad.wasm`.
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) builds, signs, pins checksums, and publishes `main.js`, `manifest.json`, `styles.css`, `system-recorder`, `whisper`, and `fvad.wasm`. After a successful release it also commits the synced `manifest.json`, `versions.json`, and `package.json` to `main` (via [`scripts/sync-release-version.mjs`](../scripts/sync-release-version.mjs)) so the community directory sees the current version at repo HEAD. `src/binary.ts` checksum placeholders remain on `main` — only release artifacts pin the real helper/dylib shas.
 
 ## Debugging notifications
 

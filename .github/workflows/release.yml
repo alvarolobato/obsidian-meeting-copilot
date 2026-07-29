@@ -63,20 +63,7 @@ jobs:
       - name: Sync manifest/versions to the release tag
         env:
           TAG: ${{ steps.v.outputs.tag }}
-        run: |
-          node -e '
-            const fs = require("fs");
-            const v = process.env.TAG;
-            const m = JSON.parse(fs.readFileSync("manifest.json", "utf8"));
-            m.version = v;
-            fs.writeFileSync("manifest.json", JSON.stringify(m, null, "\t") + "\n");
-            const vs = JSON.parse(fs.readFileSync("versions.json", "utf8"));
-            vs[v] = m.minAppVersion;
-            fs.writeFileSync("versions.json", JSON.stringify(vs, null, "\t") + "\n");
-            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
-            pkg.version = v;
-            fs.writeFileSync("package.json", JSON.stringify(pkg, null, "\t") + "\n");
-          '
+        run: node scripts/sync-release-version.mjs
 
       - name: Build Swift helper (arm64)
         run: npm run build:swift
@@ -180,4 +167,23 @@ jobs:
               --title "${TAG}" \
               --generate-notes \
               main.js manifest.json styles.css system-recorder whisper fvad.wasm
+          fi
+
+      # Community directory reads manifest.json at main HEAD; keep it aligned
+      # with the tag we just shipped. binary.ts placeholders stay on main.
+      - name: Sync version files on main
+        env:
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          TAG="${TAG}" node scripts/sync-release-version.mjs
+          git add manifest.json versions.json package.json
+          if git diff --staged --quiet; then
+            echo "main already synced to ${TAG}"
+          else
+            git commit -m "chore: sync manifest and versions to ${TAG}"
+            git push origin main
           fi

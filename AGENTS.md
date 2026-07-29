@@ -227,8 +227,11 @@ git tag -a 0.2.0 -m "0.2.0"
 git push origin 0.2.0
 ```
 
-`release.yml` also syncs `manifest.json` / `package.json` / `versions.json` to
-the tag. `ci.yml` runs typecheck/lint/test/build on PRs and pushes to `main`,
+`release.yml` syncs `manifest.json` / `package.json` / `versions.json` to the
+tag for release artifacts, then commits those three files back to `main` so
+HEAD matches the shipped version (needed for the Obsidian community directory).
+`src/binary.ts` checksum placeholders stay on `main` — only release builds pin
+real helper/dylib shas. `ci.yml` runs typecheck/lint/test/build on PRs and pushes to `main`,
 plus a macOS job that builds the Swift helper. Keep GitHub Action versions
 current (e.g. `actions/checkout@v5`, `actions/setup-node@v5`).
 
