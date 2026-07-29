@@ -214,6 +214,7 @@ export const en = {
 			record: "Create note and record",
 			recordAgain: "Record again (new take)",
 			stop: "Stop recording",
+			stopping: "Stopping…",
 			openNote: "Open note",
 			createNote: "Create note",
 			openLink: "Open meeting link",

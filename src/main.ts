@@ -1241,8 +1241,20 @@ export default class SystemRecordingPlugin extends Plugin {
             return;
         }
 
+        this.dismissStopPrompt();
+        if (this.recorder.hasStopBeenSignaled) {
+            new Notice(t().notices.stoppingRecording);
+            return;
+        }
+
         this.recorder.stop();
+        this.agendaEvents.emit("changed", undefined);
         new Notice(t().notices.stoppingRecording);
+    }
+
+    /** Stop-file written; helper has not yet reported `stopped`. */
+    private isStopInProgress(): boolean {
+        return this.recorder.isRecording && this.recorder.hasStopBeenSignaled;
     }
 
     /**
@@ -1771,6 +1783,12 @@ export default class SystemRecordingPlugin extends Plugin {
 		// don't leave a stop action that could kill the next take.
 		if (this.replacingDepth > 0) {
 			notifLog("promptStopRecording: suppressed (replace in flight)", {
+				title,
+			});
+			return;
+		}
+		if (this.isStopInProgress()) {
+			notifLog("promptStopRecording: suppressed (stop in progress)", {
 				title,
 			});
 			return;
@@ -2381,6 +2399,10 @@ export default class SystemRecordingPlugin extends Plugin {
 		return m.note != null && recordingNotePath === m.note.path;
 	}
 
+	private isStoppingMeeting(m: AgendaMeeting): boolean {
+		return this.isStopInProgress() && this.isRecordingMeeting(m);
+	}
+
 	/** Records a new take directly into an existing note (no createMeetingNote). */
 	private async recordIntoNote(
 		file: TFile,
@@ -2551,6 +2573,7 @@ export default class SystemRecordingPlugin extends Plugin {
             authenticate: () => this.authenticateCalendar(),
             fetchMeetings: (fromMs, toMs) => this.fetchAgendaMeetings(fromMs, toMs),
             isRecordingThis: (m) => this.isRecordingMeeting(m),
+            isStoppingThis: (m) => this.isStoppingMeeting(m),
             onOpenOrCreate: (m) => void this.openOrCreateNote(m),
             onCreateAndRecord: (m) => this.startRecordingForMeeting(m),
             onCreateNote: (m) => void this.createNoteOnly(m),
@@ -3761,6 +3784,7 @@ export default class SystemRecordingPlugin extends Plugin {
             },
             onSkip: () => {},
             isRecordingThis: (m) => this.isRecordingMeeting(m),
+            isStoppingThis: (m) => this.isStoppingMeeting(m),
         };
     }
 

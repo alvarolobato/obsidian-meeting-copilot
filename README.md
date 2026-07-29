@@ -1,6 +1,6 @@
 # Meeting Copilot
 
-Granola-style meeting capture for Obsidian on macOS: Google Calendar → dual-channel recording → transcription (remote or on-device Whisper) → AI enrichment.
+Integrated meeting transcription, note-taking, and summarization for Obsidian on macOS: Google Calendar → dual-channel recording → transcription (remote or on-device Whisper) → AI summaries.
 
 ![Meetings Dashboard and agenda sidebar](docs/screenshot-dashboard.png)
 
