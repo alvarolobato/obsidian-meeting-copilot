@@ -1,5 +1,7 @@
 import { requestUrl } from "obsidian";
 import type { GoogleOAuth } from "../auth/googleOAuth";
+import { humanizeEmailName } from "./attendeeNames";
+import type { ExpandableAttendee } from "./expandGroupAttendees";
 import { extractMeetLink, RawConferenceEvent } from "./meetLink";
 import { extractMeetingUrlFromText } from "./meetingUrl";
 import {
@@ -7,6 +9,8 @@ import {
 	isMeetingEventType,
 	matchesExclusionKeyword,
 } from "./eventFilter";
+
+export { humanizeEmailName } from "./attendeeNames";
 
 export interface GCalEvent {
 	id: string;
@@ -18,6 +22,11 @@ export interface GCalEvent {
 	htmlLink: string;
 	/** Display names (falling back to email) of human attendees, excluding rooms/resources. */
 	attendees: string[];
+	/**
+	 * Raw non-resource invitees (email + displayName). Kept for deferred Cloud
+	 * Identity group expansion after the UI has already rendered.
+	 */
+	invitees: ExpandableAttendee[];
 	organizer: string | null;
 	/** Stable identifier shared across every instance of a recurring series. */
 	iCalUID: string | null;
@@ -103,6 +112,14 @@ interface RawEvent extends RawConferenceEvent {
 	end?: { date?: string; dateTime?: string };
 }
 
+/** How a raw event's 1:1 shape is judged, beyond the attendee list itself. */
+export interface OneOnOneContext {
+	/** True when the signed-in user organized the event (`organizer.self`). */
+	organizerIsSelf?: boolean;
+	/** True when Google truncated the attendee list; nothing can be inferred then. */
+	attendeesOmitted?: boolean;
+}
+
 /** Maps raw attendees to display names, dropping meeting rooms and other resources. */
 function mapAttendees(raw: RawAttendee[] | undefined): string[] {
 	return (raw ?? [])
@@ -111,12 +128,15 @@ function mapAttendees(raw: RawAttendee[] | undefined): string[] {
 		.filter((name) => name.length > 0);
 }
 
-/** How a raw event's 1:1 shape is judged, beyond the attendee list itself. */
-export interface OneOnOneContext {
-	/** True when the signed-in user organized the event (`organizer.self`). */
-	organizerIsSelf?: boolean;
-	/** True when Google truncated the attendee list; nothing can be inferred then. */
-	attendeesOmitted?: boolean;
+/** Non-resource invitees kept for deferred group expansion. */
+function mapInvitees(raw: RawAttendee[] | undefined): ExpandableAttendee[] {
+	return (raw ?? [])
+		.filter((a) => !a.resource)
+		.map((a) => ({
+			email: a.email,
+			displayName: a.displayName,
+			resource: a.resource,
+		}));
 }
 
 /**
@@ -145,21 +165,6 @@ function oneOnOneOther(
 	const selves = humans.filter((a) => a.self === true);
 	if (selves.length !== 1) return null;
 	return humans.find((a) => a.self !== true) ?? null;
-}
-
-/**
- * Turns an email address into a human-friendly name for folder/label use, e.g.
- * "sophie.smith@acme.com" → "Sophie Smith". Only a fallback for attendees that
- * carry no display name — we never want a raw address as a 1:1 folder name.
- */
-export function humanizeEmailName(email: string): string {
-	const local = (email.split("@")[0] ?? "").trim();
-	const words = local
-		.split(/[._+-]+/)
-		.map((w) => w.trim())
-		.filter((w) => w.length > 0)
-		.map((w) => w.charAt(0).toUpperCase() + w.slice(1));
-	return words.join(" ") || email.trim();
 }
 
 /**
@@ -246,6 +251,9 @@ export async function listEvents(
 			maxResults: String(maxResults),
 			singleEvents: "true",
 			orderBy: "startTime",
+			// Without this, large meetings can come back with attendeesOmitted
+			// and only the signed-in user — blocking group expansion entirely.
+			maxAttendees: "500",
 		});
 		if (pageToken) params.set("pageToken", pageToken);
 		const url = `${API}/calendars/${encodeURIComponent(calendarId)}/events?${params.toString()}`;
@@ -254,15 +262,16 @@ export async function listEvents(
 			nextPageToken?: string;
 		};
 	});
-	const mapped = rawEvents
+	const filtered = rawEvents
 		.filter((ev) => ev.status !== "cancelled") // drop cancelled meetings
 		.filter((ev) => !isDeclinedByUser(ev.attendees)) // drop meetings the user declined
 		.filter((ev) => isMeetingEventType(ev.eventType))
 		// All-day events (date-only start) are dropped deliberately (#121 option B):
 		// they are not meetings we record, and we do not surface them in the agenda.
 		.filter((ev) => !ev.start?.date)
-		.filter((ev) => !matchesExclusionKeyword(ev.summary ?? "", exclusionKeywords))
-		.map((ev) => {
+		.filter((ev) => !matchesExclusionKeyword(ev.summary ?? "", exclusionKeywords));
+
+	const mapped: GCalEvent[] = filtered.map((ev) => {
 		const start = new Date(ev.start?.dateTime ?? "");
 		const end = new Date(ev.end?.dateTime ?? "");
 		const organizer =
@@ -277,10 +286,14 @@ export async function listEvents(
 				extractMeetLink(ev) ??
 				extractMeetingUrlFromText(ev.location, ev.description),
 			htmlLink: ev.htmlLink ?? "",
+			// Fast path: raw Calendar labels only. Group expansion runs in the
+			// background after the UI has rendered (see main.ts).
 			attendees: mapAttendees(ev.attendees),
+			invitees: mapInvitees(ev.attendees),
 			organizer,
 			iCalUID: ev.iCalUID ?? null,
 			recurringEventId: ev.recurringEventId ?? null,
+			// 1:1 detection stays on the raw invite (a user+group is not a 1:1).
 			oneOnOnePartner: oneOnOnePartner(ev.attendees, {
 				organizerIsSelf: ev.organizer?.self === true,
 				attendeesOmitted: ev.attendeesOmitted === true,

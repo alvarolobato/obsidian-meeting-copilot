@@ -45,7 +45,6 @@ import {
 import * as path from "path";
 import * as fs from "fs";
 import { GoogleOAuth, type StoredTokens } from "./auth/googleOAuth";
-import { listEvents } from "./calendar/googleCalendar";
 import { parseKeywords } from "./calendar/eventFilter";
 import { CalendarScheduler, GRACE_MS, ScheduledEvent } from "./calendar/scheduler";
 import { eventEndStopAction } from "./calendar/eventEnd";
@@ -122,7 +121,24 @@ import {
     type ActionNoteGroup,
     type ActionTask,
 } from "./notes/dashboardActions";
-import type { GCalEvent } from "./calendar/googleCalendar";
+import { listEvents, type GCalEvent } from "./calendar/googleCalendar";
+import {
+	createCloudIdentityDirectory,
+	DEFAULT_GROUP_EXPAND_MAX_MEMBERS,
+	GroupExpandCache,
+	inviteeFingerprint,
+	mapAttendeesExpanded,
+	type ExpandableAttendee,
+} from "./calendar/expandGroupAttendees";
+import {
+	createPeopleDirectory,
+	PersonNameCache,
+} from "./calendar/personDirectory";
+import {
+	DIRECTORY_CACHE_FILENAME,
+	DirectoryCache,
+	PeopleApiRateLimiter,
+} from "./calendar/directoryCache";
 import { findExpiredRecordings, underFolder } from "./recordings/retention";
 
 /** Note section that holds personal action-item checkboxes (obsidian-tasks compatible). */
@@ -374,6 +390,28 @@ export default class SystemRecordingPlugin extends Plugin {
 	private retentionTimeout: number | null = null;
 	/** Serializes retention sweeps so the startup timer and the command can't overlap. */
 	private cleanupRunning = false;
+	/**
+	 * Session cache for Cloud Identity group expansion. Shared across polls so
+	 * the same group/person isn't looked up again until the plugin reloads
+	 * (or auth reconnect / invitee change invalidates it).
+	 */
+	private groupExpandCache = new GroupExpandCache();
+	/** Session cache for People directory display-name lookups. */
+	private personNameCache = new PersonNameCache();
+	/**
+	 * Persistent People/Groups directory cache
+	 * (`<pluginDir>/directory-cache.json`). Loaded on startup; flushed on unload.
+	 */
+	private directoryCache = new DirectoryCache(null);
+	/** Caps People API calls under the 90/min per-user quota. */
+	private peopleRateLimiter = new PeopleApiRateLimiter();
+	/** Expanded attendee labels keyed by Google event id + invitee fingerprint. */
+	private expandedAttendeesByEventId = new Map<
+		string,
+		{ fingerprint: string; labels: string[] }
+	>();
+	/** Bumped to cancel an in-flight background expansion when a newer fetch wins. */
+	private groupExpandGeneration = 0;
 	private agendaEvents = new TypedEventBus<AgendaViewEvents>();
 
     async onload() {
@@ -385,6 +423,7 @@ export default class SystemRecordingPlugin extends Plugin {
             `${this.manifest.name} v${describeVersion(this.manifest.version)}`
         );
         await this.loadSettings();
+		await this.initDirectoryCache();
         // Prime the vendored transcription engine (i18n + plugin dir).
         initTranscribeEngine(this.manifest.dir ?? null);
 
@@ -710,6 +749,7 @@ export default class SystemRecordingPlugin extends Plugin {
         }
         this.clearDurationTimer();
         this.clearActionStatus();
+		void this.directoryCache.flush();
         if (this.retentionTimeout !== null) {
             window.clearTimeout(this.retentionTimeout);
             this.retentionTimeout = null;
@@ -1242,11 +1282,54 @@ export default class SystemRecordingPlugin extends Plugin {
 		try {
 			await this.oauth.authenticate();
 			this.authExpired = false;
+			// New consent / token — retry Groups expansion from a clean slate.
+			this.resetGroupAttendeeExpansion();
 			void this.updateScheduler();
 			this.agendaEvents.emit("changed", undefined);
 		} catch (e) {
 			new Notice(e instanceof Error ? e.message : String(e));
 		}
+	}
+
+	/** Drop session expansion state so the next fetch re-looks up groups/names.
+	 * Persistent positive hits stay; negative (miss) disk entries are cleared so
+	 * a re-auth after enabling APIs/scopes can retry. */
+	resetGroupAttendeeExpansion(): void {
+		this.groupExpandGeneration++;
+		this.groupExpandCache = new GroupExpandCache();
+		this.personNameCache = new PersonNameCache();
+		this.expandedAttendeesByEventId.clear();
+		this.directoryCache.clearNegativeEntries();
+		void this.directoryCache.flush();
+	}
+
+	/** Load `<pluginDir>/directory-cache.json` into {@link directoryCache}. */
+	private async initDirectoryCache(): Promise<void> {
+		const dir = this.manifest.dir;
+		if (!dir) return;
+		const path = normalizePath(`${dir}/${DIRECTORY_CACHE_FILENAME}`);
+		const adapter = this.app.vault.adapter;
+		this.directoryCache = new DirectoryCache({
+			read: async () => {
+				if (!(await adapter.exists(path))) return null;
+				return adapter.read(path);
+			},
+			write: async (json) => {
+				await adapter.write(path, json);
+			},
+		});
+		await this.directoryCache.load();
+	}
+
+	private createGroupDirectory() {
+		return createCloudIdentityDirectory(this.oauth, this.directoryCache);
+	}
+
+	private createPersonDirectory() {
+		return createPeopleDirectory(this.oauth, {
+			directoryCache: this.directoryCache,
+			rateLimiter: this.peopleRateLimiter,
+		});
 	}
 
 	/**
@@ -1899,6 +1982,8 @@ export default class SystemRecordingPlugin extends Plugin {
 			parseKeywords(this.settings.exclusionKeywords),
 			this.settings.excludeWithoutMeetingLink
 		);
+		this.applyCachedExpandedAttendees(events);
+		this.scheduleGroupAttendeeExpand(events);
 		return events.map((e) => ({
 			id: e.id,
 			summary: e.summary,
@@ -1908,12 +1993,193 @@ export default class SystemRecordingPlugin extends Plugin {
 			location: e.location,
 			htmlLink: e.htmlLink,
 			attendees: e.attendees,
+			invitees: e.invitees,
 			organizer: e.organizer,
 			iCalUID: e.iCalUID,
 			recurringEventId: e.recurringEventId,
 			oneOnOnePartner: e.oneOnOnePartner,
 			oneOnOnePartnerEmail: e.oneOnOnePartnerEmail,
 		}));
+	}
+
+	/**
+	 * Overlay any already-expanded attendee labels onto freshly fetched events
+	 * so a re-poll doesn't flash raw group labels after a prior expansion.
+	 * Drops cache entries whose invitee fingerprint no longer matches.
+	 */
+	private applyCachedExpandedAttendees(
+		events: Array<{
+			id: string;
+			attendees: string[];
+			invitees: ExpandableAttendee[];
+		}>
+	): void {
+		for (const ev of events) {
+			const cached = this.expandedAttendeesByEventId.get(ev.id);
+			if (!cached) continue;
+			const fp = inviteeFingerprint(ev.invitees);
+			if (cached.fingerprint !== fp) {
+				this.expandedAttendeesByEventId.delete(ev.id);
+				continue;
+			}
+			ev.attendees = cached.labels;
+		}
+	}
+
+	/**
+	 * Expand Google Group invitees in the background after the calendar UI has
+	 * already rendered with raw labels. Soft-fails; successful results are
+	 * cached for the session (keyed by invitee fingerprint) and trigger an
+	 * agenda/dashboard refresh when anything changes.
+	 */
+	private scheduleGroupAttendeeExpand(
+		events: Array<{
+			id: string;
+			attendees: string[];
+			invitees: ExpandableAttendee[];
+		}>
+	): void {
+		const pending = events.filter((ev) => {
+			if (ev.invitees.length === 0) return false;
+			const cached = this.expandedAttendeesByEventId.get(ev.id);
+			if (!cached) return true;
+			return cached.fingerprint !== inviteeFingerprint(ev.invitees);
+		});
+		if (pending.length === 0) return;
+		const generation = ++this.groupExpandGeneration;
+		void this.runGroupAttendeeExpand(pending, generation);
+	}
+
+	private async runGroupAttendeeExpand(
+		events: Array<{
+			id: string;
+			attendees: string[];
+			invitees: ExpandableAttendee[];
+		}>,
+		generation: number
+	): Promise<void> {
+		// Allow one network retry per background pass after a prior soft-fail
+		// (e.g. API enabled / scopes granted mid-session). Keep People disabled
+		// while a 429 cooldown is active so we don't re-blast the quota.
+		this.groupExpandCache.disabled = false;
+		if (!this.directoryCache.peopleIsRateLimited()) {
+			this.personNameCache.disabled = false;
+		}
+		const dir = this.createGroupDirectory();
+		const people = this.createPersonDirectory();
+		const opts = {
+			maxPeople: Math.max(
+				1,
+				this.settings.groupExpandMaxMembers ||
+					DEFAULT_GROUP_EXPAND_MAX_MEMBERS
+			),
+		};
+		let changed = false;
+		for (const ev of events) {
+			if (generation !== this.groupExpandGeneration) return;
+			const fp = inviteeFingerprint(ev.invitees);
+			const existing = this.expandedAttendeesByEventId.get(ev.id);
+			if (existing && existing.fingerprint === fp) continue;
+			try {
+				const labels = await mapAttendeesExpanded(
+					ev.invitees,
+					dir,
+					opts,
+					this.groupExpandCache,
+					people,
+					this.personNameCache
+				);
+				if (generation !== this.groupExpandGeneration) return;
+				const unchanged =
+					labels.length === ev.attendees.length &&
+					labels.every((l, i) => l === ev.attendees[i]);
+				// Soft-fail: Groups API disabled and labels unchanged — don't
+				// cache, so the next poll (which clears `disabled`) can retry.
+				if (this.groupExpandCache.disabled && unchanged) {
+					continue;
+				}
+				this.expandedAttendeesByEventId.set(ev.id, {
+					fingerprint: fp,
+					labels,
+				});
+				if (!unchanged) {
+					ev.attendees = labels;
+					changed = true;
+				}
+			} catch (err) {
+				console.warn(
+					"[Meeting Copilot] Background group attendee expansion failed.",
+					err
+				);
+				return;
+			}
+		}
+		if (changed && generation === this.groupExpandGeneration) {
+			// Keep the dashboard cache in sync (it may hold different object
+			// refs than the events we just mutated).
+			if (this.dashboardEventsCache) {
+				this.applyCachedExpandedAttendees(
+					this.dashboardEventsCache.events
+				);
+			}
+			// Refresh agenda/dashboard so expanded people replace group labels.
+			this.agendaEvents.emit("changed", undefined);
+		}
+	}
+
+	/**
+	 * Await expansion for a single meeting before writing a note so attendees
+	 * don't land as an unexpanded group label when the user creates a note
+	 * before the background pass finishes.
+	 */
+	private async ensureAttendeesExpanded(opts: {
+		id: string;
+		attendees: string[];
+		invitees: ExpandableAttendee[];
+	}): Promise<string[]> {
+		const fp = inviteeFingerprint(opts.invitees);
+		const cached = this.expandedAttendeesByEventId.get(opts.id);
+		if (cached && cached.fingerprint === fp) return cached.labels;
+		if (opts.invitees.length === 0) return opts.attendees;
+		// Allow a foreground note-create to retry after a prior soft-fail.
+		this.groupExpandCache.disabled = false;
+		if (!this.directoryCache.peopleIsRateLimited()) {
+			this.personNameCache.disabled = false;
+		}
+		try {
+			const labels = await mapAttendeesExpanded(
+				opts.invitees,
+				this.createGroupDirectory(),
+				{
+					maxPeople: Math.max(
+						1,
+						this.settings.groupExpandMaxMembers ||
+							DEFAULT_GROUP_EXPAND_MAX_MEMBERS
+					),
+				},
+				this.groupExpandCache,
+				this.createPersonDirectory(),
+				this.personNameCache
+			);
+			const unchanged =
+				labels.length === opts.attendees.length &&
+				labels.every((l, i) => l === opts.attendees[i]);
+			if (this.groupExpandCache.disabled && unchanged) {
+				return opts.attendees;
+			}
+			this.expandedAttendeesByEventId.set(opts.id, {
+				fingerprint: fp,
+				labels,
+			});
+			opts.attendees = labels;
+			return labels;
+		} catch (err) {
+			console.warn(
+				"[Meeting Copilot] Group attendee expansion failed for note; using raw labels.",
+				err
+			);
+			return opts.attendees;
+		}
 	}
 
 	/**
@@ -1945,7 +2211,9 @@ export default class SystemRecordingPlugin extends Plugin {
 			this.dismissMeetingNotice(SystemRecordingPlugin.CAL_NOTICE_PREFIX + event.id);
 			if (this.currentRecordingEventId !== event.id) {
 				new Notice(t().event.autoStarted(event.summary));
-				void this.startMeetingRecording(this.toMeetingInfo(event), event.end);
+				void this.toMeetingInfoExpanded(event).then((info) =>
+					this.startMeetingRecording(info, event.end)
+				);
 			}
 			return;
 		}
@@ -1991,10 +2259,15 @@ export default class SystemRecordingPlugin extends Plugin {
 			subtitle,
 			meetLink: event.meetLink,
 			onRecord: () =>
-				void this.startMeetingRecording(this.toMeetingInfo(event), event.end),
+				void this.toMeetingInfoExpanded(event).then((info) =>
+					this.startMeetingRecording(info, event.end)
+				),
 			// Open (or create) the meeting note without recording — the "Open
 			// note" affordance, mirroring the agenda card.
-			onOpenNote: () => void this.openOrCreateEventNote(this.toMeetingInfo(event)),
+			onOpenNote: () =>
+				void this.toMeetingInfoExpanded(event).then((info) =>
+					this.openOrCreateEventNote(info)
+				),
 			// A manual Join opens the link, so don't let the auto-open fire again
 			// when the start boundary is crossed.
 			onLinkOpened: () => this.openedLinkEventIds.add(event.id),
@@ -2080,7 +2353,12 @@ export default class SystemRecordingPlugin extends Plugin {
 				m.end instanceof Date ? m.end.getTime() : undefined
 			);
 		} else {
-			void this.startMeetingRecording(agendaToMeetingInfo(m));
+			void this.ensureAttendeesExpanded(m).then((attendees) =>
+				this.startMeetingRecording({
+					...agendaToMeetingInfo(m),
+					attendees,
+				})
+			);
 		}
 	}
 
@@ -2186,6 +2464,17 @@ export default class SystemRecordingPlugin extends Plugin {
 			...e,
 			start: new Date(e.start),
 			end: new Date(e.end),
+		};
+	}
+
+	/** Like {@link toMeetingInfo}, but awaits group expansion first when needed. */
+	private async toMeetingInfoExpanded(
+		e: ScheduledEvent
+	): Promise<MeetingEventInfo> {
+		const attendees = await this.ensureAttendeesExpanded(e);
+		return {
+			...this.toMeetingInfo(e),
+			attendees,
 		};
 	}
 
@@ -2474,6 +2763,7 @@ export default class SystemRecordingPlugin extends Plugin {
             this.dashboardEventsCache &&
             now - this.dashboardEventsCache.at < TTL_MS
         ) {
+            this.applyCachedExpandedAttendees(this.dashboardEventsCache.events);
             return this.dashboardEventsCache.events;
         }
         if (!force && this.dashboardEventsInFlight) {
@@ -2499,7 +2789,9 @@ export default class SystemRecordingPlugin extends Plugin {
             this.settings.excludeWithoutMeetingLink
         )
             .then((events) => {
+                this.applyCachedExpandedAttendees(events);
                 this.dashboardEventsCache = { at: Date.now(), events };
+                this.scheduleGroupAttendeeExpand(events);
                 return events;
             })
             .finally(() => {
@@ -3437,6 +3729,7 @@ export default class SystemRecordingPlugin extends Plugin {
             attendees: Array.isArray(fm["attendees"])
                 ? (fm["attendees"] as unknown[]).map((x) => String(x))
                 : [],
+            invitees: [],
             organizer: str("organizer") || null,
             iCalUID: str("ical_uid") || null,
             recurringEventId: str("recurring_event_id") || null,
@@ -3484,6 +3777,8 @@ export default class SystemRecordingPlugin extends Plugin {
             parseKeywords(this.settings.exclusionKeywords),
             this.settings.excludeWithoutMeetingLink
         );
+        this.applyCachedExpandedAttendees(events);
+        this.scheduleGroupAttendeeExpand(events);
         const index = buildNoteIndex(this.app);
         return events
             .map((e) => toAgendaMeeting(e, index))
@@ -3500,9 +3795,10 @@ export default class SystemRecordingPlugin extends Plugin {
 
     private async createNoteOnly(m: AgendaMeeting): Promise<void> {
         try {
+            const attendees = await this.ensureAttendeesExpanded(m);
             const ref = await createMeetingNote(
                 this.app,
-                agendaToMeetingInfo(m),
+                { ...agendaToMeetingInfo(m), attendees },
                 this.noteConfig()
             );
             await this.app.workspace.getLeaf(false).openFile(ref.file);

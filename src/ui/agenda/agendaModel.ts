@@ -1,5 +1,6 @@
 import { App, TFile } from "obsidian";
 import type { GCalEvent } from "../../calendar/googleCalendar";
+import type { ExpandableAttendee } from "../../calendar/expandGroupAttendees";
 import {
 	recordingLinkTarget,
 	scanMeetingNotes,
@@ -21,6 +22,8 @@ export interface AgendaMeeting {
 	location: string;
 	htmlLink: string;
 	attendees: string[];
+	/** Raw invitees for deferred Cloud Identity group expansion. */
+	invitees: ExpandableAttendee[];
 	organizer: string | null;
 	iCalUID: string | null;
 	recurringEventId: string | null;
@@ -84,6 +87,7 @@ export function toAgendaMeeting(
 		location: ev.location,
 		htmlLink: ev.htmlLink,
 		attendees: ev.attendees,
+		invitees: ev.invitees,
 		organizer: ev.organizer,
 		iCalUID: ev.iCalUID,
 		recurringEventId: ev.recurringEventId,
