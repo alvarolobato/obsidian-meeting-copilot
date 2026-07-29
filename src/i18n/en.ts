@@ -59,7 +59,7 @@ export const en = {
 			`Microphone "${device}" isn't available — recording with the system default.`,
 		recordingStarted: "Recording started",
 		notRecording: "Not recording",
-		stoppingRecording: "Stopping recording...",
+		stoppingRecording: "Stopping recording…",
 		calendarError: (msg: string) => `Calendar error: ${msg}`,
 		calendarReconnect: "Google Calendar disconnected — reconnect",
 		calendarReconnectAction: "Reconnect",

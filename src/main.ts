@@ -1235,21 +1235,22 @@ export default class SystemRecordingPlugin extends Plugin {
         }
     }
 
-    private stopRecording() {
+    private stopRecording(opts?: { notice?: boolean }) {
+        const showNotice = opts?.notice !== false;
         if (!this.recorder.isRecording) {
-            new Notice(t().notices.notRecording);
+            if (showNotice) new Notice(t().notices.notRecording);
             return;
         }
 
         this.dismissStopPrompt();
         if (this.recorder.hasStopBeenSignaled) {
-            new Notice(t().notices.stoppingRecording);
+            if (showNotice) new Notice(t().notices.stoppingRecording);
             return;
         }
 
         this.recorder.stop();
         this.agendaEvents.emit("changed", undefined);
-        new Notice(t().notices.stoppingRecording);
+        if (showNotice) new Notice(t().notices.stoppingRecording);
     }
 
     /** Stop-file written; helper has not yet reported `stopped`. */
@@ -2529,7 +2530,7 @@ export default class SystemRecordingPlugin extends Plugin {
 		switch (action) {
 			case "auto-stop":
 				new Notice(t().event.autoStopped(event.summary));
-				this.stopRecording();
+				this.stopRecording({ notice: false });
 				break;
 			case "prompt-stop":
 				this.promptStopRecording(
@@ -5300,7 +5301,7 @@ export default class SystemRecordingPlugin extends Plugin {
                     this.currentMeetingNote?.basename ?? t().adhoc.defaultTitle;
                 if (this.settings.calendarAutoStop) {
                     new Notice(t().event.autoStopped(title));
-                    this.stopRecording();
+                    this.stopRecording({ notice: false });
                     return;
                 }
                 this.promptStopRecording(

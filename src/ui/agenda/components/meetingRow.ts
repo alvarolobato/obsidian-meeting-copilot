@@ -103,7 +103,6 @@ export function renderMeetingRow(opts: MeetingRowOptions): void {
 			"meeting-copilot-row-action-danger"
 		);
 		stopBtn.disabled = stoppingThis;
-		if (stoppingThis) stopBtn.addClass("is-stopping");
 	} else if (isLive || isUpcoming || meeting.recording) {
 		// Offer record even when a recording already exists (a second take
 		// extends the same meeting), relabeled so it's clearly additive.
