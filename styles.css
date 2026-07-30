@@ -1158,9 +1158,8 @@ ul.mc-action-tasks {
 	font-size: 14px;
 	font-weight: 600;
 	color: var(--mc-cal-title);
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	white-space: normal;
+	overflow-wrap: break-word;
 }
 
 .mc-cal-event.has-note .mc-cal-event-title {

@@ -2541,6 +2541,21 @@ export default class SystemRecordingPlugin extends Plugin {
         if (leaf) void workspace.revealLeaf(leaf);
     }
 
+    /**
+     * Moves any already-open agenda view to wherever `agendaPlacement` now
+     * points. Without this, an existing leaf just sits where it was created —
+     * `openAgenda()` only picks a location for a *new* leaf — so flipping the
+     * setting silently did nothing until the view was closed (no in-app way to
+     * do that for a sidebar leaf) or the app restarted.
+     */
+    async relocateAgenda(): Promise<void> {
+        const { workspace } = this.app;
+        const existing = workspace.getLeavesOfType(VIEW_TYPE_AGENDA);
+        if (existing.length === 0) return;
+        for (const leaf of existing) leaf.detach();
+        await this.openAgenda();
+    }
+
     /** Tells any open agenda view to reload (e.g. after a settings change). */
     refreshAgenda(): void {
         this.agendaEvents.emit("changed", undefined);

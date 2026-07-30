@@ -41,6 +41,17 @@ See [Setup](docs/setup.md) for Google Calendar, AI endpoint, transcription, and 
 - Google account (calendar)
 - OpenAI-compatible endpoint (local or remote) when you use enrichment and/or remote transcription. Not needed for on-device Whisper with enrichment off.
 
+## Network use
+
+Meeting Copilot talks to these remote services, only for the features you enable:
+
+- **Google Calendar API** — reads your calendar (read-only) to build the agenda.
+- **Google Cloud Identity Groups API + People API** — expands Google Group invitees into individual people and resolves their display names (read-only; see [Setup](docs/setup.md)).
+- **OpenAI-compatible endpoint** (your choice of provider, local or remote) — used for remote transcription and AI enrichment, only if you configure one. Not needed for on-device Whisper with enrichment off.
+- **GitHub Releases** — downloads the `system-recorder` helper binary, its `whisper` runtime, and (on demand) local Whisper models the first time each is needed.
+
+OAuth tokens and any client secret are stored in per-vault local storage on your device, never in synced `data.json`.
+
 ## Attribution
 
 Meeting Copilot builds on generously-licensed open-source work:

@@ -1098,6 +1098,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 						this.plugin.settings.agendaPlacement =
 							value === "sidebar" ? "sidebar" : "main";
 						await this.plugin.saveSettings();
+						await this.plugin.relocateAgenda();
 					})
 			);
 
