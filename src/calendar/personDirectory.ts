@@ -204,7 +204,15 @@ export function createPeopleDirectory(
 				);
 			}
 			// Missing scope / not allowed — don't persist a year-long miss
-			// and don't session-cache (undefined = inconclusive).
+			// and don't session-cache (undefined = inconclusive). Always-on
+			// (like the 429 log): a silent 403 here previously looked
+			// identical to a rate-limit cooldown skip in the "resolve done"
+			// summary, with no way to tell them apart.
+			mcLog("directory", "people lookup 403 (non-SERVICE_DISABLED)", {
+				email: key,
+				reason,
+				body: res.text,
+			});
 			return undefined;
 		}
 		if (res.status === 404) {

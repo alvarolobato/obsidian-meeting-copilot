@@ -50,4 +50,24 @@ describe("directory clients HTTP 403", () => {
 		expect(setSpy).not.toHaveBeenCalled();
 		expect(cache.getPerson("ruflin@x.com")).toBeUndefined();
 	});
+
+	it("logs a non-SERVICE_DISABLED 403 (previously silent, indistinguishable from a rate-limit skip)", async () => {
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const cache = new DirectoryCache(null, () => 1_000, 0);
+		__setRequestUrl(() => ({
+			status: 403,
+			json: { error: { details: [{ reason: "PERMISSION_DENIED" }] } },
+			text: "forbidden",
+		}));
+		const people = createPeopleDirectory(fakeOauth(), {
+			directoryCache: cache,
+		});
+		await people.resolvePhotoUrl("ruflin@x.com");
+		expect(warnSpy).toHaveBeenCalledWith(
+			expect.stringContaining(
+				"people lookup 403 (non-SERVICE_DISABLED)"
+			)
+		);
+		warnSpy.mockRestore();
+	});
 });
