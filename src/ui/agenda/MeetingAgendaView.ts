@@ -31,6 +31,7 @@ export interface AgendaViewHost {
 	/** Fetch meetings within [fromMs, toMs], enriched with note/recording state. */
 	fetchMeetings(fromMs: number, toMs: number): Promise<AgendaMeeting[]>;
 	isRecordingThis(meeting: AgendaMeeting): boolean;
+	isStoppingThis(meeting: AgendaMeeting): boolean;
 	onOpenOrCreate(meeting: AgendaMeeting): void;
 	onCreateAndRecord(meeting: AgendaMeeting): void;
 	onCreateNote(meeting: AgendaMeeting): void;
@@ -202,6 +203,7 @@ export class MeetingAgendaView extends ItemView {
 					parent: root,
 					meeting: current,
 					recordingThis: this.host.isRecordingThis(current),
+					stoppingThis: this.host.isStoppingThis(current),
 					onOpenNote: (m) => this.host.onOpenOrCreate(m),
 					onCreateAndRecord: (m) => this.host.onCreateAndRecord(m),
 					onStop: () => this.host.onStop(),
@@ -407,6 +409,7 @@ export class MeetingAgendaView extends ItemView {
 				this.render();
 			},
 			isRecordingThis: (m) => this.host.isRecordingThis(m),
+			isStoppingThis: (m) => this.host.isStoppingThis(m),
 		};
 	}
 

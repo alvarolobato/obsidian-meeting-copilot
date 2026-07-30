@@ -1,8 +1,8 @@
 # AGENTS.md
 
 Working notes for AI agents (and humans) contributing to **Meeting Copilot**, an
-Obsidian plugin that brings Granola-style meeting capture to Obsidian: Google
-Calendar sync, dual-channel recording via a macOS Swift helper, transcription
+Obsidian plugin for integrated meeting transcription, note-taking, and summarization:
+Google Calendar sync, dual-channel recording via a macOS Swift helper, transcription
 (remote OpenAI-compatible / LiteLLM endpoints **or** local on-device whisper.cpp),
 and LLM enrichment.
 

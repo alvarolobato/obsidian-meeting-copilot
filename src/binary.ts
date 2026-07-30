@@ -115,7 +115,7 @@ export class BinaryProvisioner {
 		onDownloadStart?: () => void
 	): Promise<string> {
 		if (this.deps.arch() !== "arm64") {
-			throw new Error("System Recording requires Apple Silicon (arm64).");
+			throw new Error("Meeting Copilot requires Apple Silicon (arm64).");
 		}
 
 		if (await this.deps.fileExists(binaryPath)) {

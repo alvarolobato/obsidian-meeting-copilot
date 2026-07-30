@@ -25,6 +25,8 @@ export interface RowHandlers {
 	onSkip: (m: AgendaMeeting) => void;
 	/** True when this meeting is the one currently being recorded. */
 	isRecordingThis: (m: AgendaMeeting) => boolean;
+	/** True when a stop has been requested but the helper has not exited yet. */
+	isStoppingThis: (m: AgendaMeeting) => boolean;
 }
 
 export interface MeetingRowOptions {
@@ -40,7 +42,7 @@ function iconButton(
 	label: string,
 	onClick: () => void,
 	extraCls?: string
-): void {
+): HTMLButtonElement {
 	const btn = parent.createEl("button", {
 		cls: extraCls
 			? `meeting-copilot-row-action ${extraCls}`
@@ -52,6 +54,7 @@ function iconButton(
 		evt.stopPropagation();
 		onClick();
 	});
+	return btn;
 }
 
 export function renderMeetingRow(opts: MeetingRowOptions): void {
@@ -87,17 +90,19 @@ export function renderMeetingRow(opts: MeetingRowOptions): void {
 	const trail = row.createDiv({ cls: "meeting-copilot-row-trail" });
 
 	const recordingThis = handlers.isRecordingThis(meeting);
+	const stoppingThis = handlers.isStoppingThis(meeting);
 	const isLive = meeting.start.getTime() <= now && meeting.end.getTime() > now;
 	const isUpcoming = meeting.start.getTime() > now;
 
 	if (recordingThis) {
-		iconButton(
+		const stopBtn = iconButton(
 			trail,
 			"square",
-			a.actions.stop,
+			stoppingThis ? a.actions.stopping : a.actions.stop,
 			() => handlers.onStop(),
 			"meeting-copilot-row-action-danger"
 		);
+		stopBtn.disabled = stoppingThis;
 	} else if (isLive || isUpcoming || meeting.recording) {
 		// Offer record even when a recording already exists (a second take
 		// extends the same meeting), relabeled so it's clearly additive.
@@ -190,8 +195,13 @@ export function populateMeetingMenu(
 	if (handlers.isRecordingThis(meeting)) {
 		menu.addItem((item) =>
 			item
-				.setTitle(a.actions.stop)
+				.setTitle(
+					handlers.isStoppingThis(meeting)
+						? a.actions.stopping
+						: a.actions.stop
+				)
 				.setIcon("square")
+				.setDisabled(handlers.isStoppingThis(meeting))
 				.onClick(() => handlers.onStop())
 		);
 	}

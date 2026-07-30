@@ -10,6 +10,7 @@ export interface CurrentMeetingOptions {
 	parent: HTMLElement;
 	meeting: AgendaMeeting;
 	recordingThis: boolean;
+	stoppingThis: boolean;
 	/** Open the meeting's existing note (used whenever `meeting.note` is set). */
 	onOpenNote: (m: AgendaMeeting) => void;
 	/**
@@ -63,8 +64,9 @@ export function renderCurrentMeeting(opts: CurrentMeetingOptions): void {
 		}
 		const stop = actions.createEl("button", {
 			cls: "meeting-copilot-current-cta meeting-copilot-current-cta-danger",
-			text: a.actions.stop,
+			text: opts.stoppingThis ? a.actions.stopping : a.actions.stop,
 		});
+		stop.disabled = opts.stoppingThis;
 		stop.addEventListener("click", () => opts.onStop());
 	} else {
 		const primary = actions.createEl("button", {

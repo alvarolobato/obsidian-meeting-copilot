@@ -1225,6 +1225,12 @@ ul.mc-action-tasks {
 	color: var(--text-error);
 }
 
+.meeting-copilot-row-action:disabled,
+.meeting-copilot-current-cta:disabled {
+	opacity: 0.55;
+	cursor: default;
+}
+
 /* "Earlier today" mini-collapsible inside the today section */
 .meeting-copilot-earlier-section {
 	display: flex;

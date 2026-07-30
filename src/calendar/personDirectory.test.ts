@@ -80,4 +80,22 @@ describe("resolveAttendeeLabel", () => {
 		).resolves.toBe("Nicolas Ruflin");
 		expect(resolveDisplayName).toHaveBeenCalledTimes(2);
 	});
+
+	it("logs directory hard-fail once per session cache", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const people: PersonDirectory = {
+			resolveDisplayName: async () => {
+				throw new Error("People API disabled");
+			},
+		};
+		const cache = new PersonNameCache();
+		await resolveAttendeeLabel("a@x.com", "", people, cache);
+		await resolveAttendeeLabel("b@x.com", "", people, cache);
+		expect(
+			warn.mock.calls.filter((c) =>
+				String(c[0]).includes("People directory name lookup failed")
+			)
+		).toHaveLength(1);
+		warn.mockRestore();
+	});
 });
