@@ -133,6 +133,8 @@ export interface SystemRecordingSettings {
 	detectionIntervalSeconds: number;
 	agendaLookAheadDays: number;
 	agendaLookBackDays: number;
+	/** Where the "Coming up" agenda opens: a main-panel tab or the right sidebar. */
+	agendaPlacement: "main" | "sidebar";
 	/** How many upcoming meetings the dashboard shows per page (10/20/50/100). Set via the dashboard's own dropdown. */
 	dashboardUpcomingPageSize: number;
 	/** How many past meetings the dashboard shows per page (10/20/50/100). Set via the dashboard's own dropdown. */
@@ -273,6 +275,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	detectionIntervalSeconds: 10,
 	agendaLookAheadDays: 7,
 	agendaLookBackDays: 7,
+	agendaPlacement: "main",
 	dashboardUpcomingPageSize: 10,
 	dashboardPastPageSize: 10,
 	dashboardActionsPageSize: 10,
@@ -1099,6 +1102,21 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 						this.plugin.refreshAgenda();
 					});
 			});
+
+		new Setting(containerEl)
+			.setName(s.settings.agendaPlacement.name)
+			.setDesc(s.settings.agendaPlacement.desc)
+			.addDropdown((dd) =>
+				dd
+					.addOption("main", s.settings.agendaPlacement.main)
+					.addOption("sidebar", s.settings.agendaPlacement.sidebar)
+					.setValue(this.plugin.settings.agendaPlacement)
+					.onChange(async (value) => {
+						this.plugin.settings.agendaPlacement =
+							value === "sidebar" ? "sidebar" : "main";
+						await this.plugin.saveSettings();
+					})
+			);
 
 		new Setting(containerEl)
 			.setName(s.settings.agendaLookAhead.name)

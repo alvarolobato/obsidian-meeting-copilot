@@ -700,583 +700,753 @@ ul.mc-action-tasks {
 }
 
 /* =========================================================================
- * Meeting agenda sidebar view.
- * Portions adapted from obsidian-meetings-plus (0BSD):
- * https://github.com/jabaho9523/obsidian-meetings-plus — see THIRD_PARTY_NOTICES.md.
+ * "Coming up" meeting agenda — main-panel tab and narrow side-panel variant.
+ * A dark, card-based layout: serif day numbers, coloured event accent bars.
  * ========================================================================= */
 
-.meeting-copilot-container {
-	padding: 10px 12px;
-	display: flex;
-	flex-direction: column;
-	gap: 12px;
-	font-size: var(--font-ui-small);
+.mc-cal {
+	--mc-cal-bg: #141416;
+	--mc-cal-panel: #1b1b1d;
+	--mc-cal-card: #202024;
+	--mc-cal-card-hi: #242327;
+	--mc-cal-chip: #26262a;
+	--mc-cal-chip-hi: #2f2e32;
+	--mc-cal-border: #2b2b2e;
+	--mc-cal-border-hi: #38373a;
+	--mc-cal-text: #f3f2ee;
+	--mc-cal-title: #e2e1dd;
+	--mc-cal-icon: #c4c3bf;
+	--mc-cal-muted: #9b9a97;
+	--mc-cal-caption: #6c6b66;
+	--mc-cal-accent: var(--mc-cal-accent-meeting);
+	--mc-cal-accent-live: oklch(0.72 0.16 25);
+	--mc-cal-accent-meeting: oklch(0.68 0.13 190);
+	--mc-cal-accent-personal: oklch(0.62 0.12 250);
+	--mc-cal-accent-block: oklch(0.73 0.14 90);
+	--mc-cal-serif: "Source Serif 4", "Source Serif Pro", "Iowan Old Style",
+		Georgia, "Times New Roman", serif;
+
+	height: 100%;
+	overflow-y: auto;
+	background: var(--mc-cal-bg);
+	color: var(--mc-cal-text);
+	font-size: 14px;
 }
 
-.meeting-copilot-status {
+.mc-cal-inner {
+	max-width: 1180px;
+	margin: 0 auto;
+	padding: 30px 28px 48px;
 	display: flex;
 	flex-direction: column;
-	gap: 8px;
-	position: sticky;
-	top: 0;
-	z-index: 2;
-	background: var(--background-primary);
-	padding-bottom: 8px;
+	gap: 20px;
 }
 
-.meeting-copilot-status-top {
+.mc-cal.is-compact .mc-cal-inner {
+	max-width: none;
+	padding: 16px 14px 28px;
+	gap: 14px;
+}
+
+/* Accent tokens: each row/card picks its bar + dot colour from these. */
+.mc-cal-accent-live {
+	--mc-cal-accent: var(--mc-cal-accent-live);
+}
+.mc-cal-accent-meeting {
+	--mc-cal-accent: var(--mc-cal-accent-meeting);
+}
+.mc-cal-accent-personal {
+	--mc-cal-accent: var(--mc-cal-accent-personal);
+}
+.mc-cal-accent-block {
+	--mc-cal-accent: var(--mc-cal-accent-block);
+}
+
+/* ---- Header ---------------------------------------------------------- */
+
+.mc-cal-head {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.mc-cal-head-top {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
+	gap: 12px;
+}
+
+.mc-cal-head-title {
+	font-family: var(--mc-cal-serif);
+	font-weight: 600;
+	font-size: 28px;
+	line-height: 1.1;
+	color: var(--mc-cal-text);
+}
+
+.mc-cal.is-compact .mc-cal-head-title {
+	font-size: 19px;
+}
+
+.mc-cal-head-controls {
+	display: flex;
+	align-items: center;
 	gap: 8px;
 }
 
-.meeting-copilot-status-left {
+.mc-cal-head-divider {
+	width: 1px;
+	height: 20px;
+	background: var(--mc-cal-border-hi);
+	margin: 0 2px;
+}
+
+.mc-cal-head-sub {
+	font-size: 12px;
+	color: var(--mc-cal-caption);
+}
+
+.mc-cal-nav-row {
 	display: flex;
-	flex-direction: column;
-	gap: 2px;
-	min-width: 0;
+	justify-content: flex-start;
 }
 
-.meeting-copilot-status-title {
-	font-size: var(--font-ui-medium);
-	font-weight: 600;
-}
-
-.meeting-copilot-status-sub {
-	color: var(--text-muted);
-	font-size: var(--font-ui-smaller);
-}
-
-.meeting-copilot-status-actions {
+.mc-cal-nav {
 	display: flex;
-	gap: 4px;
+	align-items: center;
+	gap: 8px;
 }
 
-.meeting-copilot-icon-btn {
-	background: transparent;
-	border: none;
-	color: var(--text-muted);
-	cursor: pointer;
-	padding: 6px 8px;
-	border-radius: 4px;
+.mc-cal.is-compact .mc-cal-nav {
+	width: 100%;
+}
+
+/* ---- Icon buttons + nav pills ---------------------------------------- */
+
+.mc-cal-icon-btn {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
+	width: 30px;
+	height: 30px;
+	padding: 0;
+	border: none;
+	border-radius: 8px;
+	background: var(--mc-cal-chip);
+	color: var(--mc-cal-icon);
+	cursor: pointer;
+	box-shadow: none;
+	transition: background 0.12s ease, color 0.12s ease;
 }
 
-.meeting-copilot-icon-btn:hover {
-	background: var(--background-modifier-hover);
-	color: var(--text-normal);
+.mc-cal-icon-btn:hover {
+	background: var(--mc-cal-chip-hi);
+	color: var(--mc-cal-text);
 }
 
-.meeting-copilot-icon-btn:disabled {
-	opacity: 0.3;
+.mc-cal-icon-btn:disabled {
+	opacity: 0.4;
 	cursor: default;
 }
 
-.meeting-copilot-error-row {
-	color: var(--text-error);
-	font-size: var(--font-ui-smaller);
-	border-left: 3px solid var(--text-error);
-	padding: 6px 8px;
-	border-radius: 4px;
+.mc-cal-icon-btn .svg-icon {
+	width: 16px;
+	height: 16px;
 }
 
-.meeting-copilot-empty {
-	color: var(--text-muted);
-	text-align: center;
-	padding: 24px 0;
+.mc-cal.is-compact .mc-cal-icon-btn {
+	width: 26px;
+	height: 26px;
+	border-radius: 7px;
 }
 
-.meeting-copilot-empty-cta {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	gap: 10px;
-	padding: 24px 8px;
-	color: var(--text-muted);
-	text-align: center;
+.mc-cal.is-compact .mc-cal-icon-btn .svg-icon {
+	width: 14px;
+	height: 14px;
 }
 
-.meeting-copilot-current {
-	border: 1px solid var(--interactive-accent);
+.mc-cal-nav-date,
+.mc-cal-nav-days {
+	height: 30px;
+	padding: 0 12px;
+	border: none;
 	border-radius: 8px;
-	padding: 12px;
-	background: var(--background-secondary);
-	display: flex;
-	flex-direction: column;
-	gap: 10px;
+	background: var(--mc-cal-chip);
+	color: var(--mc-cal-title);
+	font-size: 13px;
+	cursor: pointer;
+	box-shadow: none;
+	transition: background 0.12s ease;
 }
 
-.meeting-copilot-current-top {
-	display: flex;
-	gap: 10px;
-	align-items: flex-start;
+.mc-cal-nav-date {
+	white-space: nowrap;
 }
 
-.meeting-copilot-current-info {
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
+.mc-cal.is-compact .mc-cal-nav-date {
 	flex: 1;
+	text-align: center;
+}
+
+.mc-cal-nav-date:hover,
+.mc-cal-nav-days:hover {
+	background: var(--mc-cal-chip-hi);
+	color: var(--mc-cal-text);
+}
+
+.mc-cal-nav-days {
+	min-width: 42px;
+	padding: 0 10px;
+	color: var(--mc-cal-muted);
+}
+
+.mc-cal-nav-days-input {
+	width: 52px;
+	height: 30px;
+	padding: 0 8px;
+	border: 1px solid var(--mc-cal-border-hi);
+	border-radius: 8px;
+	background: var(--mc-cal-card);
+	color: var(--mc-cal-text);
+	font-size: 13px;
+}
+
+/* ---- "Now" card ------------------------------------------------------ */
+
+.mc-cal-now {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	padding: 16px 18px;
+	border: 1px solid var(--mc-cal-border-hi);
+	border-radius: 12px;
+	background: var(--mc-cal-card-hi);
+}
+
+.mc-cal-now.is-compact {
+	flex-direction: column;
+	align-items: stretch;
+	gap: 12px;
+}
+
+.mc-cal-now-info {
+	display: flex;
+	align-items: center;
+	gap: 12px;
 	min-width: 0;
 }
 
-.meeting-copilot-current-status {
-	font-size: var(--font-ui-smaller);
-	color: var(--interactive-accent);
-	font-weight: 600;
-	text-transform: uppercase;
-	letter-spacing: 0.04em;
+.mc-cal-now-dot {
+	flex: none;
+	width: 9px;
+	height: 9px;
+	border-radius: 50%;
+	background: var(--mc-cal-accent);
+	box-shadow: 0 0 0 4px color-mix(in oklch, var(--mc-cal-accent) 22%, transparent);
 }
 
-.meeting-copilot-current-title {
+.mc-cal-now-text {
+	min-width: 0;
+}
+
+.mc-cal-now-status {
+	font-size: 11px;
 	font-weight: 600;
-	font-size: var(--font-ui-medium);
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--mc-cal-accent);
+}
+
+.mc-cal-now-title {
+	font-size: 15px;
+	font-weight: 600;
+	color: var(--mc-cal-text);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
-.meeting-copilot-current-time {
-	color: var(--text-muted);
-	font-size: var(--font-ui-smaller);
+.mc-cal-now-time {
+	font-size: 12px;
+	color: var(--mc-cal-muted);
 }
 
-.meeting-copilot-current-actions {
+.mc-cal-now-actions {
 	display: flex;
-	gap: 6px;
 	align-items: center;
+	gap: 8px;
+	flex: none;
 }
 
-.meeting-copilot-current-cta {
-	flex: 1;
-	padding: 8px 12px;
-	border-radius: 6px;
+.mc-cal-now.is-compact .mc-cal-now-actions {
+	justify-content: flex-end;
+}
+
+.mc-cal-now-cta {
+	height: 34px;
+	padding: 0 16px;
 	border: none;
-	background: var(--interactive-accent);
-	color: var(--text-on-accent);
+	border-radius: 8px;
+	background: var(--mc-cal-text);
+	color: #17161a;
+	font-size: 13px;
+	font-weight: 600;
 	cursor: pointer;
-	font-weight: 500;
+	box-shadow: none;
+	transition: opacity 0.12s ease;
 }
 
-.meeting-copilot-current-cta:hover {
-	background: var(--interactive-accent-hover);
+.mc-cal-now-cta:hover {
+	opacity: 0.88;
 }
 
-.meeting-copilot-current-cta-danger {
-	background: var(--text-error);
+.mc-cal-now-cta.is-danger {
+	background: var(--mc-cal-accent-live);
+	color: #17161a;
 }
 
-.meeting-copilot-current-link {
-	background: transparent;
-	border: 1px solid var(--background-modifier-border);
-	color: var(--text-muted);
-	padding: 6px 10px;
-	border-radius: 6px;
-	cursor: pointer;
+.mc-cal-now-link {
 	display: inline-flex;
 	align-items: center;
+	justify-content: center;
+	width: 34px;
+	height: 34px;
+	padding: 0;
+	border: 1px solid var(--mc-cal-border-hi);
+	border-radius: 50%;
+	background: transparent;
+	color: var(--mc-cal-icon);
+	cursor: pointer;
+	box-shadow: none;
+	transition: background 0.12s ease, color 0.12s ease;
 }
 
-.meeting-copilot-current-link:hover {
-	background: var(--background-modifier-hover);
-	color: var(--text-normal);
+.mc-cal-now-link:hover {
+	background: var(--mc-cal-chip);
+	color: var(--mc-cal-text);
 }
 
-/* date navigator strip */
-.meeting-copilot-datebar {
+.mc-cal-now-link .svg-icon {
+	width: 16px;
+	height: 16px;
+}
+
+/* ---- Day list -------------------------------------------------------- */
+
+.mc-cal-days {
+	display: flex;
+	flex-direction: column;
+	gap: 18px;
+}
+
+.mc-cal.is-compact .mc-cal-days {
+	gap: 14px;
+}
+
+.mc-cal-day {
+	display: flex;
+	gap: 16px;
+	align-items: flex-start;
+}
+
+.mc-cal.is-compact .mc-cal-day {
+	flex-direction: column;
+	gap: 6px;
+}
+
+.mc-cal-day-date {
+	flex: none;
+	width: 54px;
+	padding-top: 8px;
+	text-align: center;
+	line-height: 1.1;
+}
+
+.mc-cal.is-compact .mc-cal-day-date {
+	width: auto;
+	padding-top: 0;
+	display: flex;
+	align-items: baseline;
+	gap: 0;
+	text-align: left;
+}
+
+.mc-cal-day-num {
+	font-family: var(--mc-cal-serif);
+	font-weight: 600;
+	font-size: 30px;
+	color: var(--mc-cal-title);
+}
+
+.mc-cal.is-compact .mc-cal-day-num {
+	font-size: 16px;
+}
+
+.mc-cal-day-mon,
+.mc-cal-day-dow {
+	font-size: 11px;
+	color: var(--mc-cal-muted);
+}
+
+.mc-cal.is-compact .mc-cal-day-mon::before,
+.mc-cal.is-compact .mc-cal-day-dow::before {
+	content: "·";
+	margin: 0 5px;
+	color: var(--mc-cal-caption);
+}
+
+.mc-cal-day.is-today .mc-cal-day-num {
+	color: var(--mc-cal-accent-live);
+}
+
+.mc-cal-day.is-past {
+	opacity: 0.72;
+}
+
+.mc-cal-day-card {
+	flex: 1 1 auto;
+	min-width: 0;
+	border: 1px solid var(--mc-cal-border);
+	border-radius: 12px;
+	background: var(--mc-cal-card);
+	overflow: hidden;
+}
+
+.mc-cal-day-empty {
+	padding: 16px;
+	font-size: 12px;
+	color: var(--mc-cal-muted);
+}
+
+/* ---- Event row ------------------------------------------------------- */
+
+.mc-cal-event {
 	display: flex;
 	align-items: center;
-	gap: 4px;
-	padding: 4px 0;
-	border-top: 1px solid var(--background-modifier-border);
-	border-bottom: 1px solid var(--background-modifier-border);
+	gap: 12px;
+	padding: 12px 14px;
+	cursor: pointer;
+	border-top: 1px solid var(--mc-cal-border);
+	transition: background 0.12s ease;
 }
 
-.meeting-copilot-datebar-label {
-	flex: 1;
-	background: transparent;
+.mc-cal-event:first-child {
+	border-top: none;
+}
+
+.mc-cal-event:hover {
+	background: color-mix(in oklch, var(--mc-cal-card-hi) 70%, transparent);
+}
+
+.mc-cal-event-bar {
+	flex: none;
+	align-self: stretch;
+	width: 3px;
+	min-height: 30px;
+	border-radius: 2px;
+	background: var(--mc-cal-accent);
+}
+
+.mc-cal-event-body {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.mc-cal-event-title {
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--mc-cal-title);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.mc-cal-event.has-note .mc-cal-event-title {
+	color: var(--mc-cal-text);
+}
+
+.mc-cal-event-meta {
+	margin-top: 2px;
+	font-size: 12px;
+	color: var(--mc-cal-muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.mc-cal-event-actions {
+	flex: none;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.mc-cal-event-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	padding: 0;
 	border: none;
-	color: var(--text-normal);
-	font-weight: 500;
-	font-size: var(--font-ui-small);
-	padding: 6px 8px;
-	border-radius: 4px;
+	border-radius: 7px;
+	background: var(--mc-cal-chip);
+	color: var(--mc-cal-icon);
 	cursor: pointer;
-	text-align: center;
+	box-shadow: none;
+	opacity: 0.85;
+	transition: background 0.12s ease, color 0.12s ease, opacity 0.12s ease;
 }
 
-.meeting-copilot-datebar-label:hover {
-	background: var(--background-modifier-hover);
+.mc-cal-event:hover .mc-cal-event-btn {
+	opacity: 1;
 }
 
-.meeting-copilot-datebar-today,
-.meeting-copilot-datebar-days {
-	background: transparent;
-	border: 1px solid var(--background-modifier-border);
-	color: var(--text-muted);
-	font-size: var(--font-ui-smaller);
-	padding: 4px 8px;
-	border-radius: 999px;
+.mc-cal-event-btn:hover {
+	background: var(--mc-cal-chip-hi);
+	color: var(--mc-cal-text);
+}
+
+.mc-cal-event-btn.is-danger:hover {
+	background: color-mix(in oklch, var(--mc-cal-accent-live) 26%, var(--mc-cal-chip));
+	color: var(--mc-cal-text);
+}
+
+.mc-cal-event-btn .svg-icon {
+	width: 14px;
+	height: 14px;
+}
+
+/* ---- "Earlier today" collapse --------------------------------------- */
+
+.mc-cal-earlier {
+	border-top: 1px solid var(--mc-cal-border);
+}
+
+.mc-cal-earlier-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 14px;
 	cursor: pointer;
+	color: var(--mc-cal-muted);
+	font-size: 12px;
 }
 
-.meeting-copilot-datebar-days {
-	min-width: 36px;
+.mc-cal-earlier-head:hover {
+	color: var(--mc-cal-text);
+}
+
+.mc-cal-earlier-chevron {
+	display: inline-flex;
+	transition: transform 0.12s ease;
+}
+
+.mc-cal-earlier-chevron .svg-icon {
+	width: 15px;
+	height: 15px;
+}
+
+.mc-cal-earlier.is-collapsed .mc-cal-earlier-chevron {
+	transform: rotate(-90deg);
+}
+
+.mc-cal-earlier-count {
+	margin-left: auto;
+	padding: 1px 8px;
+	border-radius: 10px;
+	background: var(--mc-cal-chip);
+	color: var(--mc-cal-muted);
+	font-size: 11px;
+}
+
+.mc-cal-earlier.is-collapsed .mc-cal-earlier-body {
+	display: none;
+}
+
+/* ---- Empty-run + placeholder states --------------------------------- */
+
+.mc-cal-gap,
+.mc-cal-empty {
+	padding: 10px 0;
 	text-align: center;
+	font-size: 12px;
+	color: var(--mc-cal-caption);
 }
 
-.meeting-copilot-datebar-today:hover,
-.meeting-copilot-datebar-days:hover {
-	background: var(--background-modifier-hover);
-	color: var(--text-normal);
+.mc-cal-error {
+	padding: 12px 14px;
+	border: 1px solid color-mix(in oklch, var(--mc-cal-accent-live) 40%, var(--mc-cal-border));
+	border-radius: 10px;
+	background: color-mix(in oklch, var(--mc-cal-accent-live) 10%, var(--mc-cal-card));
+	color: var(--mc-cal-text);
+	font-size: 13px;
 }
 
-.meeting-copilot-datebar-days-input {
-	width: 48px;
-	padding: 4px 6px;
-	border-radius: 999px;
-	border: 1px solid var(--interactive-accent);
-	background: var(--background-primary);
-	color: var(--text-normal);
-	font-size: var(--font-ui-smaller);
-	text-align: center;
+.mc-cal-connect {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 12px;
+	padding: 24px;
+	border: 1px solid var(--mc-cal-border);
+	border-radius: 12px;
+	background: var(--mc-cal-card);
 }
 
-/* custom calendar picker (anchored under the date label) */
-.meeting-copilot-picker {
-	background: var(--background-primary);
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 6px;
-	padding: 10px;
-	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
-	width: 252px;
-	user-select: none;
-	font-size: var(--font-ui-small);
+.mc-cal-connect-text {
+	margin: 0;
+	color: var(--mc-cal-muted);
+	font-size: 13px;
 }
 
-.meeting-copilot-picker-floating {
+.mc-cal-connect-cta {
+	height: 34px;
+	padding: 0 16px;
+	border: none;
+	border-radius: 8px;
+	background: var(--mc-cal-text);
+	color: #17161a;
+	font-size: 13px;
+	font-weight: 600;
+	cursor: pointer;
+	box-shadow: none;
+}
+
+.mc-cal-connect-cta:hover {
+	opacity: 0.88;
+}
+
+/* ---- Date picker popover --------------------------------------------- */
+
+.mc-cal-picker {
 	position: fixed;
-	left: var(--mc-picker-left, 0);
-	top: var(--mc-picker-top, 0);
-	z-index: 9999;
+	left: var(--mc-cal-picker-left, 0);
+	top: var(--mc-cal-picker-top, 0);
+	z-index: var(--layer-menu);
+	width: 248px;
+	padding: 10px;
+	border: 1px solid var(--mc-cal-border-hi);
+	border-radius: 12px;
+	background: var(--mc-cal-panel);
+	box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
 }
 
-.meeting-copilot-picker-header {
+.mc-cal-picker-bar {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
 	margin-bottom: 8px;
 }
 
-.meeting-copilot-picker-nav {
-	background: transparent;
-	border: none;
-	padding: 4px 6px;
-	cursor: pointer;
-	color: var(--text-muted);
-	border-radius: 4px;
-	display: inline-flex;
-}
-
-.meeting-copilot-picker-nav:hover {
-	background: var(--background-modifier-hover);
-	color: var(--text-normal);
-}
-
-.meeting-copilot-picker-month {
+.mc-cal-picker-title {
+	font-size: 13px;
 	font-weight: 600;
+	color: var(--mc-cal-title);
 }
 
-.meeting-copilot-picker-daynames,
-.meeting-copilot-picker-grid {
+.mc-cal-picker-step {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	padding: 0;
+	border: none;
+	border-radius: 7px;
+	background: var(--mc-cal-chip);
+	color: var(--mc-cal-icon);
+	cursor: pointer;
+	box-shadow: none;
+}
+
+.mc-cal-picker-step:hover {
+	background: var(--mc-cal-chip-hi);
+	color: var(--mc-cal-text);
+}
+
+.mc-cal-picker-step .svg-icon {
+	width: 14px;
+	height: 14px;
+}
+
+.mc-cal-picker-weekdays,
+.mc-cal-picker-grid {
 	display: grid;
 	grid-template-columns: repeat(7, 1fr);
 	gap: 2px;
 }
 
-.meeting-copilot-picker-daynames {
+.mc-cal-picker-weekdays {
 	margin-bottom: 4px;
 }
 
-.meeting-copilot-picker-dayname {
+.mc-cal-picker-weekday {
 	text-align: center;
-	color: var(--text-faint);
-	font-size: var(--font-ui-smaller);
-	padding: 2px 0;
+	font-size: 10px;
+	color: var(--mc-cal-caption);
 }
 
-.meeting-copilot-picker-cell {
-	background: transparent;
-	border: 1px solid transparent;
-	padding: 8px 0;
-	border-radius: 4px;
-	cursor: pointer;
-	color: var(--text-normal);
-	font-size: var(--font-ui-small);
-	position: relative;
-	min-height: 32px;
-}
-
-.meeting-copilot-picker-cell:hover:not(:disabled) {
-	background: var(--background-modifier-hover);
-}
-
-.meeting-copilot-picker-cell:disabled {
-	color: var(--text-faint);
-	cursor: default;
-	opacity: 0.4;
-}
-
-.meeting-copilot-picker-other-month {
-	color: var(--text-faint);
-}
-
-.meeting-copilot-picker-past {
-	color: var(--text-muted);
-}
-
-.meeting-copilot-picker-today {
-	color: var(--interactive-accent);
-	font-weight: 600;
-}
-
-.meeting-copilot-picker-focused {
-	background: var(--interactive-accent);
-	color: var(--text-on-accent);
-}
-
-.meeting-copilot-picker-focused:hover:not(:disabled) {
-	background: var(--interactive-accent-hover);
-}
-
-.meeting-copilot-picker-hasevents::after {
-	content: "";
-	position: absolute;
-	bottom: 3px;
-	left: 50%;
-	transform: translateX(-50%);
-	width: 4px;
-	height: 4px;
-	border-radius: 50%;
-	background: var(--interactive-accent);
-}
-
-.meeting-copilot-picker-focused.meeting-copilot-picker-hasevents::after {
-	background: var(--text-on-accent);
-}
-
-/* agenda — flat per-day */
-.meeting-copilot-agenda {
-	display: flex;
-	flex-direction: column;
-	gap: 14px;
-}
-
-.meeting-copilot-day {
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-}
-
-.meeting-copilot-day-today {
-	background: var(--background-secondary);
-	border-radius: 6px;
-	padding: 8px 8px 6px;
-	margin: 0 -8px;
-}
-
-.meeting-copilot-day-past {
-	opacity: 0.75;
-}
-
-.meeting-copilot-day-past:hover {
-	opacity: 1;
-}
-
-.meeting-copilot-day-today .meeting-copilot-day-label {
-	color: var(--interactive-accent);
-}
-
-.meeting-copilot-day-header {
-	display: flex;
-	align-items: baseline;
-	gap: 8px;
-	padding: 0 2px 4px;
-	border-bottom: 1px solid var(--background-modifier-border);
-}
-
-.meeting-copilot-day-label {
-	font-weight: 600;
-	font-size: var(--font-ui-small);
-	color: var(--text-normal);
-}
-
-.meeting-copilot-day-body {
-	display: flex;
-	flex-direction: column;
-}
-
-.meeting-copilot-day-empty-inline {
-	color: var(--text-muted);
-	font-size: var(--font-ui-smaller);
-	padding: 6px 2px 0;
-	font-style: italic;
-}
-
-.meeting-copilot-empty-run {
-	color: var(--text-faint);
-	font-size: var(--font-ui-smaller);
-	padding: 6px 2px;
-	text-align: center;
-	font-style: italic;
-}
-
-/* rows */
-.meeting-copilot-row {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	padding: 8px 10px;
-	min-height: 44px;
-	border-bottom: 1px solid var(--background-modifier-border);
-	cursor: pointer;
-}
-
-.meeting-copilot-row:last-child {
-	border-bottom: none;
-}
-
-.meeting-copilot-row:hover {
-	background: var(--background-modifier-hover);
-}
-
-.meeting-copilot-row-has-note .meeting-copilot-row-title {
-	color: var(--text-muted);
-}
-
-.meeting-copilot-calendar-dot {
-	width: 8px;
-	height: 8px;
-	border-radius: 50%;
-	flex-shrink: 0;
-	background: var(--text-muted);
-}
-
-.meeting-copilot-dot-recorded {
-	background: var(--interactive-accent);
-}
-
-.meeting-copilot-row-time {
-	color: var(--text-muted);
-	font-variant-numeric: tabular-nums;
-	font-size: var(--font-ui-smaller);
-	min-width: 96px;
-	flex-shrink: 0;
-}
-
-.meeting-copilot-row-main {
-	flex: 1;
-	min-width: 0;
-}
-
-.meeting-copilot-row-title {
-	font-weight: 500;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.meeting-copilot-row-meta {
-	color: var(--text-muted);
-	font-size: var(--font-ui-smaller);
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.meeting-copilot-row-trail {
-	display: flex;
-	gap: 2px;
-	color: var(--text-muted);
-	flex-shrink: 0;
-}
-
-.meeting-copilot-row-action {
-	background: transparent;
-	border: none;
-	color: var(--text-muted);
-	cursor: pointer;
-	padding: 4px 6px;
-	border-radius: 4px;
+.mc-cal-picker-day {
+	aspect-ratio: 1;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-}
-
-.meeting-copilot-row-action:hover {
-	background: var(--background-modifier-hover);
-	color: var(--text-normal);
-}
-
-.meeting-copilot-row-action-danger:hover {
-	color: var(--text-error);
-}
-
-/* "Earlier today" mini-collapsible inside the today section */
-.meeting-copilot-earlier-section {
-	display: flex;
-	flex-direction: column;
-	margin-top: 6px;
-}
-
-.meeting-copilot-earlier-header {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	padding: 4px 2px;
+	border: none;
+	border-radius: 7px;
+	background: transparent;
+	color: var(--mc-cal-title);
+	font-size: 12px;
 	cursor: pointer;
-	color: var(--text-muted);
-	font-size: var(--font-ui-smaller);
-	user-select: none;
+	box-shadow: none;
 }
 
-.meeting-copilot-earlier-header:hover {
-	color: var(--text-normal);
+.mc-cal-picker-day:hover:not(:disabled) {
+	background: var(--mc-cal-chip);
 }
 
-.meeting-copilot-chevron {
-	display: inline-flex;
-	transition: transform 120ms ease;
+.mc-cal-picker-day:disabled {
+	opacity: 0.28;
+	cursor: default;
 }
 
-.meeting-copilot-collapsed .meeting-copilot-chevron {
-	transform: rotate(-90deg);
+.mc-cal-picker-day.is-outside {
+	color: var(--mc-cal-caption);
 }
 
-.meeting-copilot-earlier-section.meeting-copilot-collapsed .meeting-copilot-earlier-body {
-	display: none;
+.mc-cal-picker-day.is-past {
+	color: var(--mc-cal-muted);
 }
 
-.meeting-copilot-section-count {
-	background: var(--background-modifier-border);
-	color: var(--text-muted);
-	border-radius: 10px;
-	padding: 1px 8px;
-	font-size: var(--font-ui-smaller);
+.mc-cal-picker-day.is-today {
+	color: var(--mc-cal-accent-live);
+	font-weight: 600;
 }
 
-/* mobile */
-@media (max-width: 480px) {
-	.meeting-copilot-row {
-		flex-wrap: wrap;
-		gap: 6px;
-	}
-	.meeting-copilot-row-time {
-		min-width: auto;
-	}
+.mc-cal-picker-day.is-selected {
+	background: var(--mc-cal-text);
+	color: #17161a;
+	font-weight: 600;
+}
+
+.mc-cal-picker-day.is-selected:hover:not(:disabled) {
+	background: var(--mc-cal-text);
+}
+
+.mc-cal-picker-day.has-events::after {
+	content: "";
+	position: absolute;
+	transform: translateY(11px);
+	width: 4px;
+	height: 4px;
+	border-radius: 50%;
+	background: var(--mc-cal-accent-meeting);
+}
+
+.mc-cal-picker-day.is-selected.has-events::after {
+	background: #17161a;
 }
 
 /* AI-enriched notes: gray callout so manual notes (plain, white) stand out. */

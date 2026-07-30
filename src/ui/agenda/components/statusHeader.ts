@@ -1,98 +1,85 @@
-// Portions adapted from obsidian-meetings-plus (0BSD)
-// https://github.com/jabaho9523/obsidian-meetings-plus
-// See THIRD_PARTY_NOTICES.md.
-
 import { moment, setIcon } from "obsidian";
 import { t } from "../../../i18n";
 import { DatePicker } from "./datePicker";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-const MAX_DAYS = 180;
+const MS_PER_DAY = 86_400_000;
+const MAX_LOOKAHEAD = 180;
 
 export interface StatusHeaderOptions {
 	parent: HTMLElement;
-	/** One-line status shown under the date (auth/loading/last-refresh). */
+	/** Status line under the title (auth / loading / error / last-refresh). */
 	subtext: string;
 	lookAheadDays: number;
-	/** YYYY-MM-DD currently focused. */
+	/** Focused day, `YYYY-MM-DD`. */
 	focusedDay: string;
-	/** YYYY-MM-DD of today. */
+	/** Today, `YYYY-MM-DD`. */
 	today: string;
-	/** Earliest navigable day (today − lookBackDays), YYYY-MM-DD. */
+	/** Earliest navigable day (today minus look-back), `YYYY-MM-DD`. */
 	minDay: string;
-	/** Set of day keys that have at least one meeting (for picker dots). */
+	/** Days that have at least one meeting (drives picker dots). */
 	daysWithMeetings: Set<string>;
+	/** Narrow side-panel layout: smaller type, stacked nav, fewer controls. */
+	compact: boolean;
 	onRefresh: () => void;
 	onOpenSettings: () => void;
 	onPickDay: (key: string) => void;
 	onChangeDays: (n: number) => void;
 }
 
+/** Renders the "Coming up" title, action buttons and the day-navigation bar. */
 export function renderStatusHeader(opts: StatusHeaderOptions): void {
 	const a = t().agenda;
-	const root = opts.parent.createDiv({ cls: "meeting-copilot-status" });
+	const head = opts.parent.createDiv({ cls: "mc-cal-head" });
+	if (opts.compact) head.addClass("is-compact");
 
-	const top = root.createDiv({ cls: "meeting-copilot-status-top" });
-	const left = top.createDiv({ cls: "meeting-copilot-status-left" });
-	left.createDiv({
-		cls: "meeting-copilot-status-title",
-		text: moment().format("dddd, MMM D"),
-	});
-	left.createDiv({
-		cls: "meeting-copilot-status-sub",
-		text: opts.subtext,
-	});
+	const top = head.createDiv({ cls: "mc-cal-head-top" });
+	top.createDiv({ cls: "mc-cal-head-title", text: a.comingUp });
 
-	const actions = top.createDiv({ cls: "meeting-copilot-status-actions" });
-	const refresh = actions.createEl("button", {
-		cls: "meeting-copilot-icon-btn",
-		attr: { "aria-label": a.refresh },
-	});
-	setIcon(refresh, "refresh-cw");
-	refresh.addEventListener("click", () => opts.onRefresh());
+	const controls = top.createDiv({ cls: "mc-cal-head-controls" });
+	addIconButton(controls, "rotate-cw", a.refresh, opts.onRefresh);
+	addIconButton(controls, "settings-2", a.openSettings, opts.onOpenSettings);
 
-	const settings = actions.createEl("button", {
-		cls: "meeting-copilot-icon-btn",
-		attr: { "aria-label": a.openSettings },
-	});
-	setIcon(settings, "settings");
-	settings.addEventListener("click", () => opts.onOpenSettings());
+	// In the wide layout the day navigation sits inline with the actions; in the
+	// narrow side panel it drops to its own compact row beneath the title.
+	if (!opts.compact) {
+		controls.createDiv({ cls: "mc-cal-head-divider" });
+		renderNav(controls, opts, { withDays: true });
+	} else {
+		const nav = head.createDiv({ cls: "mc-cal-nav-row" });
+		renderNav(nav, opts, { withDays: false });
+	}
 
-	renderDateBar(root, opts);
+	head.createDiv({ cls: "mc-cal-head-sub", text: opts.subtext });
 }
 
-function renderDateBar(parent: HTMLElement, opts: StatusHeaderOptions): void {
+function renderNav(
+	parent: HTMLElement,
+	opts: StatusHeaderOptions,
+	cfg: { withDays: boolean }
+): void {
 	const a = t().agenda;
-	const focusedDate = dateFromKey(opts.focusedDay);
+	const focused = fromKey(opts.focusedDay);
+	const nav = parent.createDiv({ cls: "mc-cal-nav" });
 
-	const bar = parent.createDiv({ cls: "meeting-copilot-datebar" });
-
-	const prev = bar.createEl("button", {
-		cls: "meeting-copilot-icon-btn",
-		attr: { "aria-label": a.previousDay },
-	});
-	setIcon(prev, "chevron-left");
-	if (opts.focusedDay <= opts.minDay) prev.setAttribute("disabled", "true");
-	prev.addEventListener("click", () => {
+	const prev = addIconButton(nav, "chevron-left", a.previousDay, () => {
 		if (opts.focusedDay <= opts.minDay) return;
-		const next = new Date(focusedDate.getTime() - DAY_MS);
-		opts.onPickDay(keyFromDate(next));
+		opts.onPickDay(toKey(new Date(focused.getTime() - MS_PER_DAY)));
 	});
+	if (opts.focusedDay <= opts.minDay) prev.setAttribute("disabled", "true");
 
-	const label = bar.createEl("button", {
-		cls: "meeting-copilot-datebar-label",
-		text: labelFor(focusedDate, opts.today),
+	const pill = nav.createEl("button", {
+		cls: "mc-cal-nav-date",
+		text: dateLabel(focused, opts.today),
 	});
-
 	let picker: DatePicker | null = null;
-	label.addEventListener("click", () => {
+	pill.addEventListener("click", () => {
 		if (picker?.isOpen()) {
 			picker.close();
 			picker = null;
 			return;
 		}
 		picker = new DatePicker({
-			anchor: label,
+			anchor: pill,
 			focusedDay: opts.focusedDay,
 			today: opts.today,
 			minDay: opts.minDay,
@@ -102,41 +89,27 @@ function renderDateBar(parent: HTMLElement, opts: StatusHeaderOptions): void {
 		picker.open();
 	});
 
-	const next = bar.createEl("button", {
-		cls: "meeting-copilot-icon-btn",
-		attr: { "aria-label": a.nextDay },
-	});
-	setIcon(next, "chevron-right");
-	next.addEventListener("click", () => {
-		const np = new Date(focusedDate.getTime() + DAY_MS);
-		opts.onPickDay(keyFromDate(np));
+	addIconButton(nav, "chevron-right", a.nextDay, () => {
+		opts.onPickDay(toKey(new Date(focused.getTime() + MS_PER_DAY)));
 	});
 
-	renderDaysPill(bar, opts);
-
-	if (opts.focusedDay !== opts.today) {
-		const todayBtn = bar.createEl("button", {
-			cls: "meeting-copilot-datebar-today",
-			text: a.todayLabel,
-		});
-		todayBtn.addEventListener("click", () => opts.onPickDay(opts.today));
-	}
+	if (cfg.withDays) renderDaysPill(nav, opts);
 }
 
-function renderDaysPill(bar: HTMLElement, opts: StatusHeaderOptions): void {
+function renderDaysPill(nav: HTMLElement, opts: StatusHeaderOptions): void {
 	const a = t().agenda;
-	const pill = bar.createEl("button", {
-		cls: "meeting-copilot-datebar-days",
+	const pill = nav.createEl("button", {
+		cls: "mc-cal-nav-days",
 		text: `${opts.lookAheadDays}d`,
 		attr: { "aria-label": a.daysShown },
 	});
 	pill.addEventListener("click", () => {
-		const input = bar.createEl("input", {
-			cls: "meeting-copilot-datebar-days-input",
+		const input = nav.createEl("input", {
+			cls: "mc-cal-nav-days-input",
 			attr: {
 				type: "number",
 				min: "1",
-				max: String(MAX_DAYS),
+				max: String(MAX_LOOKAHEAD),
 				value: String(opts.lookAheadDays),
 				"aria-label": a.daysShown,
 			},
@@ -145,21 +118,21 @@ function renderDaysPill(bar: HTMLElement, opts: StatusHeaderOptions): void {
 		input.focus();
 		input.select();
 
-		let committed = false;
+		let done = false;
 		const commit = () => {
-			if (committed) return;
-			committed = true;
+			if (done) return;
+			done = true;
 			const n = parseInt(input.value, 10);
-			if (Number.isFinite(n) && n >= 1 && n <= MAX_DAYS) {
+			if (Number.isFinite(n) && n >= 1 && n <= MAX_LOOKAHEAD) {
 				if (n !== opts.lookAheadDays) opts.onChangeDays(n);
 				else input.replaceWith(pill);
 			} else {
 				input.replaceWith(pill);
 			}
 		};
-		const cancel = () => {
-			if (committed) return;
-			committed = true;
+		const abort = () => {
+			if (done) return;
+			done = true;
 			input.replaceWith(pill);
 		};
 		input.addEventListener("blur", commit);
@@ -169,26 +142,40 @@ function renderDaysPill(bar: HTMLElement, opts: StatusHeaderOptions): void {
 				commit();
 			} else if (evt.key === "Escape") {
 				evt.preventDefault();
-				cancel();
+				abort();
 			}
 		});
 	});
 }
 
-function labelFor(d: Date, todayKey: string): string {
-	const k = keyFromDate(d);
-	if (k === todayKey) return moment(d).format("[Today] · ddd, MMM D");
-	return moment(d).format("ddd, MMM D");
+function addIconButton(
+	parent: HTMLElement,
+	icon: string,
+	label: string,
+	onClick: () => void
+): HTMLButtonElement {
+	const btn = parent.createEl("button", {
+		cls: "mc-cal-icon-btn",
+		attr: { "aria-label": label },
+	});
+	setIcon(btn, icon);
+	btn.addEventListener("click", () => onClick());
+	return btn;
 }
 
-function dateFromKey(k: string): Date {
-	const [y, m, d] = k.split("-").map((x) => parseInt(x, 10));
+function dateLabel(date: Date, today: string): string {
+	if (toKey(date) === today) return moment(date).format("[Today] · ddd, MMM D");
+	return moment(date).format("ddd, MMM D");
+}
+
+function fromKey(key: string): Date {
+	const [y, m, d] = key.split("-").map((n) => parseInt(n, 10));
 	return new Date(y!, (m ?? 1) - 1, d ?? 1);
 }
 
-function keyFromDate(d: Date): string {
-	const y = d.getFullYear();
-	const m = String(d.getMonth() + 1).padStart(2, "0");
-	const dd = String(d.getDate()).padStart(2, "0");
-	return `${y}-${m}-${dd}`;
+function toKey(date: Date): string {
+	const y = date.getFullYear();
+	const m = String(date.getMonth() + 1).padStart(2, "0");
+	const d = String(date.getDate()).padStart(2, "0");
+	return `${y}-${m}-${d}`;
 }

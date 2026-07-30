@@ -1,40 +1,47 @@
-// Portions adapted from obsidian-meetings-plus (0BSD)
-// https://github.com/jabaho9523/obsidian-meetings-plus
-// See THIRD_PARTY_NOTICES.md.
-
-type Listener<T> = (payload: T) => void;
-
-/** Minimal typed pub/sub used to keep the agenda view in sync with plugin state. */
+/**
+ * A tiny, fully-typed publish/subscribe bus. Each event name maps to a payload
+ * type via the `Events` record, so `on`/`emit` are checked against the same
+ * shape. Used to let plugin state notify the agenda view that it should reload
+ * without coupling the two directly.
+ */
 export class TypedEventBus<Events extends Record<string, unknown>> {
-	private listeners: Partial<{
-		[K in keyof Events]: Set<Listener<Events[K]>>;
-	}> = {};
+	private readonly handlers = new Map<keyof Events, Set<(payload: never) => void>>();
 
-	on<K extends keyof Events>(event: K, fn: Listener<Events[K]>): () => void {
-		let set = this.listeners[event];
-		if (!set) {
-			set = new Set();
-			this.listeners[event] = set;
+	/**
+	 * Register `handler` for `name`. Returns a disposer that removes exactly this
+	 * registration (safe to call more than once).
+	 */
+	on<K extends keyof Events>(
+		name: K,
+		handler: (payload: Events[K]) => void
+	): () => void {
+		let bucket = this.handlers.get(name);
+		if (!bucket) {
+			bucket = new Set();
+			this.handlers.set(name, bucket);
 		}
-		set.add(fn);
+		const fn = handler as (payload: never) => void;
+		bucket.add(fn);
 		return () => {
-			set?.delete(fn);
+			this.handlers.get(name)?.delete(fn);
 		};
 	}
 
-	emit<K extends keyof Events>(event: K, payload: Events[K]): void {
-		const set = this.listeners[event];
-		if (!set) return;
-		for (const fn of set) {
+	/** Notify every handler registered for `name`. Handler throws are contained. */
+	emit<K extends keyof Events>(name: K, payload: Events[K]): void {
+		const bucket = this.handlers.get(name);
+		if (!bucket) return;
+		for (const fn of [...bucket]) {
 			try {
-				fn(payload);
-			} catch (e) {
-				console.warn("[Meeting Copilot] event listener error", e);
+				(fn as (p: Events[K]) => void)(payload);
+			} catch (err) {
+				console.warn("[Meeting Copilot] event handler threw", err);
 			}
 		}
 	}
 
+	/** Drop every registration on every event. */
 	clear(): void {
-		this.listeners = {};
+		this.handlers.clear();
 	}
 }

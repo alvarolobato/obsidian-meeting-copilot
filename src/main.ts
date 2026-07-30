@@ -2523,12 +2523,19 @@ export default class SystemRecordingPlugin extends Plugin {
 
     // MARK: - Meeting agenda
 
-    /** Opens (or reveals) the agenda view in the right sidebar. */
+    /**
+     * Opens (or reveals) the agenda view. The `agendaPlacement` setting decides
+     * whether it attaches to a main-panel tab (default) or the right sidebar; an
+     * already-open view is just revealed wherever it currently lives.
+     */
     async openAgenda(): Promise<void> {
         const { workspace } = this.app;
         let leaf = workspace.getLeavesOfType(VIEW_TYPE_AGENDA)[0] ?? null;
         if (!leaf) {
-            leaf = workspace.getRightLeaf(false);
+            leaf =
+                this.settings.agendaPlacement === "sidebar"
+                    ? workspace.getRightLeaf(false)
+                    : workspace.getLeaf("tab");
             await leaf?.setViewState({ type: VIEW_TYPE_AGENDA, active: true });
         }
         if (leaf) void workspace.revealLeaf(leaf);

@@ -185,6 +185,7 @@ export const en = {
 	},
 	agenda: {
 		title: "Meetings",
+		comingUp: "Coming up",
 		notConnected: "Not connected",
 		loading: "Loading…",
 		lastRefreshed: (rel: string) => `Updated ${rel}`,
@@ -443,6 +444,12 @@ export const en = {
 		openMeet: {
 			name: "Open meeting link automatically",
 			desc: "If the event has a meeting link (Google Meet, Zoom, Teams, or Webex), open it in the browser at the start time.",
+		},
+		agendaPlacement: {
+			name: "Agenda placement",
+			desc: "Whether the meeting agenda opens as a main-panel tab or in the right sidebar.",
+			main: "Main panel",
+			sidebar: "Side panel",
 		},
 		agendaLookAhead: {
 			name: "Agenda look-ahead (days)",
