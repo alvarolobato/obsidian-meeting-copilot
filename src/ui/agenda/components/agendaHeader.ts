@@ -63,16 +63,14 @@ function renderNav(
 
 	// One-click jump back to today — the date pill below opens the full
 	// day-picker grid regardless of which day is focused, which is a lot of
-	// friction just to snap back after navigating away.
-	const isToday = opts.focusedDay === opts.today;
-	const todayBtn = nav.createEl("button", {
-		cls: "mc-cal-nav-today",
-		text: a.todayLabel,
-		attr: { "aria-label": a.todayLabel },
-	});
-	if (isToday) {
-		todayBtn.setAttribute("disabled", "true");
-	} else {
+	// friction just to snap back after navigating away. Only shown once
+	// you've actually navigated elsewhere; nothing to jump back to otherwise.
+	if (opts.focusedDay !== opts.today) {
+		const todayBtn = nav.createEl("button", {
+			cls: "mc-cal-nav-today",
+			text: a.todayLabel,
+			attr: { "aria-label": a.todayLabel },
+		});
 		todayBtn.addEventListener("click", () => opts.onPickDay(opts.today));
 	}
 

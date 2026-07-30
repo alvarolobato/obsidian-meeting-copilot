@@ -886,12 +886,6 @@ ul.mc-action-tasks {
 	color: var(--mc-cal-text);
 }
 
-.mc-cal-nav-today:disabled {
-	opacity: 0.4;
-	cursor: default;
-	background: transparent;
-}
-
 .mc-cal-nav-date {
 	white-space: nowrap;
 }
