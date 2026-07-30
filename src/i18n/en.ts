@@ -439,7 +439,7 @@ export const en = {
 		},
 		showAttendeePhotos: {
 			name: "Show attendee photos",
-			desc: "Show a small photo next to each agenda event — the 1:1 partner's, else the organizer's — falling back to initials when none is available. Only resolves for people in your Google Workspace directory; external attendees always show initials.",
+			desc: "Show a small photo next to each agenda event — the 1:1 partner's, else the organizer's — falling back to initials when none is available. Resolves from your Google Workspace directory and from your Google \"Other contacts\" (people you've corresponded with over Gmail); the latter needs a one-time re-authentication to grant. Always falls back to initials for people neither source can resolve.",
 		},
 		excludeWithoutMeetingLink: {
 			name: "Exclude meetings without a conference link",

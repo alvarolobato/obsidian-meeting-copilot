@@ -38,16 +38,30 @@ export class AuthInvalidatedError extends Error {
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 /**
- * Calendar events, Cloud Identity Groups (read-only), and People directory
- * (read-only). Groups expands group invitees into people; People resolves
- * display names when Calendar omits them. Admin Directory scopes are
+ * Calendar events, Cloud Identity Groups (read-only), People directory
+ * (read-only), and the user's own "Other contacts" (read-only). Groups
+ * expands group invitees into people; the directory scope resolves display
+ * names/photos from the org directory when Calendar omits them — subject to
+ * the Workspace admin's directory-sharing setting, which some domains
+ * disable entirely for third-party apps. `contacts.other.readonly` is a
+ * second, independent path to the same kind of data (name + photo) via the
+ * user's own personal "Other contacts" (auto-populated from Gmail
+ * correspondence) — that data is private to the user, not the org Directory,
+ * so it isn't subject to that admin setting. Admin Directory scopes are
  * intentionally not requested.
  */
 const SCOPE = [
 	"https://www.googleapis.com/auth/calendar.readonly",
 	"https://www.googleapis.com/auth/cloud-identity.groups.readonly",
 	"https://www.googleapis.com/auth/directory.readonly",
+	"https://www.googleapis.com/auth/contacts.other.readonly",
 ].join(" ");
+
+/** Scope string for the personal "Other contacts" read (name + photo), used
+ * by {@link GoogleOAuth.hasScope} to check whether a re-auth is still needed
+ * (existing tokens predate this scope until the user reconnects). */
+export const CONTACTS_OTHER_READONLY_SCOPE =
+	"https://www.googleapis.com/auth/contacts.other.readonly";
 
 export class GoogleOAuth {
 	/** Shared in-flight refresh so concurrent callers (scheduler + agenda) don't double-refresh. */
@@ -65,6 +79,16 @@ export class GoogleOAuth {
 
 	isAuthenticated(): boolean {
 		return this.storage.getTokens() !== null;
+	}
+
+	/** Whether the currently-stored tokens were granted the given scope.
+	 * Google echoes the actually-granted scope string on every token
+	 * response, so a scope added after the user's last consent shows up as
+	 * absent here until they reconnect — checking this avoids an API call
+	 * that's certain to fail with "insufficient authentication scopes". */
+	hasScope(scope: string): boolean {
+		const granted = this.storage.getTokens()?.scope ?? "";
+		return granted.split(/\s+/).includes(scope);
 	}
 
 	/** Returns a valid access token, refreshing if it expires within 60s. */

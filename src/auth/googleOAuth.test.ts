@@ -122,3 +122,40 @@ describe("GoogleOAuth.getAccessToken", () => {
 		expect(calls).not.toHaveBeenCalled();
 	});
 });
+
+describe("GoogleOAuth.hasScope", () => {
+	it("is true when the stored token's granted scope includes it", () => {
+		const { storage } = makeStorage({
+			...expired,
+			scope:
+				"https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/contacts.other.readonly",
+		});
+		const oauth = new GoogleOAuth(storage);
+		expect(
+			oauth.hasScope(
+				"https://www.googleapis.com/auth/contacts.other.readonly"
+			)
+		).toBe(true);
+	});
+
+	it("is false for a scope added after the user's last consent (not in the granted string)", () => {
+		const { storage } = makeStorage({
+			...expired,
+			scope: "https://www.googleapis.com/auth/calendar.readonly",
+		});
+		const oauth = new GoogleOAuth(storage);
+		expect(
+			oauth.hasScope(
+				"https://www.googleapis.com/auth/contacts.other.readonly"
+			)
+		).toBe(false);
+	});
+
+	it("is false with no stored tokens at all", () => {
+		const { storage } = makeStorage(null);
+		const oauth = new GoogleOAuth(storage);
+		expect(oauth.hasScope("https://www.googleapis.com/auth/calendar.readonly")).toBe(
+			false
+		);
+	});
+});

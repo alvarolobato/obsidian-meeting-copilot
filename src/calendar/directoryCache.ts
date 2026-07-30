@@ -12,6 +12,9 @@ export const PEOPLE_MAX_REQUESTS_PER_MINUTE = 60;
 /** The People API quota's rolling window; shared by {@link PeopleApiRateLimiter}
  * and the persisted timestamps below so both prune on the same boundary. */
 export const PEOPLE_RATE_WINDOW_MS = 60_000;
+/** Minimum gap between otherContacts syncs — this data (who you've emailed,
+ * their name/photo) changes rarely, so a session/day boundary is plenty. */
+export const OTHER_CONTACTS_RESYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 /** Debounce disk writes after a burst of cache fills. */
 export const DIRECTORY_CACHE_SAVE_DEBOUNCE_MS = 1500;
 export const DIRECTORY_CACHE_FILENAME = "directory-cache.json";
@@ -59,6 +62,17 @@ export interface DirectoryCacheFile {
 	 * once pruned to empty.
 	 */
 	rateLimitTimestamps?: number[];
+	/**
+	 * Google People API sync token for the user's "Other contacts" (see
+	 * `otherContactsSync.ts`). Lets a resync fetch only what changed since
+	 * last time instead of paging through the whole list again. `null`/absent
+	 * means the next sync does a full fetch (first run, or after the token
+	 * was rejected as expired).
+	 */
+	otherContactsSyncToken?: string | null;
+	/** Epoch ms of the last successful (full or incremental) otherContacts
+	 * sync; caps resync frequency since this data changes rarely. */
+	otherContactsSyncedAt?: number;
 }
 
 export interface DirectoryCacheStore {
@@ -88,6 +102,8 @@ export class DirectoryCache {
 	/** Recent People API request timestamps; seeds a fresh {@link PeopleApiRateLimiter}
 	 * after a reload. Pruned to {@link PEOPLE_RATE_WINDOW_MS} on load. */
 	peopleRateLimitTimestamps: number[] = [];
+	otherContactsSyncToken: string | null = null;
+	otherContactsSyncedAt = 0;
 
 	constructor(
 		private readonly store: DirectoryCacheStore | null,
@@ -132,6 +148,8 @@ export class DirectoryCache {
 			this.peopleRateLimitTimestamps = (parsed.rateLimitTimestamps ?? []).filter(
 				(t) => typeof t === "number" && isFresh(t, PEOPLE_RATE_WINDOW_MS, now)
 			);
+			this.otherContactsSyncToken = parsed.otherContactsSyncToken ?? null;
+			this.otherContactsSyncedAt = parsed.otherContactsSyncedAt ?? 0;
 		} catch (err) {
 			console.warn(
 				"[Meeting Copilot] Failed to load directory cache; starting empty.",
@@ -258,6 +276,15 @@ export class DirectoryCache {
 		this.markDirty();
 	}
 
+	/** Records a completed otherContacts sync (see `otherContactsSync.ts`).
+	 * `syncToken: null` forces the next sync to do a full fetch (e.g. after
+	 * Google rejected the previous token as expired). */
+	setOtherContactsSynced(syncToken: string | null): void {
+		this.otherContactsSyncToken = syncToken;
+		this.otherContactsSyncedAt = this.now();
+		this.markDirty();
+	}
+
 	toJSON(): DirectoryCacheFile {
 		const now = this.now();
 		const people: Record<string, CachedPerson> = {};
@@ -271,7 +298,14 @@ export class DirectoryCache {
 		const rateLimitTimestamps = this.peopleRateLimitTimestamps.filter((t) =>
 			isFresh(t, PEOPLE_RATE_WINDOW_MS, now)
 		);
-		return { version: DIRECTORY_CACHE_VERSION, people, groups, rateLimitTimestamps };
+		return {
+			version: DIRECTORY_CACHE_VERSION,
+			people,
+			groups,
+			rateLimitTimestamps,
+			otherContactsSyncToken: this.otherContactsSyncToken,
+			otherContactsSyncedAt: this.otherContactsSyncedAt,
+		};
 	}
 
 	private markDirty(): void {

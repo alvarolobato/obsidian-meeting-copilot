@@ -44,7 +44,11 @@ import {
 } from "./transcribe/localModels";
 import * as path from "path";
 import * as fs from "fs";
-import { GoogleOAuth, type StoredTokens } from "./auth/googleOAuth";
+import {
+	CONTACTS_OTHER_READONLY_SCOPE,
+	GoogleOAuth,
+	type StoredTokens,
+} from "./auth/googleOAuth";
 import { parseKeywords } from "./calendar/eventFilter";
 import { CalendarScheduler, GRACE_MS, ScheduledEvent } from "./calendar/scheduler";
 import { eventEndStopAction } from "./calendar/eventEnd";
@@ -134,9 +138,11 @@ import {
 	createPeopleDirectory,
 	PersonNameCache,
 } from "./calendar/personDirectory";
+import { syncOtherContacts } from "./calendar/otherContactsSync";
 import {
 	DIRECTORY_CACHE_FILENAME,
 	DirectoryCache,
+	OTHER_CONTACTS_RESYNC_INTERVAL_MS,
 	PEOPLE_MAX_REQUESTS_PER_MINUTE,
 	PeopleApiRateLimiter,
 } from "./calendar/directoryCache";
@@ -422,6 +428,8 @@ export default class SystemRecordingPlugin extends Plugin {
 	private avatarUrlByEmail = new Map<string, string | null>();
 	/** Emails currently being resolved, so a second poll can't double-fetch. */
 	private avatarResolveInFlight = new Set<string>();
+	/** Guards against overlapping otherContacts syncs (see scheduleOtherContactsSync). */
+	private otherContactsSyncInFlight = false;
 	private agendaEvents = new TypedEventBus<AgendaViewEvents>();
 
     async onload() {
@@ -2236,6 +2244,39 @@ export default class SystemRecordingPlugin extends Plugin {
 	}
 
 	/**
+	 * Kicks off a background otherContacts sync (name + photo for people
+	 * you've corresponded with over Gmail — see `otherContactsSync.ts`) at
+	 * most once per {@link OTHER_CONTACTS_RESYNC_INTERVAL_MS}. No-ops when
+	 * photos are off, not authenticated, already mid-sync, or the user
+	 * hasn't re-consented to the new scope yet (an old install predates it).
+	 */
+	private scheduleOtherContactsSync(): void {
+		if (!this.settings.showAttendeePhotos) return;
+		if (!this.isCalendarAuthenticated()) return;
+		if (this.otherContactsSyncInFlight) return;
+		if (!this.oauth.hasScope(CONTACTS_OTHER_READONLY_SCOPE)) return;
+		if (
+			Date.now() - this.directoryCache.otherContactsSyncedAt <
+			OTHER_CONTACTS_RESYNC_INTERVAL_MS
+		) {
+			return;
+		}
+		this.otherContactsSyncInFlight = true;
+		syncOtherContacts(this.oauth, this.directoryCache, this.peopleRateLimiter)
+			.then((result) => {
+				if (result.updated > 0) this.agendaEvents.emit("changed", undefined);
+			})
+			.catch((err) => {
+				mcLog("otherContacts", "sync failed", {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			})
+			.finally(() => {
+				this.otherContactsSyncInFlight = false;
+			});
+	}
+
+	/**
 	 * Await expansion for a single meeting before writing a note so attendees
 	 * don't land as an unexpanded group label when the user creates a note
 	 * before the background pass finishes.
@@ -3917,6 +3958,7 @@ export default class SystemRecordingPlugin extends Plugin {
         this.applyCachedExpandedAttendees(events);
         this.scheduleGroupAttendeeExpand(events);
         this.scheduleAvatarResolve(events);
+        this.scheduleOtherContactsSync();
         const index = buildNoteIndex(this.app);
         return events
             .map((e) => toAgendaMeeting(e, index))

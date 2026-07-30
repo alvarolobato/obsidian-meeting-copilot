@@ -99,7 +99,7 @@ export interface PeopleDirectoryOptions {
 	debugLogging?: boolean;
 }
 
-interface RawDirectoryPerson {
+export interface RawDirectoryPerson {
 	names?: Array<{ displayName?: string; unstructuredName?: string }>;
 	emailAddresses?: Array<{ value?: string }>;
 	/** Present when `photos` is in the readMask; `default` marks Google's
@@ -114,7 +114,9 @@ interface DirectoryLookup {
 	photoUrl: string | null;
 }
 
-function pickRealPhotoUrl(
+/** Shared with `otherContactsSync.ts`: both parse the same People API
+ * `Person` resource shape (`names`/`emailAddresses`/`photos`). */
+export function pickRealPhotoUrl(
 	photos: RawDirectoryPerson["photos"]
 ): string | null {
 	const real = (photos ?? []).find((p) => !p.default && p.url);
