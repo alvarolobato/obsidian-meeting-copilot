@@ -1357,6 +1357,7 @@ export default class SystemRecordingPlugin extends Plugin {
 			directoryCache: this.directoryCache,
 			rateLimiter: this.peopleRateLimiter,
 			debugLogging: this.settings.debugLogging,
+			nameCache: this.personNameCache,
 		});
 	}
 
@@ -2170,11 +2171,12 @@ export default class SystemRecordingPlugin extends Plugin {
 		>
 	): void {
 		if (!this.settings.showAttendeePhotos) return;
-		// Shared with resolveAttendeeLabel's own "give up for this session"
-		// flag: a thrown lookup error (a permanent Workspace admin block, or a
-		// disabled People API) means every remaining email would fail the
-		// same way, so there's no point re-attempting on every poll.
-		if (this.personNameCache.disabled) return;
+		// No blanket "directory disabled, don't even try" gate here: the
+		// person directory's own lookup() already skips the network call
+		// once personNameCache.disabled is set, but only after checking the
+		// persistent cache — so an otherContacts-sourced hit (a separate,
+		// unblocked API, kept fresh on its own schedule) still resolves for
+		// emails not yet in avatarUrlByEmail even after the directory gave up.
 		const emails = new Set<string>();
 		for (const ev of events) {
 			const email = avatarEmailFor(ev);
@@ -2215,10 +2217,14 @@ export default class SystemRecordingPlugin extends Plugin {
 						misses++;
 					}
 				} catch (err) {
-					// A thrown lookup error means every remaining email would fail
-					// the same way (permanent Workspace policy block, or the API
-					// disabled) — stop for this session rather than re-attempting
-					// on every future poll. Shared flag with resolveAttendeeLabel.
+					// A thrown lookup error means the Directory network call is
+					// permanently blocked this session (Workspace policy, or the
+					// API disabled) — stop this batch rather than repeating a
+					// doomed request for the rest of it. Future polls still try
+					// (personDirectory's lookup() skips straight to a cache check
+					// once this flag is set, so otherContacts-sourced hits for
+					// emails not reached this batch still resolve). Shared flag
+					// with resolveAttendeeLabel.
 					this.personNameCache.disabled = true;
 					mcLog("avatar", "resolve failed", {
 						email,

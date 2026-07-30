@@ -63,9 +63,15 @@ export async function resolveAttendeeLabel(
 
 	const cached = cache.names.get(key);
 	if (cached) return cached;
-	if (cache.miss.has(key) || cache.disabled || !people) {
+	if (cache.miss.has(key) || !people) {
 		return humanizeEmailName(key) || key;
 	}
+	// Note: `cache.disabled` is intentionally *not* an early-return gate here.
+	// `people.resolveDisplayName` (via its own `nameCache` option, the same
+	// `cache` instance) already skips the network call once disabled — but
+	// only after checking the persistent directory cache, so a hit from
+	// otherContactsSync (a separate, unblocked API) still resolves. Gating
+	// here too would skip that cache check entirely.
 
 	try {
 		const name = await people.resolveDisplayName(key);
@@ -97,6 +103,18 @@ export interface PeopleDirectoryOptions {
 	 * itself and the higher-level avatar-resolve summary logs stay always-on.
 	 */
 	debugLogging?: boolean;
+	/**
+	 * When `.disabled` is true (set after a permanent-for-this-session
+	 * failure — a Workspace policy block or SERVICE_DISABLED), skip the
+	 * *network* searchDirectoryPeople call, but only after already checking
+	 * `directoryCache` — a cache hit (e.g. from `otherContactsSync`, which
+	 * keeps writing into the same cache on its own schedule) still resolves,
+	 * since that's a completely different, unblocked API. Without this
+	 * split, disabling the directory network path also silently stopped
+	 * otherContacts-covered people from ever being looked up again this
+	 * session.
+	 */
+	nameCache?: PersonNameCache;
 }
 
 export interface RawDirectoryPerson {
@@ -133,7 +151,7 @@ export function createPeopleDirectory(
 	oauth: GoogleOAuth,
 	opts: PeopleDirectoryOptions = {}
 ): PersonDirectory {
-	const { directoryCache, rateLimiter, debugLogging } = opts;
+	const { directoryCache, rateLimiter, debugLogging, nameCache } = opts;
 
 	async function lookup(email: string): Promise<DirectoryLookup | undefined> {
 		const key = normEmail(email);
@@ -141,6 +159,10 @@ export function createPeopleDirectory(
 		if (cached !== undefined) {
 			return { name: cached.name, photoUrl: cached.photoUrl };
 		}
+		// Confirmed-permanent Directory block (e.g. Workspace policy): the
+		// cache check above already ran, so this only skips the network call
+		// that's certain to fail the same way — not otherContacts-sourced hits.
+		if (nameCache?.disabled) return undefined;
 
 		if (directoryCache?.peopleIsRateLimited()) {
 			if (debugLogging) {

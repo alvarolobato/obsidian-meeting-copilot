@@ -81,6 +81,22 @@ describe("resolveAttendeeLabel", () => {
 		).resolves.toBe("Other");
 	});
 
+	it("still calls the directory once disabled — the directory's own lookup, not this early-return, is what skips the network", async () => {
+		// A real PersonDirectory (via createPeopleDirectory) short-circuits a
+		// disabled directory to a cheap cache check, not a network call — so
+		// resolveAttendeeLabel must not gate on `cache.disabled` itself, or an
+		// otherContactsSync-covered person would never be looked up again
+		// this session once the directory API had failed once for anyone.
+		const resolveDisplayName = vi.fn(async () => "Should Still Be Called");
+		const people: PersonDirectory = { resolveDisplayName, ...noPhoto() };
+		const cache = new PersonNameCache();
+		cache.disabled = true;
+		await expect(
+			resolveAttendeeLabel("someone@elastic.co", "", people, cache)
+		).resolves.toBe("Should Still Be Called");
+		expect(resolveDisplayName).toHaveBeenCalledTimes(1);
+	});
+
 	it("does not session-cache inconclusive (undefined) directory results", async () => {
 		const resolveDisplayName = vi
 			.fn()
@@ -214,5 +230,55 @@ describe("createPeopleDirectory", () => {
 			expect.stringContaining("people lookup skipped (cooldown active)")
 		);
 		warnSpy.mockRestore();
+	});
+
+	it("still resolves a directory-cache hit once nameCache.disabled is set (e.g. by otherContactsSync)", async () => {
+		let networkCalls = 0;
+		__setRequestUrl(() => {
+			networkCalls++;
+			return { status: 200, json: { people: [] }, text: "" };
+		});
+		const cache = new DirectoryCache(null, () => 1_000, 0);
+		// Simulate otherContactsSync having already found this person via a
+		// completely different (unblocked) API.
+		cache.setPerson(
+			"ruflin@elastic.co",
+			"Nicolas Ruflin",
+			"https://example.com/ruflin.png"
+		);
+		const nameCache = new PersonNameCache();
+		nameCache.disabled = true; // e.g. Workspace policy blocked the directory earlier this session
+		const people = createPeopleDirectory(fakeOauth(), {
+			directoryCache: cache,
+			nameCache,
+		});
+
+		await expect(people.resolvePhotoUrl("ruflin@elastic.co")).resolves.toBe(
+			"https://example.com/ruflin.png"
+		);
+		await expect(
+			people.resolveDisplayName("ruflin@elastic.co")
+		).resolves.toBe("Nicolas Ruflin");
+		expect(networkCalls).toBe(0);
+	});
+
+	it("skips the network call (no cache hit, disabled) without throwing", async () => {
+		let networkCalls = 0;
+		__setRequestUrl(() => {
+			networkCalls++;
+			return { status: 403, json: {}, text: "forbidden" };
+		});
+		const cache = new DirectoryCache(null, () => 1_000, 0);
+		const nameCache = new PersonNameCache();
+		nameCache.disabled = true;
+		const people = createPeopleDirectory(fakeOauth(), {
+			directoryCache: cache,
+			nameCache,
+		});
+
+		await expect(
+			people.resolvePhotoUrl("nobody@elastic.co")
+		).resolves.toBeUndefined();
+		expect(networkCalls).toBe(0);
 	});
 });
