@@ -866,6 +866,7 @@ ul.mc-action-tasks {
 	height: 14px;
 }
 
+.mc-cal-nav-today,
 .mc-cal-nav-date,
 .mc-cal-nav-days {
 	height: 30px;
@@ -877,7 +878,18 @@ ul.mc-action-tasks {
 	font-size: 13px;
 	cursor: pointer;
 	box-shadow: none;
-	transition: background 0.12s ease;
+	transition: background 0.12s ease, color 0.12s ease, opacity 0.12s ease;
+}
+
+.mc-cal-nav-today:hover {
+	background: var(--mc-cal-chip-hi);
+	color: var(--mc-cal-text);
+}
+
+.mc-cal-nav-today:disabled {
+	opacity: 0.4;
+	cursor: default;
+	background: transparent;
 }
 
 .mc-cal-nav-date {
