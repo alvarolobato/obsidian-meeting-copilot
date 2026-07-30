@@ -1338,6 +1338,7 @@ export default class SystemRecordingPlugin extends Plugin {
 		return createPeopleDirectory(this.oauth, {
 			directoryCache: this.directoryCache,
 			rateLimiter: this.peopleRateLimiter,
+			debugLogging: this.settings.debugLogging,
 		});
 	}
 
@@ -2144,7 +2145,10 @@ export default class SystemRecordingPlugin extends Plugin {
 	 */
 	private scheduleAvatarResolve(
 		events: Array<
-			Pick<AgendaMeeting, "oneOnOnePartnerEmail" | "organizerEmail">
+			Pick<
+				AgendaMeeting,
+				"oneOnOnePartnerEmail" | "organizerEmail" | "organizerIsSelf"
+			>
 		>
 	): void {
 		if (!this.settings.showAttendeePhotos) return;
@@ -3843,6 +3847,7 @@ export default class SystemRecordingPlugin extends Plugin {
             // label, if that); no avatar email to fall back to for this
             // note-derived, non-calendar meeting.
             organizerEmail: null,
+            organizerIsSelf: false,
             iCalUID: str("ical_uid") || null,
             recurringEventId: str("recurring_event_id") || null,
             oneOnOnePartner: str("one_on_one_with") || null,

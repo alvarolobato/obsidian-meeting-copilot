@@ -203,11 +203,13 @@ export class DirectoryCache {
 		this.markDirty();
 	}
 
-	/** Drop negative (miss) entries so a re-auth can retry lookups. */
+	/** Drop negative (miss) entries so a re-auth can retry lookups. A `null`
+	 * name with a real `photoUrl` (a directory hit with a photo but no name
+	 * field) is a hit, not a miss — only drop when *both* are null. */
 	clearNegativeEntries(): void {
 		let changed = false;
 		for (const [email, entry] of this.people) {
-			if (entry.name === null) {
+			if (entry.name === null && entry.photoUrl === null) {
 				this.people.delete(email);
 				changed = true;
 			}

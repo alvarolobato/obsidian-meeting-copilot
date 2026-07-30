@@ -256,6 +256,32 @@ describe("listEvents", () => {
 		);
 		expect(event?.organizer).toBe("Alice");
 		expect(event?.organizerEmail).toBe("alice@example.com");
+		expect(event?.organizerIsSelf).toBe(false);
+	});
+
+	it("marks organizerIsSelf when the organizer is the signed-in user", async () => {
+		__setRequestUrl(() => ({
+			status: 200,
+			json: {
+				items: [
+					{
+						id: "1",
+						summary: "Standup",
+						organizer: { email: "me@example.com", self: true },
+						start: { dateTime: "2026-01-01T10:00:00Z" },
+						end: { dateTime: "2026-01-01T10:30:00Z" },
+					},
+				],
+			},
+			text: "",
+		}));
+		const [event] = await listEvents(
+			fakeOauth(),
+			"primary",
+			new Date("2026-01-01"),
+			new Date("2026-01-02")
+		);
+		expect(event?.organizerIsSelf).toBe(true);
 	});
 
 	it("leaves organizerEmail null when the organizer has no email", async () => {

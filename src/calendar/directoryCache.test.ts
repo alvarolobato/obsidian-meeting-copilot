@@ -136,6 +136,19 @@ describe("DirectoryCache", () => {
 		expect(cache.getGroup("group@x.com")?.resource).toBe("groups/g");
 		expect(cache.getGroup("notgroup@x.com")).toBeUndefined();
 	});
+
+	it("clearNegativeEntries keeps a null-name entry that has a real photo", () => {
+		// A directory hit can return a photo with no name field — that's a
+		// hit, not a miss, and shouldn't be discarded on re-auth.
+		const cache = new DirectoryCache(null, () => 1_000, 0);
+		cache.setPerson("photo-only@x.com", null, "https://example.com/p.png");
+		cache.clearNegativeEntries();
+		expect(cache.getPerson("photo-only@x.com")).toEqual({
+			name: null,
+			photoUrl: "https://example.com/p.png",
+			at: 1_000,
+		});
+	});
 });
 
 describe("PeopleApiRateLimiter", () => {

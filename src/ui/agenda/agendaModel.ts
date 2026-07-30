@@ -27,6 +27,8 @@ export interface AgendaMeeting {
 	organizer: string | null;
 	/** The organizer's email (lowercased/trimmed); null when unavailable. */
 	organizerEmail: string | null;
+	/** True when the signed-in user organized the event. */
+	organizerIsSelf: boolean;
 	iCalUID: string | null;
 	recurringEventId: string | null;
 	/** The other attendee's display name (or email) for a 1:1; null for anything else. */
@@ -92,6 +94,7 @@ export function toAgendaMeeting(
 		invitees: ev.invitees,
 		organizer: ev.organizer,
 		organizerEmail: ev.organizerEmail,
+		organizerIsSelf: ev.organizerIsSelf,
 		iCalUID: ev.iCalUID,
 		recurringEventId: ev.recurringEventId,
 		oneOnOnePartner: ev.oneOnOnePartner,
@@ -124,13 +127,21 @@ export function toMeetingInfo(m: AgendaMeeting): MeetingEventInfo {
 /**
  * Email to resolve a single per-event avatar photo for: the 1:1 partner (so a
  * self-organized 1:1 shows the other person, not the viewer), else the
- * organizer. Null when neither resolves to an email — an external/foreign
- * calendar's organizer, or a truncated attendee list. Structural on purpose
- * (`Pick`) so it works on both {@link GCalEvent} and {@link AgendaMeeting}
- * without forcing a conversion first.
+ * organizer — unless the viewer organized the (group) event themselves, in
+ * which case there's no one else to attribute a photo to (showing your own
+ * face on your own row isn't useful, so this falls back to the initials
+ * placeholder instead). Null when nothing resolves to an email — an
+ * external/foreign calendar's organizer, a truncated attendee list, or a
+ * self-organized group meeting. Structural on purpose (`Pick`) so it works on
+ * both {@link GCalEvent} and {@link AgendaMeeting} without forcing a
+ * conversion first.
  */
 export function avatarEmailFor(
-	m: Pick<AgendaMeeting, "oneOnOnePartnerEmail" | "organizerEmail">
+	m: Pick<
+		AgendaMeeting,
+		"oneOnOnePartnerEmail" | "organizerEmail" | "organizerIsSelf"
+	>
 ): string | null {
-	return m.oneOnOnePartnerEmail ?? m.organizerEmail;
+	if (m.oneOnOnePartnerEmail) return m.oneOnOnePartnerEmail;
+	return m.organizerIsSelf ? null : m.organizerEmail;
 }

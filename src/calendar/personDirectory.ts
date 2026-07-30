@@ -90,6 +90,13 @@ export interface PeopleDirectoryOptions {
 	directoryCache?: DirectoryCache;
 	/** Caps People calls under the 90/min quota. */
 	rateLimiter?: PeopleApiRateLimiter;
+	/**
+	 * Gates the per-lookup rate-limit-wait/cooldown-skip logs (one per
+	 * attendee/organizer per poll — the same "verbose, off by default"
+	 * category as the transcription pipeline's `debugLogging`). The 429 event
+	 * itself and the higher-level avatar-resolve summary logs stay always-on.
+	 */
+	debugLogging?: boolean;
 }
 
 interface RawDirectoryPerson {
@@ -124,7 +131,7 @@ export function createPeopleDirectory(
 	oauth: GoogleOAuth,
 	opts: PeopleDirectoryOptions = {}
 ): PersonDirectory {
-	const { directoryCache, rateLimiter } = opts;
+	const { directoryCache, rateLimiter, debugLogging } = opts;
 
 	async function lookup(email: string): Promise<DirectoryLookup | undefined> {
 		const key = normEmail(email);
@@ -134,17 +141,23 @@ export function createPeopleDirectory(
 		}
 
 		if (directoryCache?.peopleIsRateLimited()) {
-			mcLog("directory", "people lookup skipped (cooldown active)", { email: key });
+			if (debugLogging) {
+				mcLog("directory", "people lookup skipped (cooldown active)", {
+					email: key,
+				});
+			}
 			return undefined;
 		}
 
 		if (rateLimiter) {
 			const wait = rateLimiter.waitMs();
 			if (wait > 0) {
-				mcLog("directory", "people lookup waiting for rate-limit slot", {
-					email: key,
-					waitMs: wait,
-				});
+				if (debugLogging) {
+					mcLog("directory", "people lookup waiting for rate-limit slot", {
+						email: key,
+						waitMs: wait,
+					});
+				}
 				await sleep(wait);
 			}
 			rateLimiter.record();

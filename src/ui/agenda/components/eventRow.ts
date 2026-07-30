@@ -45,13 +45,13 @@ export interface EventRowOptions {
 
 /** Best single label to initial from: the 1:1 partner, else the organizer,
  * else the meeting title. */
-function avatarLabel(meeting: AgendaMeeting): string {
+export function avatarLabel(meeting: AgendaMeeting): string {
 	return meeting.oneOnOnePartner || meeting.organizer || meeting.title;
 }
 
 /** First letter of {@link avatarLabel}, uppercased; "?" for an empty/blank
  * label (shouldn't happen — every meeting has at least a title). */
-function avatarInitial(meeting: AgendaMeeting): string {
+export function avatarInitial(meeting: AgendaMeeting): string {
 	const label = avatarLabel(meeting).trim();
 	return label ? label[0]!.toUpperCase() : "?";
 }

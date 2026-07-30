@@ -7,6 +7,7 @@ describe("avatarEmailFor", () => {
 			avatarEmailFor({
 				oneOnOnePartnerEmail: "bob@example.com",
 				organizerEmail: "me@example.com",
+				organizerIsSelf: true,
 			})
 		).toBe("bob@example.com");
 	});
@@ -16,13 +17,28 @@ describe("avatarEmailFor", () => {
 			avatarEmailFor({
 				oneOnOnePartnerEmail: null,
 				organizerEmail: "alice@example.com",
+				organizerIsSelf: false,
 			})
 		).toBe("alice@example.com");
 	});
 
-	it("returns null when neither is available", () => {
+	it("returns null for a self-organized group meeting (no partner, no one else to show)", () => {
 		expect(
-			avatarEmailFor({ oneOnOnePartnerEmail: null, organizerEmail: null })
+			avatarEmailFor({
+				oneOnOnePartnerEmail: null,
+				organizerEmail: "me@example.com",
+				organizerIsSelf: true,
+			})
+		).toBeNull();
+	});
+
+	it("returns null when neither a partner nor a non-self organizer is available", () => {
+		expect(
+			avatarEmailFor({
+				oneOnOnePartnerEmail: null,
+				organizerEmail: null,
+				organizerIsSelf: false,
+			})
 		).toBeNull();
 	});
 });

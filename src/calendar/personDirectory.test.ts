@@ -195,4 +195,24 @@ describe("createPeopleDirectory", () => {
 			at: 1_000,
 		});
 	});
+
+	it("stays quiet about a cooldown skip unless debugLogging is on", async () => {
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const cache = new DirectoryCache(null, () => 1_000, 0);
+		cache.markPeopleRateLimited(60_000);
+
+		const quiet = createPeopleDirectory(fakeOauth(), { directoryCache: cache });
+		await quiet.resolvePhotoUrl("ruflin@elastic.co");
+		expect(warnSpy).not.toHaveBeenCalled();
+
+		const verbose = createPeopleDirectory(fakeOauth(), {
+			directoryCache: cache,
+			debugLogging: true,
+		});
+		await verbose.resolvePhotoUrl("ruflin@elastic.co");
+		expect(warnSpy).toHaveBeenCalledWith(
+			expect.stringContaining("people lookup skipped (cooldown active)")
+		);
+		warnSpy.mockRestore();
+	});
 });
