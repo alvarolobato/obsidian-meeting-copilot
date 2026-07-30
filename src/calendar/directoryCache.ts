@@ -15,6 +15,27 @@ export const PEOPLE_RATE_WINDOW_MS = 60_000;
 /** Minimum gap between otherContacts syncs — this data (who you've emailed,
  * their name/photo) changes rarely, so a session/day boundary is plenty. */
 export const OTHER_CONTACTS_RESYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
+/**
+ * Fallback-avatar background colors (initials, no real photo available).
+ * Same lightness/chroma family as the event accent tokens in `styles.css` (so
+ * white/`--mc-cal-card` text stays readable on all of them), spread across
+ * hues so distinct people are visually distinguishable at a glance. One is
+ * assigned per person the first time their avatar renders and persisted —
+ * see {@link DirectoryCache.getOrAssignAvatarColor} — so it's always the
+ * same color for that person afterward, not re-randomized every render.
+ */
+export const AVATAR_COLOR_PALETTE = [
+	"oklch(0.68 0.16 15)",
+	"oklch(0.70 0.15 50)",
+	"oklch(0.73 0.14 90)",
+	"oklch(0.68 0.13 130)",
+	"oklch(0.68 0.13 170)",
+	"oklch(0.68 0.13 205)",
+	"oklch(0.65 0.14 240)",
+	"oklch(0.65 0.15 275)",
+	"oklch(0.68 0.16 310)",
+	"oklch(0.68 0.17 345)",
+] as const;
 /** Debounce disk writes after a burst of cache fills. */
 export const DIRECTORY_CACHE_SAVE_DEBOUNCE_MS = 1500;
 export const DIRECTORY_CACHE_FILENAME = "directory-cache.json";
@@ -73,6 +94,9 @@ export interface DirectoryCacheFile {
 	/** Epoch ms of the last successful (full or incremental) otherContacts
 	 * sync; caps resync frequency since this data changes rarely. */
 	otherContactsSyncedAt?: number;
+	/** Persisted fallback-avatar color per person, keyed by lowercased email —
+	 * see {@link DirectoryCache.getOrAssignAvatarColor}. */
+	avatarColors?: Record<string, string>;
 }
 
 export interface DirectoryCacheStore {
@@ -104,6 +128,10 @@ export class DirectoryCache {
 	peopleRateLimitTimestamps: number[] = [];
 	otherContactsSyncToken: string | null = null;
 	otherContactsSyncedAt = 0;
+	/** Persisted fallback-avatar color per person (by email) — see
+	 * {@link getOrAssignAvatarColor}. Never expires: a person's color, once
+	 * assigned, should stay stable indefinitely rather than shift over time. */
+	avatarColors = new Map<string, string>();
 
 	constructor(
 		private readonly store: DirectoryCacheStore | null,
@@ -150,6 +178,11 @@ export class DirectoryCache {
 			);
 			this.otherContactsSyncToken = parsed.otherContactsSyncToken ?? null;
 			this.otherContactsSyncedAt = parsed.otherContactsSyncedAt ?? 0;
+			for (const [email, color] of Object.entries(parsed.avatarColors ?? {})) {
+				if (typeof color === "string" && color) {
+					this.avatarColors.set(normEmail(email), color);
+				}
+			}
 		} catch (err) {
 			console.warn(
 				"[Meeting Copilot] Failed to load directory cache; starting empty.",
@@ -285,6 +318,26 @@ export class DirectoryCache {
 		this.markDirty();
 	}
 
+	/**
+	 * This person's persisted fallback-avatar color, assigning + persisting a
+	 * random one from `palette` on first use so every render after that finds
+	 * the same one — without this, re-rendering (a poll, a scroll, switching
+	 * days) would reroll the color every time.
+	 */
+	getOrAssignAvatarColor(
+		email: string,
+		palette: readonly string[] = AVATAR_COLOR_PALETTE,
+		random: () => number = Math.random
+	): string {
+		const key = normEmail(email);
+		const existing = this.avatarColors.get(key);
+		if (existing) return existing;
+		const color = palette[Math.floor(random() * palette.length)]!;
+		this.avatarColors.set(key, color);
+		this.markDirty();
+		return color;
+	}
+
 	toJSON(): DirectoryCacheFile {
 		const now = this.now();
 		const people: Record<string, CachedPerson> = {};
@@ -305,6 +358,7 @@ export class DirectoryCache {
 			rateLimitTimestamps,
 			otherContactsSyncToken: this.otherContactsSyncToken,
 			otherContactsSyncedAt: this.otherContactsSyncedAt,
+			avatarColors: Object.fromEntries(this.avatarColors),
 		};
 	}
 

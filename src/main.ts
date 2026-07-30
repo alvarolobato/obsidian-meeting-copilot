@@ -2729,6 +2729,7 @@ export default class SystemRecordingPlugin extends Plugin {
             fetchMeetings: (fromMs, toMs) => this.fetchAgendaMeetings(fromMs, toMs),
             showAttendeePhotos: () => this.settings.showAttendeePhotos,
             getAvatarUrl: (email) => this.avatarUrlByEmail.get(email),
+            getAvatarColor: (email) => this.directoryCache.getOrAssignAvatarColor(email),
             isRecordingThis: (m) => this.isRecordingMeeting(m),
             onOpenOrCreate: (m) => void this.openOrCreateNote(m),
             onCreateAndRecord: (m) => this.startRecordingForMeeting(m),

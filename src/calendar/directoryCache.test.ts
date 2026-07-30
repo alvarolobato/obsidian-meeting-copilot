@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+	AVATAR_COLOR_PALETTE,
 	DirectoryCache,
 	GROUP_TTL_MS,
 	PEOPLE_RATE_WINDOW_MS,
@@ -179,6 +180,58 @@ describe("DirectoryCache", () => {
 		const cache = new DirectoryCache(store, () => 1_000_000, 0);
 		await cache.load();
 		expect(cache.peopleRateLimitTimestamps).toEqual([990_000]);
+	});
+
+	it("getOrAssignAvatarColor picks once and then stays stable across calls", () => {
+		const cache = new DirectoryCache(null, () => 1_000, 0);
+		let calls = 0;
+		const random = () => {
+			calls++;
+			return 0; // always the first palette entry
+		};
+		const first = cache.getOrAssignAvatarColor(
+			"Ruflin@Elastic.co",
+			AVATAR_COLOR_PALETTE,
+			random
+		);
+		expect(first).toBe(AVATAR_COLOR_PALETTE[0]);
+		expect(calls).toBe(1);
+
+		// Same person (any casing) again: no re-roll, same color.
+		const second = cache.getOrAssignAvatarColor(
+			"ruflin@elastic.co",
+			AVATAR_COLOR_PALETTE,
+			random
+		);
+		expect(second).toBe(first);
+		expect(calls).toBe(1);
+	});
+
+	it("assigns independent colors to different people", () => {
+		const cache = new DirectoryCache(null, () => 1_000, 0);
+		let n = 0;
+		// Deterministically walk the palette: 0, 1, 2, ...
+		const random = () => {
+			const v = n / AVATAR_COLOR_PALETTE.length;
+			n++;
+			return v;
+		};
+		const a = cache.getOrAssignAvatarColor("a@x.com", AVATAR_COLOR_PALETTE, random);
+		const b = cache.getOrAssignAvatarColor("b@x.com", AVATAR_COLOR_PALETTE, random);
+		expect(a).toBe(AVATAR_COLOR_PALETTE[0]);
+		expect(b).toBe(AVATAR_COLOR_PALETTE[1]);
+	});
+
+	it("persists and reloads avatar colors", async () => {
+		const store = memoryStore();
+		const now = vi.fn(() => 1_000);
+		const cache = new DirectoryCache(store, now, 0);
+		const color = cache.getOrAssignAvatarColor("ruflin@elastic.co", AVATAR_COLOR_PALETTE, () => 0);
+		await cache.flush();
+
+		const loaded = new DirectoryCache(store, now, 0);
+		await loaded.load();
+		expect(loaded.getOrAssignAvatarColor("ruflin@elastic.co")).toBe(color);
 	});
 });
 

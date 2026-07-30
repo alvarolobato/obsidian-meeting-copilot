@@ -41,6 +41,14 @@ export interface EventRowOptions {
 	 * Otherwise the resolved photo URL.
 	 */
 	avatarUrl?: string | null;
+	/**
+	 * Fallback (initials) avatar background color, persisted per-person so
+	 * it's stable across renders — see `DirectoryCache.getOrAssignAvatarColor`.
+	 * `undefined` when there's no person to attribute one to (e.g. a
+	 * self-organized group meeting): the CSS default (this row's per-type
+	 * accent color) applies instead.
+	 */
+	avatarColor?: string;
 }
 
 /** Best single label to initial from: the 1:1 partner, else the organizer,
@@ -80,6 +88,7 @@ export function renderEventRow(opts: EventRowOptions): void {
 		} else {
 			avatar.addClass("is-fallback");
 			avatar.setText(avatarInitial(meeting));
+			if (opts.avatarColor) avatar.style.background = opts.avatarColor;
 		}
 	}
 
