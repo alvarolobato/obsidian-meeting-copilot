@@ -2,7 +2,7 @@
 
 Granola-style meeting capture for Obsidian on macOS: Google Calendar → dual-channel recording → transcription (remote or on-device Whisper) → AI enrichment.
 
-![Meetings Dashboard and agenda sidebar](docs/screenshot-dashboard.png)
+![Meeting Copilot dashboard and the "Coming up" agenda](docs/screenshot-dashboard.png)
 
 ## Installation
 

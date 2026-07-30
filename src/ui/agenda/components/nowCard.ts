@@ -2,7 +2,7 @@ import { moment, setIcon } from "obsidian";
 import { t } from "../../../i18n";
 import type { AgendaMeeting } from "../agendaModel";
 
-export interface CurrentMeetingOptions {
+export interface NowCardOptions {
 	parent: HTMLElement;
 	meeting: AgendaMeeting;
 	recordingThis: boolean;
@@ -20,7 +20,7 @@ export interface CurrentMeetingOptions {
 }
 
 /** The highlighted card shown when a meeting is live or about to start. */
-export function renderCurrentMeeting(opts: CurrentMeetingOptions): void {
+export function renderNowCard(opts: NowCardOptions): void {
 	const { meeting } = opts;
 	const a = t().agenda;
 	const now = Date.now();

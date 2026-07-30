@@ -5,7 +5,7 @@ const MS_PER_DAY = 86_400_000;
 const WEEKDAY_INITIALS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
 const CELLS = 42; // 6 weeks
 
-export interface DatePickerOptions {
+export interface DayPickerOptions {
 	/** Button the popup hangs beneath (the date label in the nav bar). */
 	anchor: HTMLElement;
 	/** Currently focused agenda day, `YYYY-MM-DD`. */
@@ -20,13 +20,13 @@ export interface DatePickerOptions {
 }
 
 /** A small month-grid popover for jumping the agenda to any day. */
-export class DatePicker {
+export class DayPicker {
 	private popover: HTMLElement | null = null;
 	private cursor: Date;
 	private onDocPointer: ((e: MouseEvent) => void) | null = null;
 	private onDocKey: ((e: KeyboardEvent) => void) | null = null;
 
-	constructor(private readonly opts: DatePickerOptions) {
+	constructor(private readonly opts: DayPickerOptions) {
 		const focused = fromKey(opts.focusedDay);
 		this.cursor = new Date(focused.getFullYear(), focused.getMonth(), 1);
 	}

@@ -1,11 +1,11 @@
 import { moment, setIcon } from "obsidian";
 import { t } from "../../../i18n";
-import { DatePicker } from "./datePicker";
+import { DayPicker } from "./dayPicker";
 
 const MS_PER_DAY = 86_400_000;
 const MAX_LOOKAHEAD = 180;
 
-export interface StatusHeaderOptions {
+export interface AgendaHeaderOptions {
 	parent: HTMLElement;
 	/** Status line under the title (auth / loading / error / last-refresh). */
 	subtext: string;
@@ -27,7 +27,7 @@ export interface StatusHeaderOptions {
 }
 
 /** Renders the "Coming up" title, action buttons and the day-navigation bar. */
-export function renderStatusHeader(opts: StatusHeaderOptions): void {
+export function renderAgendaHeader(opts: AgendaHeaderOptions): void {
 	const a = t().agenda;
 	const head = opts.parent.createDiv({ cls: "mc-cal-head" });
 	if (opts.compact) head.addClass("is-compact");
@@ -54,7 +54,7 @@ export function renderStatusHeader(opts: StatusHeaderOptions): void {
 
 function renderNav(
 	parent: HTMLElement,
-	opts: StatusHeaderOptions,
+	opts: AgendaHeaderOptions,
 	cfg: { withDays: boolean }
 ): void {
 	const a = t().agenda;
@@ -71,14 +71,14 @@ function renderNav(
 		cls: "mc-cal-nav-date",
 		text: dateLabel(focused, opts.today),
 	});
-	let picker: DatePicker | null = null;
+	let picker: DayPicker | null = null;
 	pill.addEventListener("click", () => {
 		if (picker?.isOpen()) {
 			picker.close();
 			picker = null;
 			return;
 		}
-		picker = new DatePicker({
+		picker = new DayPicker({
 			anchor: pill,
 			focusedDay: opts.focusedDay,
 			today: opts.today,
@@ -96,7 +96,7 @@ function renderNav(
 	if (cfg.withDays) renderDaysPill(nav, opts);
 }
 
-function renderDaysPill(nav: HTMLElement, opts: StatusHeaderOptions): void {
+function renderDaysPill(nav: HTMLElement, opts: AgendaHeaderOptions): void {
 	const a = t().agenda;
 	const pill = nav.createEl("button", {
 		cls: "mc-cal-nav-days",

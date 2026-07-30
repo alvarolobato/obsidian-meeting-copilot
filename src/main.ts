@@ -185,7 +185,7 @@ import {
 } from "./enrich/adhocTitle";
 import { RenameModal } from "./ui/renameModal";
 import { t } from "./i18n";
-import { TypedEventBus } from "./util/events";
+import { TypedEventBus } from "./util/eventBus";
 import {
     AgendaMeeting,
     buildNoteIndex,
@@ -202,7 +202,7 @@ import {
 import {
     populateMeetingMenu,
     RowHandlers,
-} from "./ui/agenda/components/meetingRow";
+} from "./ui/agenda/components/eventRow";
 import { registerIcons, RECORD_ICON } from "./ui/icons";
 import {
 	notifyOs,

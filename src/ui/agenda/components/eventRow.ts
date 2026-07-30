@@ -24,7 +24,7 @@ export interface RowHandlers {
 	isRecordingThis: (m: AgendaMeeting) => boolean;
 }
 
-export interface MeetingRowOptions {
+export interface EventRowOptions {
 	parent: HTMLElement;
 	meeting: AgendaMeeting;
 	now: number;
@@ -37,7 +37,7 @@ export interface MeetingRowOptions {
 }
 
 /** Renders one event row inside a day card. */
-export function renderMeetingRow(opts: MeetingRowOptions): void {
+export function renderEventRow(opts: EventRowOptions): void {
 	const { meeting, handlers, now, compact = false } = opts;
 	const a = t().agenda;
 

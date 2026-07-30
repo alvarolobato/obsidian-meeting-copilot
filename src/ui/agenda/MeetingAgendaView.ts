@@ -1,10 +1,10 @@
 import { ItemView, WorkspaceLeaf, moment, setIcon } from "obsidian";
 import { t } from "../../i18n";
-import type { TypedEventBus } from "../../util/events";
+import type { TypedEventBus } from "../../util/eventBus";
 import type { AgendaMeeting } from "./agendaModel";
-import { renderStatusHeader } from "./components/statusHeader";
-import { renderCurrentMeeting } from "./components/currentMeeting";
-import { renderMeetingRow, RowHandlers } from "./components/meetingRow";
+import { renderAgendaHeader } from "./components/agendaHeader";
+import { renderNowCard } from "./components/nowCard";
+import { renderEventRow, RowHandlers } from "./components/eventRow";
 
 export const VIEW_TYPE_AGENDA = "meeting-copilot-agenda";
 export const AGENDA_ICON = "calendar-days";
@@ -170,7 +170,7 @@ export class MeetingAgendaView extends ItemView {
 		const visible = this.visibleMeetings();
 		const daysWithMeetings = new Set(visible.map((m) => keyOf(m.start)));
 
-		renderStatusHeader({
+		renderAgendaHeader({
 			parent: shell,
 			subtext: this.subtext(),
 			lookAheadDays: lookAhead,
@@ -212,7 +212,7 @@ export class MeetingAgendaView extends ItemView {
 			);
 			if (current) {
 				currentId = current.id;
-				renderCurrentMeeting({
+				renderNowCard({
 					parent: shell,
 					meeting: current,
 					recordingThis: this.host.isRecordingThis(current),
@@ -341,7 +341,7 @@ export class MeetingAgendaView extends ItemView {
 		}
 
 		for (const meeting of toRender) {
-			renderMeetingRow({
+			renderEventRow({
 				parent: card,
 				meeting,
 				now: o.now,
@@ -378,7 +378,7 @@ export class MeetingAgendaView extends ItemView {
 
 		const body = section.createDiv({ cls: "mc-cal-earlier-body" });
 		for (const meeting of meetings) {
-			renderMeetingRow({
+			renderEventRow({
 				parent: body,
 				meeting,
 				now,
