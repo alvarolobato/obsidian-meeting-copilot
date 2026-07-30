@@ -120,8 +120,22 @@ export async function syncOtherContacts(
 		}
 
 		const page = res.json as OtherContactsPage;
+		let loggedSample = false;
 		for (const person of page.otherContacts ?? []) {
 			if (person.metadata?.deleted) continue;
+			// TEMP diagnostic: every synced entry so far has photoUrl: null,
+			// including for personal Gmail contacts that should have a public
+			// profile photo — log the raw shape once per sync to see what
+			// Google actually returns before guessing further. Remove once
+			// the cause is confirmed.
+			if (!loggedSample) {
+				loggedSample = true;
+				mcLog("otherContacts", "sample raw person (diagnostic)", {
+					hasPhotosKey: "photos" in person,
+					photos: person.photos,
+					keys: Object.keys(person as object),
+				});
+			}
 			const name = (
 				person.names?.[0]?.displayName ||
 				person.names?.[0]?.unstructuredName ||
