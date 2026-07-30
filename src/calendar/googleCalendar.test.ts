@@ -1,11 +1,18 @@
 import { describe, it, expect, vi } from "vitest";
+import { __setRequestUrl } from "../../test/obsidian-mock";
+import type { GoogleOAuth } from "../auth/googleOAuth";
 import {
 	collectPages,
 	humanizeEmailName,
 	isDeclinedByUser,
+	listEvents,
 	oneOnOnePartner,
 	oneOnOnePartnerEmail,
 } from "./googleCalendar";
+
+function fakeOauth(): GoogleOAuth {
+	return { getAccessToken: async () => "tok" } as unknown as GoogleOAuth;
+}
 
 describe("humanizeEmailName", () => {
 	it("title-cases the local part split on separators", () => {
@@ -221,5 +228,57 @@ describe("oneOnOnePartnerEmail", () => {
 			])
 		).toBeNull();
 		expect(oneOnOnePartnerEmail(undefined)).toBeNull();
+	});
+});
+
+describe("listEvents", () => {
+	it("maps the organizer's email, lowercased and trimmed", async () => {
+		__setRequestUrl(() => ({
+			status: 200,
+			json: {
+				items: [
+					{
+						id: "1",
+						summary: "Standup",
+						organizer: { email: " Alice@Example.com ", displayName: "Alice" },
+						start: { dateTime: "2026-01-01T10:00:00Z" },
+						end: { dateTime: "2026-01-01T10:30:00Z" },
+					},
+				],
+			},
+			text: "",
+		}));
+		const [event] = await listEvents(
+			fakeOauth(),
+			"primary",
+			new Date("2026-01-01"),
+			new Date("2026-01-02")
+		);
+		expect(event?.organizer).toBe("Alice");
+		expect(event?.organizerEmail).toBe("alice@example.com");
+	});
+
+	it("leaves organizerEmail null when the organizer has no email", async () => {
+		__setRequestUrl(() => ({
+			status: 200,
+			json: {
+				items: [
+					{
+						id: "1",
+						summary: "Standup",
+						start: { dateTime: "2026-01-01T10:00:00Z" },
+						end: { dateTime: "2026-01-01T10:30:00Z" },
+					},
+				],
+			},
+			text: "",
+		}));
+		const [event] = await listEvents(
+			fakeOauth(),
+			"primary",
+			new Date("2026-01-01"),
+			new Date("2026-01-02")
+		);
+		expect(event?.organizerEmail).toBeNull();
 	});
 });

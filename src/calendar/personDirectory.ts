@@ -6,12 +6,13 @@ import {
 	PeopleApiRateLimiter,
 	sleep,
 } from "./directoryCache";
+import { mcLog } from "../util/logLine";
 
 const PEOPLE_API = "https://people.googleapis.com/v1";
 
 /**
- * Workspace directory lookups for display names. Non-admin People API
- * (`directory.readonly`) — not Admin SDK Directory.
+ * Workspace directory lookups for display names and photos. Non-admin People
+ * API (`directory.readonly`) — not Admin SDK Directory.
  */
 export interface PersonDirectory {
 	/**
@@ -21,6 +22,13 @@ export interface PersonDirectory {
 	 * - `undefined` — inconclusive (e.g. 403); do not session-cache as a miss
 	 */
 	resolveDisplayName(email: string): Promise<string | null | undefined>;
+	/**
+	 * Resolve a workspace user's directory photo URL from their email. Same
+	 * hit/miss/inconclusive shape as {@link resolveDisplayName}, and backed by
+	 * the same directory lookup/cache entry — resolving one after the other
+	 * for the same email costs a single network call, not two.
+	 */
+	resolvePhotoUrl(email: string): Promise<string | null | undefined>;
 }
 
 /** Session cache shared across attendee-name resolutions. */
@@ -84,112 +92,152 @@ export interface PeopleDirectoryOptions {
 	rateLimiter?: PeopleApiRateLimiter;
 }
 
+interface RawDirectoryPerson {
+	names?: Array<{ displayName?: string; unstructuredName?: string }>;
+	emailAddresses?: Array<{ value?: string }>;
+	/** Present when `photos` is in the readMask; `default` marks Google's
+	 * generic silhouette placeholder rather than a real uploaded photo. */
+	photos?: Array<{ url?: string; default?: boolean }>;
+}
+
+/** A resolved (or confirmed-miss) directory entry: name and photo together,
+ * since one `searchDirectoryPeople` call returns both. */
+interface DirectoryLookup {
+	name: string | null;
+	photoUrl: string | null;
+}
+
+function pickRealPhotoUrl(
+	photos: RawDirectoryPerson["photos"]
+): string | null {
+	const real = (photos ?? []).find((p) => !p.default && p.url);
+	return real?.url ?? null;
+}
+
 /**
  * Live People API client (searchDirectoryPeople) backed by the plugin's OAuth.
  * Honors {@link DirectoryCache} + {@link PeopleApiRateLimiter} when provided.
+ * Name and photo share one lookup/cache entry per email, so resolving both
+ * for the same person costs a single network call.
  */
 export function createPeopleDirectory(
 	oauth: GoogleOAuth,
 	opts: PeopleDirectoryOptions = {}
 ): PersonDirectory {
 	const { directoryCache, rateLimiter } = opts;
+
+	async function lookup(email: string): Promise<DirectoryLookup | undefined> {
+		const key = normEmail(email);
+		const cached = directoryCache?.getPerson(key);
+		if (cached !== undefined) {
+			return { name: cached.name, photoUrl: cached.photoUrl };
+		}
+
+		if (directoryCache?.peopleIsRateLimited()) {
+			mcLog("directory", "people lookup skipped (cooldown active)", { email: key });
+			return undefined;
+		}
+
+		if (rateLimiter) {
+			const wait = rateLimiter.waitMs();
+			if (wait > 0) {
+				mcLog("directory", "people lookup waiting for rate-limit slot", {
+					email: key,
+					waitMs: wait,
+				});
+				await sleep(wait);
+			}
+			rateLimiter.record();
+		}
+
+		const token = await oauth.getAccessToken();
+		const url =
+			`${PEOPLE_API}/people:searchDirectoryPeople` +
+			`?query=${encodeURIComponent(email)}` +
+			`&readMask=${encodeURIComponent("names,emailAddresses,photos")}` +
+			`&pageSize=10` +
+			`&sources=DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE` +
+			`&sources=DIRECTORY_SOURCE_TYPE_DOMAIN_CONTACT`;
+		const res = await requestUrl({
+			url,
+			method: "GET",
+			headers: { Authorization: `Bearer ${token}` },
+			throw: false,
+		});
+		if (res.status === 429) {
+			directoryCache?.markPeopleRateLimited(60_000);
+			mcLog("directory", "people lookup 429 — quota exceeded, 60s cooldown", {
+				email: key,
+				body: res.text,
+			});
+			throw new Error(
+				`People API searchDirectoryPeople HTTP 429: ${res.text}`
+			);
+		}
+		if (res.status === 403) {
+			const body =
+				typeof res.json === "object" && res.json
+					? (res.json as {
+							error?: {
+								status?: string;
+								details?: Array<{ reason?: string }>;
+							};
+						})
+					: null;
+			const reason = body?.error?.details?.[0]?.reason;
+			if (reason === "SERVICE_DISABLED") {
+				throw new Error(
+					`People API directory lookup failed (HTTP 403): ${res.text}`
+				);
+			}
+			// Missing scope / not allowed — don't persist a year-long miss
+			// and don't session-cache (undefined = inconclusive).
+			return undefined;
+		}
+		if (res.status === 404) {
+			directoryCache?.setPerson(key, null);
+			return { name: null, photoUrl: null };
+		}
+		if (res.status >= 400) {
+			throw new Error(
+				`People API searchDirectoryPeople HTTP ${res.status}: ${res.text}`
+			);
+		}
+		const people = (res.json as { people?: RawDirectoryPerson[] })?.people;
+		for (const person of people ?? []) {
+			const emails = (person.emailAddresses ?? [])
+				.map((e) => normEmail(e.value ?? ""))
+				.filter(Boolean);
+			// searchDirectoryPeople is prefix-based — only accept an exact
+			// email match so a neighboring hit can't steal the label/photo.
+			if (!emails.includes(key)) continue;
+			const name = (
+				person.names?.[0]?.displayName ||
+				person.names?.[0]?.unstructuredName ||
+				""
+			).trim();
+			const photoUrl = pickRealPhotoUrl(person.photos);
+			if (name || photoUrl) {
+				directoryCache?.setPerson(key, name || null, photoUrl);
+				return { name: name || null, photoUrl };
+			}
+		}
+		directoryCache?.setPerson(key, null);
+		return { name: null, photoUrl: null };
+	}
+
 	return {
 		async resolveDisplayName(
 			email: string
 		): Promise<string | null | undefined> {
-			const key = normEmail(email);
-			const cached = directoryCache?.getPerson(key);
-			if (cached !== undefined) return cached.name;
-
-			if (directoryCache?.peopleIsRateLimited()) {
-				return undefined;
-			}
-
-			if (rateLimiter) {
-				const wait = rateLimiter.waitMs();
-				if (wait > 0) await sleep(wait);
-				rateLimiter.record();
-			}
-
-			const token = await oauth.getAccessToken();
-			const url =
-				`${PEOPLE_API}/people:searchDirectoryPeople` +
-				`?query=${encodeURIComponent(email)}` +
-				`&readMask=${encodeURIComponent("names,emailAddresses")}` +
-				`&pageSize=10` +
-				`&sources=DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE` +
-				`&sources=DIRECTORY_SOURCE_TYPE_DOMAIN_CONTACT`;
-			const res = await requestUrl({
-				url,
-				method: "GET",
-				headers: { Authorization: `Bearer ${token}` },
-				throw: false,
-			});
-			if (res.status === 429) {
-				directoryCache?.markPeopleRateLimited(60_000);
-				throw new Error(
-					`People API searchDirectoryPeople HTTP 429: ${res.text}`
-				);
-			}
-			if (res.status === 403) {
-				const body =
-					typeof res.json === "object" && res.json
-						? (res.json as {
-								error?: {
-									status?: string;
-									details?: Array<{ reason?: string }>;
-								};
-							})
-						: null;
-				const reason = body?.error?.details?.[0]?.reason;
-				if (reason === "SERVICE_DISABLED") {
-					throw new Error(
-						`People API directory lookup failed (HTTP 403): ${res.text}`
-					);
-				}
-				// Missing scope / not allowed — don't persist a year-long miss
-				// and don't session-cache (undefined = inconclusive).
-				return undefined;
-			}
-			if (res.status === 404) {
-				directoryCache?.setPerson(key, null);
-				return null;
-			}
-			if (res.status >= 400) {
-				throw new Error(
-					`People API searchDirectoryPeople HTTP ${res.status}: ${res.text}`
-				);
-			}
-			const people = (
-				res.json as {
-					people?: Array<{
-						names?: Array<{
-							displayName?: string;
-							unstructuredName?: string;
-						}>;
-						emailAddresses?: Array<{ value?: string }>;
-					}>;
-				}
-			)?.people;
-			for (const person of people ?? []) {
-				const emails = (person.emailAddresses ?? [])
-					.map((e) => normEmail(e.value ?? ""))
-					.filter(Boolean);
-				// searchDirectoryPeople is prefix-based — only accept an exact
-				// email match so a neighboring hit can't steal the label.
-				if (!emails.includes(key)) continue;
-				const name = (
-					person.names?.[0]?.displayName ||
-					person.names?.[0]?.unstructuredName ||
-					""
-				).trim();
-				if (name) {
-					directoryCache?.setPerson(key, name);
-					return name;
-				}
-			}
-			directoryCache?.setPerson(key, null);
-			return null;
+			const result = await lookup(email);
+			return result === undefined ? undefined : result.name;
+		},
+		async resolvePhotoUrl(
+			email: string
+		): Promise<string | null | undefined> {
+			const result = await lookup(email);
+			return result === undefined ? undefined : result.photoUrl;
 		},
 	};
 }

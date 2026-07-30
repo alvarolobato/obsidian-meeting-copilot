@@ -119,6 +119,13 @@ export interface SystemRecordingSettings {
 	 * (conference data, location, or description — same detection as auto-open).
 	 */
 	excludeWithoutMeetingLink: boolean;
+	/**
+	 * Show a small photo (or initials, when none resolves) next to each agenda
+	 * event: the 1:1 partner's, else the organizer's. Only resolves for people
+	 * in the signed-in user's Google Workspace directory — external attendees
+	 * fall back to initials.
+	 */
+	showAttendeePhotos: boolean;
 	openMeetAutomatically: boolean;
 	/**
 	 * Whether the one-time "set macOS to Alerts so notifications persist" tip has
@@ -267,6 +274,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	calendarId: "primary",
 	exclusionKeywords: "",
 	excludeWithoutMeetingLink: false,
+	showAttendeePhotos: true,
 	openMeetAutomatically: false,
 	notificationStyleHintShown: false,
 	detectMeetings: true,
@@ -1085,6 +1093,19 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 						this.plugin.refreshAgenda();
 					});
 			});
+
+		new Setting(containerEl)
+			.setName(s.settings.showAttendeePhotos.name)
+			.setDesc(s.settings.showAttendeePhotos.desc)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.showAttendeePhotos)
+					.onChange(async (value) => {
+						this.plugin.settings.showAttendeePhotos = value;
+						await this.plugin.saveSettings();
+						this.plugin.refreshAgenda();
+					})
+			);
 
 		new Setting(containerEl)
 			.setName(s.settings.agendaPlacement.name)

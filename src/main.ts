@@ -188,6 +188,7 @@ import { t } from "./i18n";
 import { TypedEventBus } from "./util/eventBus";
 import {
     AgendaMeeting,
+    avatarEmailFor,
     buildNoteIndex,
     toAgendaMeeting,
     toMeetingInfo as agendaToMeetingInfo,
@@ -412,6 +413,14 @@ export default class SystemRecordingPlugin extends Plugin {
 	>();
 	/** Bumped to cancel an in-flight background expansion when a newer fetch wins. */
 	private groupExpandGeneration = 0;
+	/**
+	 * Session cache of resolved avatar photo URLs (agenda event → 1:1 partner
+	 * or organizer), keyed by lowercased email. `null` = looked up, no photo;
+	 * absent = not yet resolved this session.
+	 */
+	private avatarUrlByEmail = new Map<string, string | null>();
+	/** Emails currently being resolved, so a second poll can't double-fetch. */
+	private avatarResolveInFlight = new Set<string>();
 	private agendaEvents = new TypedEventBus<AgendaViewEvents>();
 
     async onload() {
@@ -2128,6 +2137,81 @@ export default class SystemRecordingPlugin extends Plugin {
 	}
 
 	/**
+	 * Resolve avatar photo URLs for events' 1:1 partner / organizer in the
+	 * background, same pattern as {@link scheduleGroupAttendeeExpand}:
+	 * soft-fails, session-caches results, and triggers an agenda refresh once
+	 * anything new resolves. No-ops when the setting is off.
+	 */
+	private scheduleAvatarResolve(
+		events: Array<
+			Pick<AgendaMeeting, "oneOnOnePartnerEmail" | "organizerEmail">
+		>
+	): void {
+		if (!this.settings.showAttendeePhotos) return;
+		const emails = new Set<string>();
+		for (const ev of events) {
+			const email = avatarEmailFor(ev);
+			if (!email) continue;
+			if (this.avatarUrlByEmail.has(email)) continue;
+			if (this.avatarResolveInFlight.has(email)) continue;
+			emails.add(email);
+		}
+		if (emails.size === 0) return;
+		mcLog("avatar", "resolve scheduled", { count: emails.size });
+		void this.runAvatarResolve(emails);
+	}
+
+	private async runAvatarResolve(emails: Set<string>): Promise<void> {
+		for (const email of emails) this.avatarResolveInFlight.add(email);
+		let resolved = 0;
+		let misses = 0;
+		let inconclusive = 0;
+		try {
+			const people = this.createPersonDirectory();
+			let changed = false;
+			for (const email of emails) {
+				try {
+					const url = await people.resolvePhotoUrl(email);
+					// undefined = inconclusive (e.g. missing scope, or the shared
+					// rate limiter is mid-cooldown after a 429): don't cache, so a
+					// later pass (after re-auth, or once the cooldown clears) can
+					// retry instead of sticking with a stale "no photo".
+					if (url === undefined) {
+						inconclusive++;
+						continue;
+					}
+					this.avatarUrlByEmail.set(email, url);
+					if (url) {
+						resolved++;
+						changed = true;
+					} else {
+						misses++;
+					}
+				} catch (err) {
+					mcLog("avatar", "resolve failed", {
+						email,
+						resolved,
+						misses,
+						inconclusive,
+						remaining: emails.size - resolved - misses - inconclusive,
+						error: err instanceof Error ? err.message : String(err),
+					});
+					return;
+				}
+			}
+			mcLog("avatar", "resolve done", {
+				requested: emails.size,
+				resolved,
+				misses,
+				inconclusive,
+			});
+			if (changed) this.agendaEvents.emit("changed", undefined);
+		} finally {
+			for (const email of emails) this.avatarResolveInFlight.delete(email);
+		}
+	}
+
+	/**
 	 * Await expansion for a single meeting before writing a note so attendees
 	 * don't land as an unexpanded group label when the user creates a note
 	 * before the background pass finishes.
@@ -2572,6 +2656,8 @@ export default class SystemRecordingPlugin extends Plugin {
             isAuthenticated: () => this.isCalendarAuthenticated(),
             authenticate: () => this.authenticateCalendar(),
             fetchMeetings: (fromMs, toMs) => this.fetchAgendaMeetings(fromMs, toMs),
+            showAttendeePhotos: () => this.settings.showAttendeePhotos,
+            getAvatarUrl: (email) => this.avatarUrlByEmail.get(email),
             isRecordingThis: (m) => this.isRecordingMeeting(m),
             onOpenOrCreate: (m) => void this.openOrCreateNote(m),
             onCreateAndRecord: (m) => this.startRecordingForMeeting(m),
@@ -3753,6 +3839,10 @@ export default class SystemRecordingPlugin extends Plugin {
                 : [],
             invitees: [],
             organizer: str("organizer") || null,
+            // Frontmatter doesn't carry the organizer's email (only a display
+            // label, if that); no avatar email to fall back to for this
+            // note-derived, non-calendar meeting.
+            organizerEmail: null,
             iCalUID: str("ical_uid") || null,
             recurringEventId: str("recurring_event_id") || null,
             oneOnOnePartner: str("one_on_one_with") || null,
@@ -3801,6 +3891,7 @@ export default class SystemRecordingPlugin extends Plugin {
         );
         this.applyCachedExpandedAttendees(events);
         this.scheduleGroupAttendeeExpand(events);
+        this.scheduleAvatarResolve(events);
         const index = buildNoteIndex(this.app);
         return events
             .map((e) => toAgendaMeeting(e, index))

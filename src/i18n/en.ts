@@ -437,6 +437,10 @@ export const en = {
 			name: "Max group members to expand",
 			desc: "When a calendar invite lists a Google Group, expand it into at most this many people (via Cloud Identity). Runs in the background after the agenda loads. Larger groups are represented by the first N members only (the group label is replaced). Default 50; max 500.",
 		},
+		showAttendeePhotos: {
+			name: "Show attendee photos",
+			desc: "Show a small photo next to each agenda event — the 1:1 partner's, else the organizer's — falling back to initials when none is available. Only resolves for people in your Google Workspace directory; external attendees always show initials.",
+		},
 		excludeWithoutMeetingLink: {
 			name: "Exclude meetings without a conference link",
 			desc: "Hide events that have no Google Meet, Zoom, Teams, or Webex link in the conference data, location, or description.",

@@ -25,6 +25,8 @@ export interface AgendaMeeting {
 	/** Raw invitees for deferred Cloud Identity group expansion. */
 	invitees: ExpandableAttendee[];
 	organizer: string | null;
+	/** The organizer's email (lowercased/trimmed); null when unavailable. */
+	organizerEmail: string | null;
 	iCalUID: string | null;
 	recurringEventId: string | null;
 	/** The other attendee's display name (or email) for a 1:1; null for anything else. */
@@ -89,6 +91,7 @@ export function toAgendaMeeting(
 		attendees: ev.attendees,
 		invitees: ev.invitees,
 		organizer: ev.organizer,
+		organizerEmail: ev.organizerEmail,
 		iCalUID: ev.iCalUID,
 		recurringEventId: ev.recurringEventId,
 		oneOnOnePartner: ev.oneOnOnePartner,
@@ -116,4 +119,18 @@ export function toMeetingInfo(m: AgendaMeeting): MeetingEventInfo {
 		oneOnOnePartner: m.oneOnOnePartner,
 		oneOnOnePartnerEmail: m.oneOnOnePartnerEmail,
 	};
+}
+
+/**
+ * Email to resolve a single per-event avatar photo for: the 1:1 partner (so a
+ * self-organized 1:1 shows the other person, not the viewer), else the
+ * organizer. Null when neither resolves to an email — an external/foreign
+ * calendar's organizer, or a truncated attendee list. Structural on purpose
+ * (`Pick`) so it works on both {@link GCalEvent} and {@link AgendaMeeting}
+ * without forcing a conversion first.
+ */
+export function avatarEmailFor(
+	m: Pick<AgendaMeeting, "oneOnOnePartnerEmail" | "organizerEmail">
+): string | null {
+	return m.oneOnOnePartnerEmail ?? m.organizerEmail;
 }

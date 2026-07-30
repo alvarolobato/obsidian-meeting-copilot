@@ -34,6 +34,47 @@ describe("DirectoryCache", () => {
 		await loaded.load();
 		expect(loaded.getPerson("ruflin@elastic.co")).toEqual({
 			name: "Nicolas Ruflin",
+			photoUrl: null,
+			at: 1_000_000,
+		});
+	});
+
+	it("persists and reloads a photo URL alongside the name", async () => {
+		const store = memoryStore();
+		const now = vi.fn(() => 1_000_000);
+		const cache = new DirectoryCache(store, now, 0);
+		cache.setPerson(
+			"ruflin@elastic.co",
+			"Nicolas Ruflin",
+			"https://lh3.googleusercontent.com/a/photo"
+		);
+		await cache.flush();
+
+		const loaded = new DirectoryCache(store, now, 0);
+		await loaded.load();
+		expect(loaded.getPerson("ruflin@elastic.co")).toEqual({
+			name: "Nicolas Ruflin",
+			photoUrl: "https://lh3.googleusercontent.com/a/photo",
+			at: 1_000_000,
+		});
+	});
+
+	it("loads a pre-photo cache entry (missing photoUrl) without discarding it", async () => {
+		// Must NOT be invalidated by a version bump: a photo-less entry here
+		// means the name is still cached and doesn't need re-fetching (only
+		// the photo backfills lazily on next lookup). See DIRECTORY_CACHE_VERSION.
+		const store = memoryStore(
+			JSON.stringify({
+				version: 1,
+				people: { "old@x.com": { name: "Old", at: 1_000_000 } },
+				groups: {},
+			})
+		);
+		const cache = new DirectoryCache(store, () => 1_000_000, 0);
+		await cache.load();
+		expect(cache.getPerson("old@x.com")).toEqual({
+			name: "Old",
+			photoUrl: null,
 			at: 1_000_000,
 		});
 	});
@@ -63,7 +104,7 @@ describe("DirectoryCache", () => {
 			JSON.stringify({
 				version: 1,
 				people: {
-					"old@x.com": { name: "Old", at: 1 },
+					"old@x.com": { name: "Old", photoUrl: null, at: 1 },
 				},
 				groups: {},
 			})

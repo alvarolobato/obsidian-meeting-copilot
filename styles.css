@@ -1054,6 +1054,10 @@ ul.mc-action-tasks {
 .mc-cal.is-compact .mc-cal-day {
 	flex-direction: column;
 	gap: 6px;
+	/* Column mode flips the flex axes, so the row layout's flex-start
+	   (top-align date vs. card) would otherwise shrink each day's card to its
+	   own content width instead of the panel width. */
+	align-items: stretch;
 }
 
 .mc-cal-day-date {
@@ -1147,6 +1151,30 @@ ul.mc-action-tasks {
 	min-height: 30px;
 	border-radius: 2px;
 	background: var(--mc-cal-accent);
+}
+
+.mc-cal-event-avatar {
+	flex: none;
+	width: 28px;
+	height: 28px;
+	border-radius: 50%;
+	overflow: hidden;
+}
+
+.mc-cal-event-avatar img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+.mc-cal-event-avatar.is-fallback {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: var(--mc-cal-accent);
+	color: var(--mc-cal-card);
+	font-size: 12px;
+	font-weight: 700;
 }
 
 .mc-cal-event-body {

@@ -12,11 +12,23 @@ export const PEOPLE_MAX_REQUESTS_PER_MINUTE = 60;
 /** Debounce disk writes after a burst of cache fills. */
 export const DIRECTORY_CACHE_SAVE_DEBOUNCE_MS = 1500;
 export const DIRECTORY_CACHE_FILENAME = "directory-cache.json";
+/**
+ * Only bump this for a breaking shape change. `photoUrl` was added as an
+ * *additive* field (`load()` defaults a missing one to `null`) specifically
+ * so it did not need a bump: a version bump discards every cached entry on
+ * next load, and since names are cached ~365 days, that forces every
+ * still-cached person to be looked up again in one burst — which is exactly
+ * what blew through the People API's 90/min quota (429s) when this was first
+ * tried as `2`. Backfilling `photoUrl` lazily, one real lookup at a time, is
+ * the whole point of an additive field.
+ */
 export const DIRECTORY_CACHE_VERSION = 1;
 
 export interface CachedPerson {
 	/** Directory display name, or `null` when looked up and not found. */
 	name: string | null;
+	/** Directory photo URL, or `null` when looked up and none is available. */
+	photoUrl: string | null;
 	/** Epoch ms when cached. */
 	at: number;
 }
@@ -82,6 +94,7 @@ export class DirectoryCache {
 				) {
 					this.people.set(normEmail(email), {
 						name: entry.name,
+						photoUrl: entry.photoUrl ?? null,
 						at: entry.at,
 					});
 				}
@@ -119,8 +132,12 @@ export class DirectoryCache {
 		return entry;
 	}
 
-	setPerson(email: string, name: string | null): void {
-		this.people.set(normEmail(email), { name, at: this.now() });
+	setPerson(
+		email: string,
+		name: string | null,
+		photoUrl: string | null = null
+	): void {
+		this.people.set(normEmail(email), { name, photoUrl, at: this.now() });
 		this.markDirty();
 	}
 

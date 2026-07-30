@@ -1,7 +1,7 @@
 import { ItemView, WorkspaceLeaf, moment, setIcon } from "obsidian";
 import { t } from "../../i18n";
 import type { TypedEventBus } from "../../util/eventBus";
-import type { AgendaMeeting } from "./agendaModel";
+import { avatarEmailFor, type AgendaMeeting } from "./agendaModel";
 import { renderAgendaHeader } from "./components/agendaHeader";
 import { renderNowCard } from "./components/nowCard";
 import { renderEventRow, RowHandlers } from "./components/eventRow";
@@ -28,6 +28,11 @@ export interface AgendaViewHost {
 	authenticate(): Promise<void>;
 	/** Fetch meetings within [fromMs, toMs], enriched with note/recording state. */
 	fetchMeetings(fromMs: number, toMs: number): Promise<AgendaMeeting[]>;
+	showAttendeePhotos(): boolean;
+	/** Session-cached avatar lookup: a resolved URL, `null` for a confirmed
+	 * no-photo, or `undefined` when not resolved yet (falls back to initials;
+	 * a later "changed" event re-renders once the background resolve lands). */
+	getAvatarUrl(email: string): string | null | undefined;
 	isRecordingThis(meeting: AgendaMeeting): boolean;
 	onOpenOrCreate(meeting: AgendaMeeting): void;
 	onCreateAndRecord(meeting: AgendaMeeting): void;
@@ -347,6 +352,7 @@ export class MeetingAgendaView extends ItemView {
 				now: o.now,
 				handlers: this.rowHandlers(),
 				compact: o.compact,
+				avatarUrl: this.avatarUrlFor(meeting),
 			});
 		}
 
@@ -384,8 +390,21 @@ export class MeetingAgendaView extends ItemView {
 				now,
 				handlers: this.rowHandlers(),
 				compact,
+				avatarUrl: this.avatarUrlFor(meeting),
 			});
 		}
+	}
+
+	/**
+	 * `undefined` when the setting is off (no avatar element at all); `null`
+	 * when it's on but no email/photo resolves yet (initials fallback);
+	 * otherwise the resolved photo URL.
+	 */
+	private avatarUrlFor(meeting: AgendaMeeting): string | null | undefined {
+		if (!this.host.showAttendeePhotos()) return undefined;
+		const email = avatarEmailFor(meeting);
+		if (!email) return null;
+		return this.host.getAvatarUrl(email) ?? null;
 	}
 
 	private renderGap(parent: HTMLElement, count: number): void {
