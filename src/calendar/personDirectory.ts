@@ -149,12 +149,27 @@ interface DirectoryLookup {
 	photoUrl: string | null;
 }
 
-/** Shared with `otherContactsSync.ts`: both parse the same People API
- * `Person` resource shape (`names`/`emailAddresses`/`photos`). */
+/**
+ * Shared with `otherContactsSync.ts`: both parse the same People API
+ * `Person` resource shape (`names`/`emailAddresses`/`photos`) — but `default`
+ * means different things on each source. On `searchDirectoryPeople`
+ * (Workspace directory), `default: true` marks Google's generic silhouette
+ * placeholder, so it's excluded. On `otherContacts` (personal "Other
+ * contacts"), Google marks the one-and-only real photo `default: true` too —
+ * confirmed via a live diagnostic log, where the URL was a genuine
+ * `lh3.googleusercontent.com/cm/...` contact-photo reference, not a
+ * placeholder — so excluding it there was silently discarding every real
+ * photo. `excludeDefault` lets each caller pick the right behavior for its
+ * source instead of guessing one rule fits both.
+ */
 export function pickRealPhotoUrl(
-	photos: RawDirectoryPerson["photos"]
+	photos: RawDirectoryPerson["photos"],
+	opts: { excludeDefault?: boolean } = {}
 ): string | null {
-	const real = (photos ?? []).find((p) => !p.default && p.url);
+	const { excludeDefault = true } = opts;
+	const real = (photos ?? []).find(
+		(p) => (!excludeDefault || !p.default) && p.url
+	);
 	return real?.url ?? null;
 }
 

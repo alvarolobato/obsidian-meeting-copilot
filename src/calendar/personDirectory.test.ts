@@ -5,6 +5,7 @@ import { DirectoryCache } from "./directoryCache";
 import {
 	PersonNameCache,
 	createPeopleDirectory,
+	pickRealPhotoUrl,
 	resolveAttendeeLabel,
 	type PersonDirectory,
 } from "./personDirectory";
@@ -280,5 +281,30 @@ describe("createPeopleDirectory", () => {
 			people.resolvePhotoUrl("nobody@elastic.co")
 		).resolves.toBeUndefined();
 		expect(networkCalls).toBe(0);
+	});
+});
+
+describe("pickRealPhotoUrl", () => {
+	it("defaults to excluding default:true (Workspace-directory placeholder silhouette)", () => {
+		expect(
+			pickRealPhotoUrl([
+				{ url: "https://example.com/default.png", default: true },
+				{ url: "https://example.com/real.png", default: false },
+			])
+		).toBe("https://example.com/real.png");
+	});
+
+	it("with excludeDefault: false, keeps a default:true photo (otherContacts' real shape)", () => {
+		expect(
+			pickRealPhotoUrl(
+				[{ url: "https://example.com/real.png", default: true }],
+				{ excludeDefault: false }
+			)
+		).toBe("https://example.com/real.png");
+	});
+
+	it("returns null when there's no url at all", () => {
+		expect(pickRealPhotoUrl([{ default: false }])).toBeNull();
+		expect(pickRealPhotoUrl(undefined)).toBeNull();
 	});
 });

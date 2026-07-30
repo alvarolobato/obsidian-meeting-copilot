@@ -50,6 +50,41 @@ describe("syncOtherContacts", () => {
 		expect(cache.otherContactsSyncedAt).toBe(1_000);
 	});
 
+	it("keeps the photo even when Google marks it default: true (otherContacts' real shape, confirmed live)", async () => {
+		// Regression test: unlike Workspace-directory results, otherContacts
+		// marks its one-and-only real photo `default: true` too — a live
+		// diagnostic log caught this returning a real
+		// lh3.googleusercontent.com/cm/... contact-photo URL, not a
+		// placeholder, so excluding default:true here was silently discarding
+		// every real photo synced (1928 people, 0 photos).
+		__setRequestUrl(() => ({
+			status: 200,
+			json: {
+				otherContacts: [
+					{
+						names: [{ displayName: "Nicolas Ruflin" }],
+						emailAddresses: [{ value: "ruflin@elastic.co" }],
+						photos: [
+							{
+								metadata: { primary: true },
+								url: "https://lh3.googleusercontent.com/cm/AGPWSu8...=s100",
+								default: true,
+							},
+						],
+					},
+				],
+			},
+			text: "",
+		}));
+		const cache = new DirectoryCache(null, () => 1_000, 0);
+		const result = await syncOtherContacts(fakeOauth(), cache);
+
+		expect(result.updated).toBe(1);
+		expect(cache.getPerson("ruflin@elastic.co")?.photoUrl).toBe(
+			"https://lh3.googleusercontent.com/cm/AGPWSu8...=s100"
+		);
+	});
+
 	it("pages through nextPageToken and merges every page's entries", async () => {
 		let call = 0;
 		const seenUrls: string[] = [];
