@@ -193,6 +193,7 @@ export function createPeopleDirectory(
 					? (res.json as {
 							error?: {
 								status?: string;
+								message?: string;
 								details?: Array<{ reason?: string }>;
 							};
 						})
@@ -201,6 +202,24 @@ export function createPeopleDirectory(
 			if (reason === "SERVICE_DISABLED") {
 				throw new Error(
 					`People API directory lookup failed (HTTP 403): ${res.text}`
+				);
+			}
+			// Workspace admin policy (https://support.google.com/a/answer/6343701),
+			// not a scope/consent problem — no `details`/`reason` on this one, only
+			// a message. Deterministic and permanent for the rest of this session
+			// (every email fails identically), unlike the generic 403 below where
+			// retrying after a re-auth might plausibly help. Throw so the caller's
+			// existing "stop retrying" handling (PersonNameCache.disabled /
+			// avatar-resolve's session flag) kicks in instead of re-attempting
+			// this doomed call on every single poll forever.
+			if (body?.error?.message?.includes("external directory sharing")) {
+				mcLog(
+					"directory",
+					"people lookup blocked by Workspace admin policy (external directory sharing disabled)",
+					{ email: key, body: res.text }
+				);
+				throw new Error(
+					`People API directory lookup blocked by Workspace admin policy: ${res.text}`
 				);
 			}
 			// Missing scope / not allowed — don't persist a year-long miss

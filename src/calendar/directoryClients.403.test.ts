@@ -70,4 +70,36 @@ describe("directory clients HTTP 403", () => {
 		);
 		warnSpy.mockRestore();
 	});
+
+	it("throws on a Workspace-admin-policy 403 (external directory sharing disabled) instead of retrying forever", async () => {
+		// Google's real response for this case has no `details`/`reason` at
+		// all — only `message` — unlike the generic PERMISSION_DENIED test
+		// fixture above.
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const cache = new DirectoryCache(null, () => 1_000, 0);
+		__setRequestUrl(() => ({
+			status: 403,
+			json: {
+				error: {
+					code: 403,
+					status: "PERMISSION_DENIED",
+					message:
+						"The G Suite domain admin has disabled external directory sharing. See more details at https://support.google.com/a/answer/6343701",
+				},
+			},
+			text: "forbidden",
+		}));
+		const people = createPeopleDirectory(fakeOauth(), {
+			directoryCache: cache,
+		});
+		await expect(
+			people.resolvePhotoUrl("ruflin@x.com")
+		).rejects.toThrow(/Workspace admin policy/);
+		expect(warnSpy).toHaveBeenCalledWith(
+			expect.stringContaining(
+				"people lookup blocked by Workspace admin policy"
+			)
+		);
+		warnSpy.mockRestore();
+	});
 });

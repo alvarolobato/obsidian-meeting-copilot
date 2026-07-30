@@ -2162,6 +2162,11 @@ export default class SystemRecordingPlugin extends Plugin {
 		>
 	): void {
 		if (!this.settings.showAttendeePhotos) return;
+		// Shared with resolveAttendeeLabel's own "give up for this session"
+		// flag: a thrown lookup error (a permanent Workspace admin block, or a
+		// disabled People API) means every remaining email would fail the
+		// same way, so there's no point re-attempting on every poll.
+		if (this.personNameCache.disabled) return;
 		const emails = new Set<string>();
 		for (const ev of events) {
 			const email = avatarEmailFor(ev);
@@ -2202,6 +2207,11 @@ export default class SystemRecordingPlugin extends Plugin {
 						misses++;
 					}
 				} catch (err) {
+					// A thrown lookup error means every remaining email would fail
+					// the same way (permanent Workspace policy block, or the API
+					// disabled) — stop for this session rather than re-attempting
+					// on every future poll. Shared flag with resolveAttendeeLabel.
+					this.personNameCache.disabled = true;
 					mcLog("avatar", "resolve failed", {
 						email,
 						resolved,
