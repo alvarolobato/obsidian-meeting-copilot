@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // `obsidian` is aliased to test/obsidian-mock.ts at runtime; import the test
 // hook from that same module directly so tsc sees its types too.
 import { __setRequestUrl } from "../../test/obsidian-mock";
@@ -157,5 +157,47 @@ describe("GoogleOAuth.hasScope", () => {
 		expect(oauth.hasScope("https://www.googleapis.com/auth/calendar.readonly")).toBe(
 			false
 		);
+	});
+});
+
+describe("GoogleOAuth.authenticate cancellation", () => {
+	beforeEach(() => {
+		// authenticate() opens the system browser and schedules its 5-minute
+		// timeout via `window.*` — stub just enough for the loopback server to
+		// start and be torn down without a real browser or jsdom.
+		(globalThis as unknown as { window: unknown }).window = {
+			open: vi.fn(),
+			setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms),
+			clearTimeout: (id: unknown) => clearTimeout(id as Parameters<typeof clearTimeout>[0]),
+		};
+	});
+
+	afterEach(() => {
+		delete (globalThis as unknown as { window?: unknown }).window;
+	});
+
+	it("throws AbortError immediately if the signal is already aborted", async () => {
+		const { storage } = makeStorage(null);
+		const oauth = new GoogleOAuth(storage);
+		const controller = new AbortController();
+		controller.abort();
+
+		await expect(oauth.authenticate(controller.signal)).rejects.toMatchObject({
+			name: "AbortError",
+		});
+	});
+
+	it("rejects with AbortError when cancelled while waiting on the browser redirect", async () => {
+		const { storage } = makeStorage(null);
+		const oauth = new GoogleOAuth(storage);
+		const controller = new AbortController();
+
+		const authPromise = oauth.authenticate(controller.signal);
+		// Give the loopback server a tick to bind its ephemeral port before
+		// cancelling, mirroring a user clicking "Cancel" mid-flight.
+		await new Promise((r) => setTimeout(r, 10));
+		controller.abort();
+
+		await expect(authPromise).rejects.toMatchObject({ name: "AbortError" });
 	});
 });

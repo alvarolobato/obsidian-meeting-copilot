@@ -117,6 +117,19 @@
     animation: mc-status-spin 1s linear infinite;
 }
 
+/* Spinner prepended to the Google auth button's label while a "Cancel" is offered. */
+.mc-auth-spinner {
+    display: inline-flex;
+    align-items: center;
+    margin-right: 6px;
+}
+
+.mc-auth-spinner svg {
+    width: 14px;
+    height: 14px;
+    animation: mc-status-spin 1s linear infinite;
+}
+
 .mc-queue-popover-label {
     flex: 1 1 auto;
     min-width: 0;
@@ -1350,6 +1363,31 @@ ul.mc-action-tasks {
 
 .mc-cal-connect-cta:hover {
 	opacity: 0.88;
+}
+
+.mc-cal-connect-cta.is-cancel {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	background: transparent;
+	color: var(--mc-cal-muted);
+	border: 1px solid var(--mc-cal-border);
+}
+
+.mc-cal-connect-cta.is-cancel:hover {
+	color: var(--mc-cal-text);
+	opacity: 1;
+}
+
+.mc-cal-connect-spinner {
+	display: inline-flex;
+	align-items: center;
+}
+
+.mc-cal-connect-spinner svg {
+	width: 14px;
+	height: 14px;
+	animation: mc-status-spin 1s linear infinite;
 }
 
 /* ---- Date picker popover --------------------------------------------- */

@@ -149,8 +149,14 @@ export class GoogleOAuth {
 		return next.access_token;
 	}
 
-	/** Loopback + PKCE flow: opens the browser, captures the code locally, exchanges for tokens. Desktop only. */
-	async authenticate(): Promise<void> {
+	/**
+	 * Loopback + PKCE flow: opens the browser, captures the code locally,
+	 * exchanges for tokens. Desktop only. `signal`, if given, lets a caller
+	 * abandon an in-flight attempt (e.g. a "Cancel" button) — otherwise the
+	 * only way out of a stalled/abandoned browser consent is the 5-minute
+	 * timeout below.
+	 */
+	async authenticate(signal?: AbortSignal): Promise<void> {
 		if (!Platform.isDesktop) {
 			throw new Error(t().oauth.desktopOnly);
 		}
@@ -158,12 +164,15 @@ export class GoogleOAuth {
 		if (!creds) {
 			throw new Error(t().oauth.setCredentialsFirst);
 		}
+		if (signal?.aborted) {
+			throw new DOMException("Aborted", "AbortError");
+		}
 
 		const codeVerifier = randomString(32);
 		const codeChallenge = await sha256Base64Url(codeVerifier);
 		const state = randomString(16);
 
-		const { port, codePromise, close } = await startLoopbackServer(state);
+		const { port, codePromise, close } = await startLoopbackServer(state, signal);
 		const redirectUri = `http://127.0.0.1:${port}/callback`;
 
 		const authParams = new URLSearchParams({
@@ -230,7 +239,10 @@ interface LoopbackResult {
 	close: () => void;
 }
 
-function startLoopbackServer(expectedState: string): Promise<LoopbackResult> {
+function startLoopbackServer(
+	expectedState: string,
+	signal?: AbortSignal
+): Promise<LoopbackResult> {
 	return new Promise((resolve, reject) => {
 		let resolveCode!: (code: string) => void;
 		let rejectCode!: (err: Error) => void;
@@ -285,8 +297,13 @@ function startLoopbackServer(expectedState: string): Promise<LoopbackResult> {
 			const timer = window.setTimeout(() => {
 				rejectCode(new Error(t().oauth.timeout));
 			}, 5 * 60 * 1000);
+			const onAbort = () => {
+				rejectCode(new DOMException("Aborted", "AbortError"));
+			};
+			signal?.addEventListener("abort", onAbort);
 			const close = () => {
 				window.clearTimeout(timer);
+				signal?.removeEventListener("abort", onAbort);
 				server.close();
 			};
 			resolve({ port: addr.port, codePromise, close });

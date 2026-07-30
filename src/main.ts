@@ -326,6 +326,8 @@ export default class SystemRecordingPlugin extends Plugin {
 	private scheduler: CalendarScheduler | null = null;
 	/** True once the refresh token died; suppresses the looping calendar-error notice until reconnect. */
 	private authExpired = false;
+	/** Set while `authenticateCalendar()` is waiting on the browser consent flow — lets a "Cancel" button abandon it instead of leaving the button stuck forever. */
+	private authAbort: AbortController | null = null;
 	/** Tier 1 meeting detector + its poll interval id (macOS only). */
 	private detector: MeetingDetector | null = null;
 	private detectorIntervalId: number | null = null;
@@ -1297,16 +1299,34 @@ export default class SystemRecordingPlugin extends Plugin {
 	}
 
 	async authenticateCalendar(): Promise<void> {
+		const abort = new AbortController();
+		this.authAbort = abort;
 		try {
-			await this.oauth.authenticate();
+			await this.oauth.authenticate(abort.signal);
 			this.authExpired = false;
 			// New consent / token — retry Groups expansion from a clean slate.
 			this.resetGroupAttendeeExpansion();
 			void this.updateScheduler();
 			this.agendaEvents.emit("changed", undefined);
 		} catch (e) {
-			new Notice(e instanceof Error ? e.message : String(e));
+			if (e instanceof Error && e.name === "AbortError") {
+				new Notice(t().oauth.cancelled);
+			} else {
+				new Notice(e instanceof Error ? e.message : String(e));
+			}
+		} finally {
+			this.authAbort = null;
 		}
+	}
+
+	/** True while {@link authenticateCalendar} is waiting on the browser consent flow. */
+	isAuthenticating(): boolean {
+		return this.authAbort !== null;
+	}
+
+	/** Cancels an in-flight {@link authenticateCalendar} call, if any. */
+	cancelAuthenticate(): void {
+		this.authAbort?.abort();
 	}
 
 	/** Drop session expansion state so the next fetch re-looks up groups/names.
@@ -2726,6 +2746,8 @@ export default class SystemRecordingPlugin extends Plugin {
             },
             isAuthenticated: () => this.isCalendarAuthenticated(),
             authenticate: () => this.authenticateCalendar(),
+            isAuthenticating: () => this.isAuthenticating(),
+            cancelAuthenticate: () => this.cancelAuthenticate(),
             fetchMeetings: (fromMs, toMs) => this.fetchAgendaMeetings(fromMs, toMs),
             showAttendeePhotos: () => this.settings.showAttendeePhotos,
             getAvatarUrl: (email) => this.avatarUrlByEmail.get(email),

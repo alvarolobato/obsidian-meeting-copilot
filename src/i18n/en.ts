@@ -191,6 +191,8 @@ export const en = {
 		lastRefreshed: (rel: string) => `Updated ${rel}`,
 		connectPrompt: "Connect your Google Calendar to see meetings here.",
 		connectCta: "Connect Google Calendar",
+		connectConnecting: "Waiting for you to finish in the browser…",
+		connectCancel: "Cancel",
 		nothingScheduled: "Nothing scheduled.",
 		noMeetings: "No meetings",
 		nothingElse: "Nothing else scheduled",
@@ -394,8 +396,10 @@ export const en = {
 			name: "Google authentication",
 			descAuthenticated: "Authenticated. Re-authenticating refreshes the token.",
 			descUnauthenticated: "Not authenticated. Click to connect your Google Calendar.",
+			descConnecting: "Waiting for you to finish in the browser…",
 			buttonReauthenticate: "Re-authenticate",
 			buttonAuthenticate: "Authenticate",
+			buttonCancel: "Cancel",
 		},
 		advancedCredentials: {
 			summary: "Advanced: custom OAuth credentials",
@@ -703,6 +707,7 @@ export const en = {
 		noRefreshToken:
 			"No refresh_token was returned. Add yourself as a test user on the OAuth consent screen and try again.",
 		authComplete: "✅ Calendar authentication complete",
+		cancelled: "Calendar authentication cancelled.",
 		timeout: "Authentication timed out (5 minutes).",
 		htmlError: (err: string) => `<h1>OAuth error</h1><p>${err}</p>`,
 		htmlStateMismatch: "<h1>state mismatch</h1>",

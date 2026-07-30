@@ -4,6 +4,7 @@ import {
 	Notice,
 	PluginSettingTab,
 	Setting,
+	setIcon,
 } from "obsidian";
 import type SystemRecordingPlugin from "./main";
 import type { InputDevice } from "./recorder";
@@ -451,6 +452,10 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
     private downloadProgress = 0;
     /** The on-screen local-model download/status row, updated in place during a download. */
     private modelDownloadRow: Setting | null = null;
+    /** The in-flight Google authenticate() call, if any — cancelling doesn't
+     * emit a "changed" event, so this is what the Cancel button awaits to
+     * know when to repaint out of the connecting state. */
+    private pendingAuth: Promise<void> | null = null;
 
     constructor(app: App, plugin: SystemRecordingPlugin) {
         super(app, plugin);
@@ -559,23 +564,43 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         new Setting(containerEl)
             .setName(s.settings.googleAuth.name)
             .setDesc(
-                this.plugin.isCalendarAuthenticated()
+                this.plugin.isAuthenticating()
+                    ? s.settings.googleAuth.descConnecting
+                    : this.plugin.isCalendarAuthenticated()
                     ? s.settings.googleAuth.descAuthenticated
                     : s.settings.googleAuth.descUnauthenticated
             )
-            .addButton((btn) =>
-                btn
-                    .setButtonText(
-                        this.plugin.isCalendarAuthenticated()
-                            ? s.settings.googleAuth.buttonReauthenticate
-                            : s.settings.googleAuth.buttonAuthenticate
-                    )
+            .addButton((btn) => {
+                if (this.plugin.isAuthenticating()) {
+                    btn.setButtonText(s.settings.googleAuth.buttonCancel)
+                        .setWarning()
+                        .onClick(() => {
+                            this.plugin.cancelAuthenticate();
+                            void this.pendingAuth?.then(() => this.display());
+                        });
+                    const spinner = btn.buttonEl.createSpan({
+                        cls: "mc-auth-spinner",
+                    });
+                    setIcon(spinner, "loader-circle");
+                    btn.buttonEl.prepend(spinner);
+                    return;
+                }
+                btn.setButtonText(
+                    this.plugin.isCalendarAuthenticated()
+                        ? s.settings.googleAuth.buttonReauthenticate
+                        : s.settings.googleAuth.buttonAuthenticate
+                )
                     .setCta()
-                    .onClick(async () => {
-                        await this.plugin.authenticateCalendar();
+                    .onClick(() => {
+                        const authPromise = this.plugin.authenticateCalendar();
+                        this.pendingAuth = authPromise;
                         this.display();
-                    })
-            );
+                        void authPromise.then(() => {
+                            this.pendingAuth = null;
+                            this.display();
+                        });
+                    });
+            });
 
         // Advanced: credential overrides — collapsed by default so the common
         // path (use bundled credentials) requires zero configuration.

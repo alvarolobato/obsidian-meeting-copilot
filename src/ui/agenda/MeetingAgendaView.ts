@@ -26,6 +26,10 @@ export interface AgendaViewHost {
 	setLookAhead(n: number): void;
 	isAuthenticated(): boolean;
 	authenticate(): Promise<void>;
+	/** True while a previously-started `authenticate()` is still waiting on the browser consent flow. */
+	isAuthenticating(): boolean;
+	/** Abandons an in-flight `authenticate()` call, if any. */
+	cancelAuthenticate(): void;
 	/** Fetch meetings within [fromMs, toMs], enriched with note/recording state. */
 	fetchMeetings(fromMs: number, toMs: number): Promise<AgendaMeeting[]>;
 	showAttendeePhotos(): boolean;
@@ -67,6 +71,10 @@ export class MeetingAgendaView extends ItemView {
 	private unsub: (() => void) | null = null;
 	private tickTimer: number | null = null;
 	private resetScroll = false;
+	/** The in-flight `authenticate()` call, if any — cancelling doesn't emit a
+	 * "changed" event, so this is what the Cancel button awaits to know when
+	 * to re-render out of the connecting state. */
+	private pendingAuth: Promise<void> | null = null;
 	private reloadSeq = 0;
 
 	constructor(leaf: WorkspaceLeaf, private host: AgendaViewHost) {
@@ -284,14 +292,42 @@ export class MeetingAgendaView extends ItemView {
 	private renderConnectState(parent: HTMLElement): void {
 		const a = t().agenda;
 		const box = parent.createDiv({ cls: "mc-cal-connect" });
+
+		if (this.host.isAuthenticating()) {
+			box.createEl("p", {
+				cls: "mc-cal-connect-text",
+				text: a.connectConnecting,
+			});
+			const cancelBtn = box.createEl("button", {
+				cls: "mc-cal-connect-cta is-cancel",
+			});
+			const spinner = cancelBtn.createSpan({ cls: "mc-cal-connect-spinner" });
+			setIcon(spinner, "loader-circle");
+			cancelBtn.createSpan({ text: a.connectCancel });
+			cancelBtn.addEventListener("click", () => {
+				this.host.cancelAuthenticate();
+				// Cancelling doesn't fire the "changed" event, so re-render
+				// directly once the aborted call actually settles.
+				void this.pendingAuth?.then(() => this.render());
+			});
+			return;
+		}
+
 		box.createEl("p", { cls: "mc-cal-connect-text", text: a.connectPrompt });
 		const btn = box.createEl("button", {
 			cls: "mc-cal-connect-cta",
 			text: a.connectCta,
 		});
 		btn.addEventListener("click", () => {
+			// `authenticate()` synchronously flips `isAuthenticating()` to true
+			// before its first await, so rendering right after kicking it off
+			// (not after awaiting it) is what shows the connecting/cancel state.
+			const authPromise = this.host.authenticate();
+			this.pendingAuth = authPromise;
+			this.render();
 			void (async () => {
-				await this.host.authenticate();
+				await authPromise;
+				this.pendingAuth = null;
 				await this.reload();
 			})();
 		});
