@@ -2,7 +2,7 @@ import { requestUrl } from "obsidian";
 import type { GoogleOAuth } from "../auth/googleOAuth";
 import { mcLog } from "../util/logLine";
 import { DirectoryCache, PeopleApiRateLimiter, sleep } from "./directoryCache";
-import { pickRealPhotoUrl, type RawDirectoryPerson } from "./personDirectory";
+import type { RawDirectoryPerson } from "./personDirectory";
 
 const PEOPLE_API = "https://people.googleapis.com/v1";
 /** Google's documented max for otherContacts.list. */
@@ -31,7 +31,8 @@ function normEmail(email: string): string {
 
 /**
  * Syncs the user's Google "Other contacts" — people auto-added from Gmail
- * correspondence — into the shared {@link DirectoryCache} (name + photo).
+ * correspondence — into the shared {@link DirectoryCache} (name only; see
+ * below on photos).
  *
  * This is a second, independent path to the same kind of data that
  * `personDirectory.ts`'s `searchDirectoryPeople` resolves, for a specific
@@ -39,16 +40,15 @@ function normEmail(email: string): string {
  * entirely (see that file's 403 handling), which blocks the org-Directory
  * lookup for *every* attendee, permanently, for that domain. "Other
  * contacts" is the user's own private data, not the org Directory, so it
- * isn't subject to that admin setting — Granola-style tools showing photos
- * on such a domain are almost certainly using this path (or an
- * admin-delegated one we have no access to), not the Directory API.
+ * isn't subject to that admin setting.
  *
- * Unlike a per-email directory search, there's no photo-capable search here:
- * `otherContacts.search` doesn't support `photos` in its readMask, only
- * `otherContacts.list` does — so the only way to get photos is to page
- * through the *whole* list and match by email ourselves. A `syncToken` (once
- * one exists) limits a resync to what changed since last time instead of
- * re-paging everything.
+ * Photos are intentionally never taken from this endpoint — verified by
+ * downloading and inspecting real cached photo URLs across several accounts,
+ * every one was Google's generated colored-initial circle, including entries
+ * marked `default: false` (which reliably means "real photo" on the
+ * directory-search path). The same generated image routinely recurs across
+ * unrelated people here too, so there is no reliable signal at all on this
+ * endpoint for "this is a real uploaded photo." Name resolution is unaffected.
  */
 export async function syncOtherContacts(
 	oauth: GoogleOAuth,
@@ -74,7 +74,7 @@ export async function syncOtherContacts(
 
 		const token = await oauth.getAccessToken();
 		const params = new URLSearchParams({
-			readMask: "names,emailAddresses,photos",
+			readMask: "names,emailAddresses",
 			pageSize: String(OTHER_CONTACTS_PAGE_SIZE),
 			requestSyncToken: "true",
 		});
@@ -127,21 +127,23 @@ export async function syncOtherContacts(
 				person.names?.[0]?.unstructuredName ||
 				""
 			).trim();
-			// `default: true` DOES mean Google's auto-generated colored-initial
-			// avatar here too — confirmed by downloading and visually inspecting
-			// several cached URLs post-sync (each was a solid-color circle with
-			// a single letter, not a real photo). An earlier attempt disabled
-			// this exclusion for otherContacts based on one sample that looked
-			// plausible as a real "cm/..." contact-photo reference; it wasn't.
-			// otherContacts appears to only ever expose the generated fallback
-			// for these auto-populated entries, never a real uploaded photo —
-			// use the same default (excludeDefault: true) as directory search.
-			const photoUrl = pickRealPhotoUrl(person.photos);
-			if (!name && !photoUrl) continue;
+			// otherContacts photos are never trusted, even when `default: false`.
+			// Confirmed by downloading and visually inspecting ~15 cached URLs
+			// across several real accounts/domains: every one was a generated
+			// colored-initial circle, never a real uploaded photo — including
+			// ones marked `default: false`, which elsewhere reliably means "real
+			// photo". Worse, the same generated image recurred across unrelated
+			// people (2,103 cached emails collapsed to 626 distinct images, 401
+			// of them shared by 2+ people), so `default` simply isn't a valid
+			// real-vs-generated signal on this endpoint. Name resolution from
+			// otherContacts is still useful and unaffected; only photos are
+			// unusable here. See `pickRealPhotoUrl` for the directory-search
+			// path, where `default` does still apply.
+			if (!name) continue;
 			for (const e of person.emailAddresses ?? []) {
 				const email = normEmail(e.value ?? "");
 				if (!email) continue;
-				directoryCache.setPerson(email, name || null, photoUrl);
+				directoryCache.setPerson(email, name, null);
 				updated++;
 			}
 		}

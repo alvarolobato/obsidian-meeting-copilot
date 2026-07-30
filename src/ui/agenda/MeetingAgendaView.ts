@@ -71,10 +71,6 @@ export class MeetingAgendaView extends ItemView {
 	private unsub: (() => void) | null = null;
 	private tickTimer: number | null = null;
 	private resetScroll = false;
-	/** The in-flight `authenticate()` call, if any — cancelling doesn't emit a
-	 * "changed" event, so this is what the Cancel button awaits to know when
-	 * to re-render out of the connecting state. */
-	private pendingAuth: Promise<void> | null = null;
 	private reloadSeq = 0;
 
 	constructor(leaf: WorkspaceLeaf, private host: AgendaViewHost) {
@@ -306,9 +302,11 @@ export class MeetingAgendaView extends ItemView {
 			cancelBtn.createSpan({ text: a.connectCancel });
 			cancelBtn.addEventListener("click", () => {
 				this.host.cancelAuthenticate();
-				// Cancelling doesn't fire the "changed" event, so re-render
-				// directly once the aborted call actually settles.
-				void this.pendingAuth?.then(() => this.render());
+				// `authenticateCalendar()` always emits "changed" once the
+				// cancelled call actually settles (see main.ts), which this
+				// view already reloads on (see onOpen) — no extra wiring
+				// needed here, and it works even if this view instance wasn't
+				// the one that started the connect attempt.
 			});
 			return;
 		}
@@ -321,15 +319,11 @@ export class MeetingAgendaView extends ItemView {
 		btn.addEventListener("click", () => {
 			// `authenticate()` synchronously flips `isAuthenticating()` to true
 			// before its first await, so rendering right after kicking it off
-			// (not after awaiting it) is what shows the connecting/cancel state.
-			const authPromise = this.host.authenticate();
-			this.pendingAuth = authPromise;
+			// (not after awaiting it) is what shows the connecting/cancel
+			// state. Completion (success, failure, or cancel) always emits
+			// "changed", which reloads this view the normal way.
+			void this.host.authenticate();
 			this.render();
-			void (async () => {
-				await authPromise;
-				this.pendingAuth = null;
-				await this.reload();
-			})();
 		});
 	}
 

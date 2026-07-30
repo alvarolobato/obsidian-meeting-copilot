@@ -452,10 +452,6 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
     private downloadProgress = 0;
     /** The on-screen local-model download/status row, updated in place during a download. */
     private modelDownloadRow: Setting | null = null;
-    /** The in-flight Google authenticate() call, if any — cancelling doesn't
-     * emit a "changed" event, so this is what the Cancel button awaits to
-     * know when to repaint out of the connecting state. */
-    private pendingAuth: Promise<void> | null = null;
 
     constructor(app: App, plugin: SystemRecordingPlugin) {
         super(app, plugin);
@@ -576,7 +572,11 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                         .setWarning()
                         .onClick(() => {
                             this.plugin.cancelAuthenticate();
-                            void this.pendingAuth?.then(() => this.display());
+                            // Looked up fresh (not a field stashed at click
+                            // time) so this still resolves even when this tab
+                            // wasn't the one that started the attempt (e.g. it
+                            // was kicked off from the agenda's Connect button).
+                            void this.plugin.getAuthPromise()?.then(() => this.display());
                         });
                     const spinner = btn.buttonEl.createSpan({
                         cls: "mc-auth-spinner",
@@ -592,13 +592,8 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                 )
                     .setCta()
                     .onClick(() => {
-                        const authPromise = this.plugin.authenticateCalendar();
-                        this.pendingAuth = authPromise;
+                        void this.plugin.authenticateCalendar().then(() => this.display());
                         this.display();
-                        void authPromise.then(() => {
-                            this.pendingAuth = null;
-                            this.display();
-                        });
                     });
             });
 

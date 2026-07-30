@@ -16,7 +16,7 @@ describe("syncOtherContacts", () => {
 		__setRequestUrl(() => ({ status: 200, json: {}, text: "" }));
 	});
 
-	it("writes name + photo for each of a contact's emails, and persists the sync token", async () => {
+	it("writes name (never photo) for each of a contact's emails, and persists the sync token", async () => {
 		__setRequestUrl(() => ({
 			status: 200,
 			json: {
@@ -40,25 +40,23 @@ describe("syncOtherContacts", () => {
 		expect(result).toEqual({ updated: 2, full: true });
 		expect(cache.getPerson("ruflin@elastic.co")).toEqual({
 			name: "Nicolas Ruflin",
-			photoUrl: "https://example.com/ruflin.png",
+			photoUrl: null,
 			at: 1_000,
 		});
-		expect(cache.getPerson("nick@elastic.co")?.photoUrl).toBe(
-			"https://example.com/ruflin.png"
-		);
+		expect(cache.getPerson("nick@elastic.co")?.photoUrl).toBeNull();
 		expect(cache.otherContactsSyncToken).toBe("token-1");
 		expect(cache.otherContactsSyncedAt).toBe(1_000);
 	});
 
-	it("excludes a default:true photo — otherContacts' generated-avatar shape, confirmed by visually inspecting live cached URLs", async () => {
-		// Every one of several live-synced photo URLs, when actually
-		// downloaded and viewed, turned out to be Google's auto-generated
-		// colored-initial avatar (e.g. a solid-color circle with a single
-		// letter) — never a real uploaded photo — and every one carried
-		// `default: true`. An earlier attempt disabled this exclusion for
-		// otherContacts based on one URL that merely *looked* like a genuine
-		// per-contact photo reference (a `cm/...` path); visually it wasn't.
-		// Treat `default: true` the same way here as for directory search.
+	it("ignores a photo marked default:false too — otherContacts' `default` flag isn't a reliable real-photo signal", async () => {
+		// Confirmed by downloading and visually inspecting ~15 live-synced
+		// photo URLs across several real accounts: every one was Google's
+		// auto-generated colored-initial avatar (a solid-color circle with a
+		// single letter), never a real uploaded photo — including several
+		// marked `default: false`, which reliably means "real photo" on the
+		// directory-search path. The same generated image even recurred
+		// across unrelated people. So unlike directory search, otherContacts
+		// photos are never trusted here regardless of the `default` flag.
 		__setRequestUrl(() => ({
 			status: 200,
 			json: {
@@ -70,7 +68,7 @@ describe("syncOtherContacts", () => {
 							{
 								metadata: { primary: true },
 								url: "https://lh3.googleusercontent.com/cm/AGPWSu8...=s100",
-								default: true,
+								default: false,
 							},
 						],
 					},
@@ -81,7 +79,7 @@ describe("syncOtherContacts", () => {
 		const cache = new DirectoryCache(null, () => 1_000, 0);
 		const result = await syncOtherContacts(fakeOauth(), cache);
 
-		// The name still resolves — only the generated-avatar photo is excluded.
+		// The name still resolves — photos are simply never read from this path.
 		expect(result.updated).toBe(1);
 		expect(cache.getPerson("ruflin@elastic.co")).toEqual({
 			name: "Nicolas Ruflin",
@@ -193,7 +191,7 @@ describe("syncOtherContacts", () => {
 		expect(cache.getPerson("gone@x.com")).toBeUndefined();
 	});
 
-	it("skips a contact with neither a name nor a photo", async () => {
+	it("skips a contact with no name", async () => {
 		__setRequestUrl(() => ({
 			status: 200,
 			json: {

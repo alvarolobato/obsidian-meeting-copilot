@@ -328,6 +328,8 @@ export default class SystemRecordingPlugin extends Plugin {
 	private authExpired = false;
 	/** Set while `authenticateCalendar()` is waiting on the browser consent flow — lets a "Cancel" button abandon it instead of leaving the button stuck forever. */
 	private authAbort: AbortController | null = null;
+	/** The in-flight `authenticateCalendar()` promise, if any — see {@link getAuthPromise}. */
+	private authPromise: Promise<void> | null = null;
 	/** Tier 1 meeting detector + its poll interval id (macOS only). */
 	private detector: MeetingDetector | null = null;
 	private detectorIntervalId: number | null = null;
@@ -1298,7 +1300,27 @@ export default class SystemRecordingPlugin extends Plugin {
 		return this.oauth.isAuthenticated();
 	}
 
-	async authenticateCalendar(): Promise<void> {
+	/**
+	 * Coalesces concurrent callers onto one in-flight attempt: returns the same
+	 * promise if already running, rather than opening a second browser tab/
+	 * loopback server. {@link getAuthPromise} exposes that promise so the
+	 * settings tab's Cancel button can await it even if a *different* click
+	 * (e.g. from the agenda's Connect button) is the one that actually started
+	 * it — the agenda view itself doesn't need this: it just reloads on the
+	 * "changed" event this always emits below, regardless of who started or
+	 * cancelled the attempt.
+	 */
+	authenticateCalendar(): Promise<void> {
+		if (this.authPromise) return this.authPromise;
+		const promise = this.runAuthenticateCalendar();
+		this.authPromise = promise;
+		void promise.finally(() => {
+			this.authPromise = null;
+		});
+		return promise;
+	}
+
+	private async runAuthenticateCalendar(): Promise<void> {
 		const abort = new AbortController();
 		this.authAbort = abort;
 		try {
@@ -1307,7 +1329,6 @@ export default class SystemRecordingPlugin extends Plugin {
 			// New consent / token — retry Groups expansion from a clean slate.
 			this.resetGroupAttendeeExpansion();
 			void this.updateScheduler();
-			this.agendaEvents.emit("changed", undefined);
 		} catch (e) {
 			if (e instanceof Error && e.name === "AbortError") {
 				new Notice(t().oauth.cancelled);
@@ -1316,12 +1337,24 @@ export default class SystemRecordingPlugin extends Plugin {
 			}
 		} finally {
 			this.authAbort = null;
+			// Fires on every outcome (success, real failure, or cancel) so any
+			// open agenda view — even one created after this attempt started —
+			// reloads out of its connecting/cancel state, not just the instance
+			// that happened to click "Authenticate".
+			this.agendaEvents.emit("changed", undefined);
 		}
 	}
 
 	/** True while {@link authenticateCalendar} is waiting on the browser consent flow. */
 	isAuthenticating(): boolean {
 		return this.authAbort !== null;
+	}
+
+	/** The in-flight {@link authenticateCalendar} call, if any — see that
+	 * method's doc comment for why this is looked up fresh rather than cached
+	 * per-view. */
+	getAuthPromise(): Promise<void> | null {
+		return this.authPromise;
 	}
 
 	/** Cancels an in-flight {@link authenticateCalendar} call, if any. */
