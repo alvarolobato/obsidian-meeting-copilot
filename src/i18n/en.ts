@@ -414,8 +414,8 @@ export const en = {
 			desc: "Notify you around each event's start with Join / Record options. Turn on 'Auto-start recording' below for hands-free recording.",
 		},
 		notifyBeforeStart: {
-			name: "Notify before start (minutes)",
-			desc: "How many minutes before a meeting starts to show the heads-up notification. 0 turns off the pre-start heads-up — you're still prompted at the start time (0–60).",
+			name: "Heads-up lead time (minutes)",
+			desc: "Give yourself a warning this many minutes ahead of a meeting's start. Set to 0 to skip the early warning — you'll still be prompted right at start time (0–60).",
 		},
 		calendarAutoStart: {
 			name: "Auto-start recording",
@@ -452,12 +452,12 @@ export const en = {
 			sidebar: "Side panel",
 		},
 		agendaLookAhead: {
-			name: "Agenda look-ahead (days)",
-			desc: "How many upcoming days the meeting agenda renders.",
+			name: "Agenda horizon (days)",
+			desc: "Furthest a scheduled meeting can be in the future and still show up in the agenda.",
 		},
 		agendaLookBack: {
-			name: "Agenda look-back (days)",
-			desc: "How many past days you can navigate back to in the agenda (0–30).",
+			name: "Agenda history (days)",
+			desc: "Furthest back you can page into past meetings from the agenda (0–30).",
 		},
 		notificationsHeading: "Notifications (macOS)",
 		notificationStyle: {

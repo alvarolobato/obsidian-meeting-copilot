@@ -4,7 +4,7 @@
 
 1. In the [Google Cloud Console](https://console.cloud.google.com/), create an OAuth 2.0 **Desktop** client and enable the Google Calendar API.
 2. In *Settings → Meeting Copilot → Google Calendar integration*, paste the **Client ID** and **Client secret**, then click **Authenticate**.
-3. Optionally set the **Target calendar ID** (defaults to `primary`) and agenda look-ahead / look-back.
+3. Optionally set the **Target calendar ID** (defaults to `primary`) and the agenda's **horizon** / **history** window.
 
 Client secret and OAuth tokens are stored in per-vault local storage on this device — not in synced `data.json`. Declined meetings are ignored. If the connection expires, the agenda shows **Reconnect**.
 

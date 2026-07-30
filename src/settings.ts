@@ -994,23 +994,6 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
             );
 
         new Setting(containerEl)
-            .setName(s.settings.notifyBeforeStart.name)
-            .setDesc(s.settings.notifyBeforeStart.desc)
-            .addText((text) => {
-                text.inputEl.type = "number";
-                text
-                    .setValue(
-                        String(this.plugin.settings.notifyBeforeStartMinutes)
-                    )
-                    .onChange(async (value) => {
-                        const n = Number.parseInt(value, 10);
-                        this.plugin.settings.notifyBeforeStartMinutes =
-                            Number.isFinite(n) && n >= 0 ? Math.min(n, 60) : 1;
-                        await this.plugin.saveSettings();
-                    });
-            });
-
-        new Setting(containerEl)
             .setName(s.settings.calendarAutoStart.name)
             .setDesc(s.settings.calendarAutoStart.desc)
             .addToggle((toggle) =>
@@ -1135,6 +1118,35 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
             });
 
         new Setting(containerEl)
+            .setName(s.settings.openMeet.name)
+            .setDesc(s.settings.openMeet.desc)
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.openMeetAutomatically)
+                    .onChange(async (value) => {
+                        this.plugin.settings.openMeetAutomatically = value;
+                        await this.plugin.saveSettings();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName(s.settings.notifyBeforeStart.name)
+            .setDesc(s.settings.notifyBeforeStart.desc)
+            .addText((text) => {
+                text.inputEl.type = "number";
+                text
+                    .setValue(
+                        String(this.plugin.settings.notifyBeforeStartMinutes)
+                    )
+                    .onChange(async (value) => {
+                        const n = Number.parseInt(value, 10);
+                        this.plugin.settings.notifyBeforeStartMinutes =
+                            Number.isFinite(n) && n >= 0 ? Math.min(n, 60) : 1;
+                        await this.plugin.saveSettings();
+                    });
+            });
+
+        new Setting(containerEl)
             .setName(s.settings.agendaLookBack.name)
             .setDesc(s.settings.agendaLookBack.desc)
             .addText((text) => {
@@ -1149,18 +1161,6 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                         this.plugin.refreshAgenda();
                     });
             });
-
-        new Setting(containerEl)
-            .setName(s.settings.openMeet.name)
-            .setDesc(s.settings.openMeet.desc)
-            .addToggle((toggle) =>
-                toggle
-                    .setValue(this.plugin.settings.openMeetAutomatically)
-                    .onChange(async (value) => {
-                        this.plugin.settings.openMeetAutomatically = value;
-                        await this.plugin.saveSettings();
-                    })
-            );
     }
 
     private renderDetectionTab(containerEl: HTMLElement): void {
