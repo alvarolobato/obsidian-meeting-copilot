@@ -285,7 +285,7 @@ describe("createPeopleDirectory", () => {
 });
 
 describe("pickRealPhotoUrl", () => {
-	it("defaults to excluding default:true (Workspace-directory placeholder silhouette)", () => {
+	it("excludes default:true — Google's auto-generated colored-initial avatar", () => {
 		expect(
 			pickRealPhotoUrl([
 				{ url: "https://example.com/default.png", default: true },
@@ -294,13 +294,12 @@ describe("pickRealPhotoUrl", () => {
 		).toBe("https://example.com/real.png");
 	});
 
-	it("with excludeDefault: false, keeps a default:true photo (otherContacts' real shape)", () => {
+	it("returns null when every photo is default:true (no real photo available)", () => {
 		expect(
-			pickRealPhotoUrl(
-				[{ url: "https://example.com/real.png", default: true }],
-				{ excludeDefault: false }
-			)
-		).toBe("https://example.com/real.png");
+			pickRealPhotoUrl([
+				{ url: "https://example.com/generated.png", default: true },
+			])
+		).toBeNull();
 	});
 
 	it("returns null when there's no url at all", () => {

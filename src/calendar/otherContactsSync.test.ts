@@ -50,13 +50,15 @@ describe("syncOtherContacts", () => {
 		expect(cache.otherContactsSyncedAt).toBe(1_000);
 	});
 
-	it("keeps the photo even when Google marks it default: true (otherContacts' real shape, confirmed live)", async () => {
-		// Regression test: unlike Workspace-directory results, otherContacts
-		// marks its one-and-only real photo `default: true` too — a live
-		// diagnostic log caught this returning a real
-		// lh3.googleusercontent.com/cm/... contact-photo URL, not a
-		// placeholder, so excluding default:true here was silently discarding
-		// every real photo synced (1928 people, 0 photos).
+	it("excludes a default:true photo — otherContacts' generated-avatar shape, confirmed by visually inspecting live cached URLs", async () => {
+		// Every one of several live-synced photo URLs, when actually
+		// downloaded and viewed, turned out to be Google's auto-generated
+		// colored-initial avatar (e.g. a solid-color circle with a single
+		// letter) — never a real uploaded photo — and every one carried
+		// `default: true`. An earlier attempt disabled this exclusion for
+		// otherContacts based on one URL that merely *looked* like a genuine
+		// per-contact photo reference (a `cm/...` path); visually it wasn't.
+		// Treat `default: true` the same way here as for directory search.
 		__setRequestUrl(() => ({
 			status: 200,
 			json: {
@@ -79,10 +81,13 @@ describe("syncOtherContacts", () => {
 		const cache = new DirectoryCache(null, () => 1_000, 0);
 		const result = await syncOtherContacts(fakeOauth(), cache);
 
+		// The name still resolves — only the generated-avatar photo is excluded.
 		expect(result.updated).toBe(1);
-		expect(cache.getPerson("ruflin@elastic.co")?.photoUrl).toBe(
-			"https://lh3.googleusercontent.com/cm/AGPWSu8...=s100"
-		);
+		expect(cache.getPerson("ruflin@elastic.co")).toEqual({
+			name: "Nicolas Ruflin",
+			photoUrl: null,
+			at: 1_000,
+		});
 	});
 
 	it("pages through nextPageToken and merges every page's entries", async () => {

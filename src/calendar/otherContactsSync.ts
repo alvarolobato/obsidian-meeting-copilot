@@ -127,11 +127,16 @@ export async function syncOtherContacts(
 				person.names?.[0]?.unstructuredName ||
 				""
 			).trim();
-			// Unlike Workspace-directory results, otherContacts marks its one
-			// real photo `default: true` too — don't exclude it here.
-			const photoUrl = pickRealPhotoUrl(person.photos, {
-				excludeDefault: false,
-			});
+			// `default: true` DOES mean Google's auto-generated colored-initial
+			// avatar here too — confirmed by downloading and visually inspecting
+			// several cached URLs post-sync (each was a solid-color circle with
+			// a single letter, not a real photo). An earlier attempt disabled
+			// this exclusion for otherContacts based on one sample that looked
+			// plausible as a real "cm/..." contact-photo reference; it wasn't.
+			// otherContacts appears to only ever expose the generated fallback
+			// for these auto-populated entries, never a real uploaded photo —
+			// use the same default (excludeDefault: true) as directory search.
+			const photoUrl = pickRealPhotoUrl(person.photos);
 			if (!name && !photoUrl) continue;
 			for (const e of person.emailAddresses ?? []) {
 				const email = normEmail(e.value ?? "");
