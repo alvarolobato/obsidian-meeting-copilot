@@ -3,7 +3,7 @@ import { __setRequestUrl } from "../../test/obsidian-mock";
 import type { GoogleOAuth } from "../auth/googleOAuth";
 import { DirectoryCache } from "./directoryCache";
 import { createCloudIdentityDirectory } from "./expandGroupAttendees";
-import { createPeopleDirectory } from "./personDirectory";
+import { createPeopleDirectory, PersonNameCache } from "./personDirectory";
 
 function fakeOauth(): GoogleOAuth {
 	return {
@@ -101,5 +101,48 @@ describe("directory clients HTTP 403", () => {
 			)
 		);
 		warnSpy.mockRestore();
+	});
+
+	it("keeps skipping the network call even after the per-poll `disabled` reset (permanentlyBlocked doesn't get cleared)", async () => {
+		// Regression test: runGroupAttendeeExpand resets nameCache.disabled to
+		// false at the start of every background poll, to give a *transient*
+		// soft-fail one retry per pass. Without a separate sticky flag, that
+		// reset also silently undid the Workspace-policy circuit breaker,
+		// burning one doomed network call every single poll forever.
+		let networkCalls = 0;
+		__setRequestUrl(() => {
+			networkCalls++;
+			return {
+				status: 403,
+				json: {
+					error: {
+						status: "PERMISSION_DENIED",
+						message:
+							"The G Suite domain admin has disabled external directory sharing. See more details at https://support.google.com/a/answer/6343701",
+					},
+				},
+				text: "forbidden",
+			};
+		});
+		const cache = new DirectoryCache(null, () => 1_000, 0);
+		const nameCache = new PersonNameCache();
+		const people = createPeopleDirectory(fakeOauth(), {
+			directoryCache: cache,
+			nameCache,
+		});
+
+		await expect(
+			people.resolvePhotoUrl("ruflin@x.com")
+		).rejects.toThrow(/Workspace admin policy/);
+		expect(networkCalls).toBe(1);
+		expect(nameCache.permanentlyBlocked).toBe(true);
+
+		// Simulate the next poll's per-pass reset.
+		nameCache.disabled = false;
+
+		await expect(
+			people.resolvePhotoUrl("someone-else@x.com")
+		).resolves.toBeUndefined();
+		expect(networkCalls).toBe(1); // no second network call
 	});
 });

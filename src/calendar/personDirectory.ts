@@ -37,8 +37,25 @@ export class PersonNameCache {
 	names = new Map<string, string>();
 	/** Emails looked up with no usable name (avoid re-hitting). */
 	miss = new Set<string>();
-	/** Set when People API is disabled / hard-fails — skip further network. */
+	/**
+	 * Set when People API is disabled / hard-fails — skip further network
+	 * this pass. Deliberately reset to `false` at the start of every
+	 * background group-expand pass (see `main.ts`'s runGroupAttendeeExpand),
+	 * so a transient failure (e.g. the API was just enabled in Cloud
+	 * Console) gets one retry per poll instead of requiring a re-auth.
+	 */
 	disabled = false;
+	/**
+	 * Set specifically for a *confirmed-deterministic* block — currently only
+	 * the Workspace-admin "external directory sharing disabled" 403, which
+	 * fails identically for every email, forever, until an admin changes that
+	 * setting (re-authenticating doesn't help). Unlike `disabled`, nothing
+	 * resets this per-poll — only a fresh `PersonNameCache` (re-auth) does —
+	 * otherwise the per-poll `disabled` reset above would silently undo the
+	 * whole point of detecting a permanent block, at a real quota cost (one
+	 * doomed network call per poll, forever).
+	 */
+	permanentlyBlocked = false;
 }
 
 function normEmail(email: string): string {
@@ -159,10 +176,13 @@ export function createPeopleDirectory(
 		if (cached !== undefined) {
 			return { name: cached.name, photoUrl: cached.photoUrl };
 		}
-		// Confirmed-permanent Directory block (e.g. Workspace policy): the
-		// cache check above already ran, so this only skips the network call
-		// that's certain to fail the same way — not otherContacts-sourced hits.
-		if (nameCache?.disabled) return undefined;
+		// Directory blocked this pass (`disabled`) or permanently confirmed
+		// blocked (`permanentlyBlocked`, e.g. Workspace policy — not reset
+		// per-poll like `disabled` is): the cache check above already ran, so
+		// this only skips the network call — not otherContacts-sourced hits.
+		if (nameCache?.disabled || nameCache?.permanentlyBlocked) {
+			return undefined;
+		}
 
 		if (directoryCache?.peopleIsRateLimited()) {
 			if (debugLogging) {
@@ -231,12 +251,12 @@ export function createPeopleDirectory(
 			// Workspace admin policy (https://support.google.com/a/answer/6343701),
 			// not a scope/consent problem — no `details`/`reason` on this one, only
 			// a message. Deterministic and permanent for the rest of this session
-			// (every email fails identically), unlike the generic 403 below where
-			// retrying after a re-auth might plausibly help. Throw so the caller's
-			// existing "stop retrying" handling (PersonNameCache.disabled /
-			// avatar-resolve's session flag) kicks in instead of re-attempting
-			// this doomed call on every single poll forever.
+			// (every email fails identically) — unlike the generic 403 below,
+			// this is NOT worth the per-poll retry that `disabled` gets (see
+			// `runGroupAttendeeExpand`'s reset), so mark it on the sticky flag
+			// too, or every poll would burn one doomed network call forever.
 			if (body?.error?.message?.includes("external directory sharing")) {
+				if (nameCache) nameCache.permanentlyBlocked = true;
 				mcLog(
 					"directory",
 					"people lookup blocked by Workspace admin policy (external directory sharing disabled)",
