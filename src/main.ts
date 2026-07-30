@@ -137,6 +137,7 @@ import {
 import {
 	DIRECTORY_CACHE_FILENAME,
 	DirectoryCache,
+	PEOPLE_MAX_REQUESTS_PER_MINUTE,
 	PeopleApiRateLimiter,
 } from "./calendar/directoryCache";
 import { findExpiredRecordings, underFolder } from "./recordings/retention";
@@ -1328,6 +1329,15 @@ export default class SystemRecordingPlugin extends Plugin {
 			},
 		});
 		await this.directoryCache.load();
+		// Seed from the persisted timestamps so a reload's fresh rate limiter
+		// doesn't start its local count at zero against Google's real,
+		// server-side quota window (see PeopleApiRateLimiter's doc comment).
+		this.peopleRateLimiter = new PeopleApiRateLimiter(
+			PEOPLE_MAX_REQUESTS_PER_MINUTE,
+			() => Date.now(),
+			this.directoryCache.peopleRateLimitTimestamps,
+			(timestamps) => this.directoryCache.setPeopleRateLimitTimestamps(timestamps)
+		);
 	}
 
 	private createGroupDirectory() {
