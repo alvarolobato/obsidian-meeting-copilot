@@ -26,7 +26,7 @@ export const DEFAULT_ENRICH_PROMPT = `Meeting: {{title}}
 Date: {{date}}
 Attendees: {{attendees}}
 
-The participant's own notes (may be sparse or empty):
+The participant's own notes (may be sparse or empty). These are authoritative — the participant personally attended and wrote each point deliberately, so every single one must be reflected somewhere in the output, no matter how terse it is or how little the transcript elaborates on it:
 """
 {{notes}}
 """
@@ -53,14 +53,14 @@ Structure:
 - Follow with a handful of thematic sections (aim for 3–6, not one per tangent). Give each a short, descriptive "### " heading named in its own terms (for example "### Entity model"). Invent fitting headings; do not use generic labels like "Key points", "Discussion", or "Decisions".
 - Under each heading use a few terse "- " bullets — sentence fragments, not full sentences. Merge related points into one bullet; never split a single idea across several.
 - Nest a sub-bullet ("  - ") only when a point truly needs one concrete detail (a number, name, or example). Never go deeper than one level, and use nesting sparingly.
-- Fold the participant's own notes into the relevant sections; never drop anything they wrote.
+- Fold the participant's own notes into the relevant sections. Every note must show up somewhere in the output: restate the point it's making in your own words (not just its literal phrasing) as its own short bullet if no thematic section fits. Never drop one just because it's terse, phrased as a bare topic ("Discussed pricing"), or the transcript adds little detail — losing something the participant deliberately wrote is worse than an extra short bullet.
 - Finish with TWO closing sections, in this order:
   1. "### Next steps" — the participant's unified personal to-do list, built in two steps. FIRST, carry over EVERY hand-written action item listed above — never drop, merge away, or omit one, even if it looks incomplete or would not otherwise qualify below; you may only refine its wording for clarity, correct an obvious error, and fold in one concrete detail from the transcript (a name, date, or number). THEN append any ADDITIONAL concrete tasks the participant themselves still has to do — things they personally committed to and have not started yet. Format each as "- **Concise task**". The participant is the author of these notes (the "Me" speaker when the transcript is labeled "Me:"/"Them:"); otherwise infer from the notes and context. The following exclusions apply ONLY to the additional tasks, never to the hand-written items: exclude work already underway or described as ongoing, anything owned by or delegated to someone else, decisions, status, general follow-ups, and passive "waiting for"/"awaiting X" items; and never phrase an added task as continuing, keeping, maintaining, or improving something already in progress (no "Continue …", "Keep …", "Maintain …", "Keep polishing …") — drop those entirely rather than rewording them into tasks. When you cannot tell that the participant personally owns a discrete, not-yet-started task, leave it out. Omit the whole section only when there are neither hand-written action items nor such additional tasks — never pad it.
   2. "### Follow-ups" — meeting-wide commitments that are NOT the participant's personal Next steps. FIRST, carry over EVERY hand-written follow-up listed above (same refine-only rule). THEN append additional concrete, not-yet-started commitments owned by someone else or by the group. Format each as "- **Owner:** concise task" when the owner is clear from the notes, transcript, or attendees list; otherwise "- concise task" with no owner. Use a short given name or how they appear in Attendees — never invent people. Exclude the participant's own tasks (those belong only in Next steps), decisions, status updates, and passive "waiting for" items. Omit the whole section when there are neither hand-written follow-ups nor such commitments — never pad it.
 
 Keep it tight:
 - Match length to substance: a short meeting yields a short note. Do not pad. As a rough ceiling, keep the whole thing well under one screen of text for a typical 30-minute meeting.
-- Cover what matters and drop the rest: skip small talk, greetings, scheduling back-and-forth, and tangents that don't change any decision.
+- Cover what matters and drop the rest: skip small talk, greetings, scheduling back-and-forth, and tangents that don't change any decision — this trimming never applies to the participant's own notes, action items, or follow-ups, which must always be kept per the rules above.
 - Write the substance directly. Never refer to "the meeting", "this session", "the call", "the transcript", "the recording", or "the notes", and never comment on what was or wasn't said, recorded, or discussed.
 - Never open a bullet with filler like "Discussed", "Noted that", "Acknowledged", "Talked about", "Mentioned", or "The point was raised" — state the fact itself.
 - If there is little or no substantive content, output only the little that exists (a short TL;DR with a bullet or two) and nothing more.

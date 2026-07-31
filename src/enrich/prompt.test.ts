@@ -126,6 +126,15 @@ describe("effectiveEnrichPrompt", () => {
 		expect(DEFAULT_ENRICH_PROMPT).toContain("### Follow-ups");
 		expect(DEFAULT_ENRICH_PROMPT).toContain("### Next steps");
 	});
+
+	it("treats the participant's own notes as authoritative, exempt from trimming", () => {
+		expect(DEFAULT_ENRICH_PROMPT).toContain(
+			"every single one must be reflected somewhere in the output"
+		);
+		expect(DEFAULT_ENRICH_PROMPT).toContain(
+			"this trimming never applies to the participant's own notes"
+		);
+	});
 });
 
 describe("extractEmbeddedTitle", () => {

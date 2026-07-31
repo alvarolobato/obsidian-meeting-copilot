@@ -3,6 +3,16 @@ import { upsertSection } from "./meetingNote";
 
 /** Section that holds the participant's own notes. */
 export const NOTES_HEADING = "## Notes";
+/**
+ * Legacy section. It was in the default note template until it was removed for
+ * being redundant with "## Notes" and never actually read or written by the
+ * app — but plenty of already-created notes still have it, some with real
+ * notes typed under it. Folded into the enrichment input like "## Notes" so
+ * that pre-existing content isn't silently ignored — but left in place in the
+ * file itself (not relocated like loose preamble lines), since new notes won't
+ * have this heading at all.
+ */
+export const SUMMARY_HEADING = "## Summary";
 
 const H1 = /^#\s/;
 const H2 = /^##\s/;
@@ -11,7 +21,7 @@ const METADATA_BULLET = /^\s*[-*]\s+\*\*[^*]+:\*\*/;
 const CALLOUT_START = new RegExp(`^>\\s*\\[!${ENRICH_CALLOUT_TYPE}\\][+-]?`);
 
 export interface ManualNotes {
-	/** All manual notes: the "## Notes" body plus any loose preamble notes. */
+	/** All manual notes: the "## Notes" and "## Summary" bodies plus any loose preamble notes. */
 	notes: string;
 	/** Content with loose preamble notes folded into "## Notes" (created if missing). */
 	content: string;
@@ -39,16 +49,20 @@ function combineNotes(fragments: string[]): string {
 }
 
 /**
- * Gathers the participant's manual notes wherever they wrote them and
- * consolidates them under "## Notes", so enrichment never silently ignores or
- * orphans notes typed above the "## Notes" heading (or when that heading was
- * deleted). Deterministic and pure so it can be unit-tested.
+ * Gathers the participant's manual notes wherever they wrote them — the
+ * "## Notes" body, the "## Summary" body, and any loose preamble notes — and
+ * consolidates them under "## Notes" for the file, so enrichment never
+ * silently ignores or orphans notes typed above the "## Notes" heading (or
+ * when that heading was deleted). Deterministic and pure so it can be
+ * unit-tested.
  *
  * "Loose" notes are body lines in the *preamble* — after the H1 title and
  * before the first "## " section — that aren't the generated metadata bullets
- * ("- **When:** …") or the AI-notes callout. Everything else in the note
- * (frontmatter, transcript, other sections) is left untouched. When there are
- * no loose notes the content is returned unchanged.
+ * ("- **When:** …") or the AI-notes callout. "## Summary" content is read but
+ * left where it is in the file (unlike loose preamble, it's already a proper
+ * section, just one the app never reads on its own). Everything else in the
+ * note (frontmatter, transcript, other sections) is left untouched. When
+ * there's nothing loose to relocate, the content is returned unchanged.
  */
 export function normalizeManualNotes(content: string): ManualNotes {
 	const lines = content.split("\n");
@@ -101,16 +115,31 @@ export function normalizeManualNotes(content: string): ManualNotes {
 	}
 
 	const existingNotes = extractSection(content, NOTES_HEADING);
-	const combined = combineNotes([existingNotes, loose.join("\n")]);
+	const existingSummary = extractSection(content, SUMMARY_HEADING);
+	// What gets physically relocated into "## Notes" on a rebuild — never
+	// includes "## Summary", so its body is never duplicated into "## Notes"
+	// in the file itself.
+	const combinedForFile = combineNotes([existingNotes, loose.join("\n")]);
+	// What's actually sent to the LLM — also folds in "## Summary" so those
+	// bullets are never silently ignored, without touching the file for it.
+	const combinedForLLM = combineNotes([
+		existingNotes,
+		existingSummary,
+		loose.join("\n"),
+	]);
 
 	// Nothing loose to relocate: leave the content untouched.
-	if (loose.length === 0) return { notes: combined, content };
+	if (loose.length === 0) return { notes: combinedForLLM, content };
 
 	const rebuiltLines = [
 		...lines.slice(0, preStart),
 		...trimEdges(keptPreamble),
 		...lines.slice(preEnd),
 	];
-	const rebuilt = upsertSection(rebuiltLines.join("\n"), NOTES_HEADING, combined);
-	return { notes: combined, content: rebuilt };
+	const rebuilt = upsertSection(
+		rebuiltLines.join("\n"),
+		NOTES_HEADING,
+		combinedForFile
+	);
+	return { notes: combinedForLLM, content: rebuilt };
 }
