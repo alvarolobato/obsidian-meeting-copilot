@@ -49,6 +49,8 @@ export class PersonNameCache {
 	 * doomed network call per poll, forever).
 	 */
 	permanentlyBlocked = false;
+	/** Avoid spamming the console when parallel lookups hit the same failure. */
+	lookupFailureLogged = false;
 }
 
 function normEmail(email: string): string {
@@ -93,10 +95,13 @@ export async function resolveAttendeeLabel(
 		if (name === null) cache.miss.add(key);
 	} catch (err) {
 		cache.disabled = true;
-		console.warn(
-			"[Meeting Copilot] People directory name lookup failed; falling back to humanized emails.",
-			err
-		);
+		if (!cache.lookupFailureLogged) {
+			cache.lookupFailureLogged = true;
+			console.warn(
+				"[Meeting Copilot] People directory name lookup failed; falling back to humanized emails.",
+				err
+			);
+		}
 	}
 	return humanizeEmailName(key) || key;
 }

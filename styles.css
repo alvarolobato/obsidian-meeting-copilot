@@ -1450,6 +1450,13 @@ ul.mc-action-tasks {
 	box-shadow: none;
 }
 
+/* Disabled "Stopping…" state on the now-card / event-row stop buttons. */
+.mc-cal-now-cta:disabled,
+.mc-cal-event-btn:disabled {
+	opacity: 0.55;
+	cursor: default;
+}
+
 .mc-cal-picker-day:hover:not(:disabled) {
 	background: var(--mc-cal-chip);
 }

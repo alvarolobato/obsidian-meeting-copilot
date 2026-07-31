@@ -1,6 +1,6 @@
 # Meeting Copilot
 
-Granola-style meeting capture for Obsidian on macOS: Google Calendar → dual-channel recording → transcription (remote or on-device Whisper) → AI enrichment.
+Integrated meeting transcription, note-taking, and summarization for Obsidian on macOS: Google Calendar → dual-channel recording → transcription (remote or on-device Whisper) → AI summaries.
 
 ![Meeting Copilot dashboard and the "Coming up" agenda](docs/screenshot-dashboard.png)
 
@@ -54,11 +54,15 @@ OAuth tokens and any client secret are stored in per-vault local storage on your
 
 ## Attribution
 
-Meeting Copilot builds on generously-licensed open-source work:
+Meeting Copilot is an integrated meeting workflow built from permissively licensed open-source parts. It **vendors and adapts code** from the projects below — you do **not** need to install them separately. Full license texts are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
-- Base project and dual-channel ScreenCaptureKit recorder + Google Calendar integration: **[System Recording](https://github.com/yut0takagi/obsidian-system-recording)** by **Yuto Takagi** (0BSD).
+| Component | Source | Author | License | What we use |
+|-----------|--------|--------|---------|-------------|
+| Recorder & calendar | [System Recording](https://github.com/yut0takagi/obsidian-system-recording) | Yuto Takagi | 0BSD | Dual-channel ScreenCaptureKit recorder (`swift-helper/`), Google Calendar integration, and parts of the core plugin scaffolding |
+| Agenda sidebar | [Meetings Plus](https://github.com/jabaho9523/obsidian-meetings-plus) | Jacob Holm | 0BSD | Meeting agenda view (day grouping, meeting rows, status header, date picker, and related UI/styles) |
+| Remote transcription | [AI Transcriber](https://github.com/mssoftjp/obsidian-ai-transcriber) | Musashino Software | MIT | Transcription engine under `src/transcribe/vendor/` (audio chunking, VAD, Whisper/GPT-4o clients, cleaners, transcript merge, dictionary correction). Driven headlessly by Meeting Copilot — no AI Transcriber plugin required |
 
-See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for full credits.
+**Not from AI Transcriber:** on-device Whisper transcription runs in Meeting Copilot's own `system-recorder` Swift helper (whisper.cpp over Metal), not the vendored engine above.
 
 ## License
 

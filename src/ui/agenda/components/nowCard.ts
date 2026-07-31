@@ -6,6 +6,8 @@ export interface NowCardOptions {
 	parent: HTMLElement;
 	meeting: AgendaMeeting;
 	recordingThis: boolean;
+	/** True when a stop has been requested but the helper has not exited yet. */
+	stoppingThis: boolean;
 	/** Open the existing note (used whenever `meeting.note` is set). */
 	onOpenNote: (m: AgendaMeeting) => void;
 	/**
@@ -62,8 +64,9 @@ export function renderNowCard(opts: NowCardOptions): void {
 		}
 		const stop = actions.createEl("button", {
 			cls: "mc-cal-now-cta is-danger",
-			text: a.actions.stop,
+			text: opts.stoppingThis ? a.actions.stopping : a.actions.stop,
 		});
+		stop.disabled = opts.stoppingThis;
 		stop.addEventListener("click", () => opts.onStop());
 	} else {
 		const primary = actions.createEl("button", {

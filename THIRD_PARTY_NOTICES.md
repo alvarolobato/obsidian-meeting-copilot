@@ -1,19 +1,20 @@
 # Third-party notices
 
-Meeting Copilot incorporates and adapts code from the following projects. We are
-grateful to their authors. All are permissively licensed; attribution is provided
-here as a courtesy (0BSD does not legally require it).
+Meeting Copilot is an integrated meeting transcription, note-taking, and
+summarization system for Obsidian. It incorporates and adapts code from the
+following projects. We are grateful to their authors. All are permissively
+licensed; attribution is provided here as a courtesy (0BSD does not legally
+require it).
 
-## System Recording (base project)
+## System Recording (recorder and calendar integration)
 
 - Author: Yuto Takagi
 - Source: https://github.com/yut0takagi/obsidian-system-recording
 - License: 0BSD
 
-Meeting Copilot is a fork of System Recording. The dual-channel ScreenCaptureKit
-recorder (`swift-helper/`, `src/binary*.ts`, `src/recorder*`), the Google Calendar
-integration (`src/calendar/`), and the core plugin scaffolding originate from this
-project.
+The dual-channel ScreenCaptureKit recorder (`swift-helper/`, `src/binary*.ts`,
+`src/recorder*`), the Google Calendar integration (`src/calendar/`), and parts
+of the core plugin scaffolding incorporate code from this project under 0BSD.
 
 ```
 Copyright (C) 2020-2025 by Dynalist Inc.

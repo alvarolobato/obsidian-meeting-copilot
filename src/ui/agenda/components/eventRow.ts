@@ -22,6 +22,8 @@ export interface RowHandlers {
 	onSkip: (m: AgendaMeeting) => void;
 	/** True while this meeting is the one actively recording. */
 	isRecordingThis: (m: AgendaMeeting) => boolean;
+	/** True when a stop has been requested but the helper has not exited yet. */
+	isStoppingThis: (m: AgendaMeeting) => boolean;
 }
 
 export interface EventRowOptions {
@@ -82,13 +84,15 @@ export function renderEventRow(opts: EventRowOptions): void {
 		}
 	} else {
 		if (handlers.isRecordingThis(meeting)) {
-			rowAction(
+			const stoppingThis = handlers.isStoppingThis(meeting);
+			const stopBtn = rowAction(
 				actions,
 				"square",
-				a.actions.stop,
+				stoppingThis ? a.actions.stopping : a.actions.stop,
 				() => handlers.onStop(),
 				"is-danger"
 			);
+			stopBtn.disabled = stoppingThis;
 		} else if (isLive || isUpcoming || meeting.recording) {
 			// Record stays available even after a recording exists — a new take
 			// extends the same meeting — so relabel it when additive.
@@ -135,7 +139,7 @@ function rowAction(
 	label: string,
 	onClick: () => void,
 	extra?: string
-): void {
+): HTMLButtonElement {
 	const btn = parent.createEl("button", {
 		cls: extra ? `mc-cal-event-btn ${extra}` : "mc-cal-event-btn",
 		attr: { "aria-label": label },
@@ -145,6 +149,7 @@ function rowAction(
 		evt.stopPropagation();
 		onClick();
 	});
+	return btn;
 }
 
 export interface MeetingMenuOptions {
@@ -205,8 +210,13 @@ export function populateMeetingMenu(
 	if (handlers.isRecordingThis(meeting)) {
 		menu.addItem((item) =>
 			item
-				.setTitle(a.actions.stop)
+				.setTitle(
+					handlers.isStoppingThis(meeting)
+						? a.actions.stopping
+						: a.actions.stop
+				)
 				.setIcon("square")
+				.setDisabled(handlers.isStoppingThis(meeting))
 				.onClick(() => handlers.onStop())
 		);
 	}

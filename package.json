@@ -1,7 +1,7 @@
 {
 	"name": "obsidian-meeting-copilot",
 	"version": "0.5.2",
-	"description": "Calendar-driven meeting notes with dual-channel (system + mic) recording for Zoom, Meet, and Teams.",
+	"description": "Integrated meeting transcription, note-taking, and summarization for Obsidian on macOS: Google Calendar sync, dual-channel recording, transcription, and AI summaries.",
 	"main": "main.js",
 	"type": "module",
 	"scripts": {

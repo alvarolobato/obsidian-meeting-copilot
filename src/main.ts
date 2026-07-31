@@ -1286,14 +1286,27 @@ export default class SystemRecordingPlugin extends Plugin {
         }
     }
 
-    private stopRecording() {
+    private stopRecording(opts?: { notice?: boolean }) {
+        const showNotice = opts?.notice !== false;
         if (!this.recorder.isRecording) {
-            new Notice(t().notices.notRecording);
+            if (showNotice) new Notice(t().notices.notRecording);
+            return;
+        }
+
+        this.dismissStopPrompt();
+        if (this.recorder.hasStopBeenSignaled) {
+            if (showNotice) new Notice(t().notices.stoppingRecording);
             return;
         }
 
         this.recorder.stop();
-        new Notice(t().notices.stoppingRecording);
+        this.agendaEvents.emit("changed", undefined);
+        if (showNotice) new Notice(t().notices.stoppingRecording);
+    }
+
+    /** Stop-file written; helper has not yet reported `stopped`. */
+    private isStopInProgress(): boolean {
+        return this.recorder.isRecording && this.recorder.hasStopBeenSignaled;
     }
 
     /**
@@ -1895,6 +1908,12 @@ export default class SystemRecordingPlugin extends Plugin {
 		// don't leave a stop action that could kill the next take.
 		if (this.replacingDepth > 0) {
 			notifLog("promptStopRecording: suppressed (replace in flight)", {
+				title,
+			});
+			return;
+		}
+		if (this.isStopInProgress()) {
+			notifLog("promptStopRecording: suppressed (stop in progress)", {
 				title,
 			});
 			return;
@@ -2537,6 +2556,10 @@ export default class SystemRecordingPlugin extends Plugin {
 		return m.note != null && recordingNotePath === m.note.path;
 	}
 
+	private isStoppingMeeting(m: AgendaMeeting): boolean {
+		return this.isStopInProgress() && this.isRecordingMeeting(m);
+	}
+
 	/** Records a new take directly into an existing note (no createMeetingNote). */
 	private async recordIntoNote(
 		file: TFile,
@@ -2663,7 +2686,7 @@ export default class SystemRecordingPlugin extends Plugin {
 		switch (action) {
 			case "auto-stop":
 				new Notice(t().event.autoStopped(event.summary));
-				this.stopRecording();
+				this.stopRecording({ notice: false });
 				break;
 			case "prompt-stop":
 				this.promptStopRecording(
@@ -2731,6 +2754,7 @@ export default class SystemRecordingPlugin extends Plugin {
             cancelAuthenticate: () => this.cancelAuthenticate(),
             fetchMeetings: (fromMs, toMs) => this.fetchAgendaMeetings(fromMs, toMs),
             isRecordingThis: (m) => this.isRecordingMeeting(m),
+            isStoppingThis: (m) => this.isStoppingMeeting(m),
             onOpenOrCreate: (m) => void this.openOrCreateNote(m),
             onCreateAndRecord: (m) => this.startRecordingForMeeting(m),
             onCreateNote: (m) => void this.createNoteOnly(m),
@@ -3945,6 +3969,7 @@ export default class SystemRecordingPlugin extends Plugin {
             },
             onSkip: () => {},
             isRecordingThis: (m) => this.isRecordingMeeting(m),
+            isStoppingThis: (m) => this.isStoppingMeeting(m),
         };
     }
 
@@ -5461,7 +5486,7 @@ export default class SystemRecordingPlugin extends Plugin {
                     this.currentMeetingNote?.basename ?? t().adhoc.defaultTitle;
                 if (this.settings.calendarAutoStop) {
                     new Notice(t().event.autoStopped(title));
-                    this.stopRecording();
+                    this.stopRecording({ notice: false });
                     return;
                 }
                 this.promptStopRecording(
