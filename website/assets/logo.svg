@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240" role="img" aria-label="Meeting Copilot logo">
+  <defs>
+    <linearGradient id="mc-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8b78ff"/>
+      <stop offset="1" stop-color="#5a46d6"/>
+    </linearGradient>
+    <linearGradient id="mc-gem" x1="0.5" y1="0" x2="0.5" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e6e1ff"/>
+    </linearGradient>
+    <clipPath id="mc-clip">
+      <path d="M120 44 L196 100 L120 208 L44 100 Z"/>
+    </clipPath>
+  </defs>
+
+  <!-- app badge -->
+  <rect x="16" y="16" width="208" height="208" rx="54" fill="url(#mc-bg)"/>
+
+  <!-- faceted gem body -->
+  <path d="M120 44 L196 100 L120 208 L44 100 Z" fill="url(#mc-gem)"/>
+
+  <!-- waveform carved into the gem (badge colour shows through as negative space) -->
+  <g clip-path="url(#mc-clip)" fill="url(#mc-bg)">
+    <rect x="82"  y="104" width="12" height="30" rx="6"/>
+    <rect x="102" y="86"  width="12" height="66" rx="6"/>
+    <rect x="122" y="74"  width="12" height="90" rx="6"/>
+    <rect x="142" y="92"  width="12" height="54" rx="6"/>
+    <rect x="162" y="110" width="12" height="22" rx="6"/>
+    <rect x="62"  y="112" width="12" height="18" rx="6"/>
+  </g>
+
+  <!-- crown facet lines for a cut-crystal feel -->
+  <g stroke="#c9c2ff" stroke-width="3" fill="none" opacity="0.9">
+    <path d="M44 100 L196 100"/>
+    <path d="M120 44 L120 100"/>
+  </g>
+</svg>
