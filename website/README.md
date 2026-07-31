@@ -1,12 +1,14 @@
 # Meeting Copilot website
 
-Static marketing + privacy site published to GitHub Pages. It provides the two pages
-Google OAuth verification requires: a public **home page** (`index.html`) and a
-**privacy policy** (`privacy.html`). Self-contained — no external fonts, scripts, or
-trackers, matching the plugin's privacy stance.
+Static marketing + privacy site published to GitHub Pages. It provides the pages
+Google OAuth verification requires: a public **home page** (`index.html`), a
+**privacy policy** (`privacy.html`), and **terms of service** (`terms.html`).
+Self-contained — no external fonts, scripts, or trackers, matching the plugin's
+privacy stance.
 
-The privacy policy here mirrors the canonical
-[`docs/privacy-policy.md`](../docs/privacy-policy.md); keep the two in sync.
+The privacy policy and terms of service here mirror the canonical
+[`docs/privacy-policy.md`](../docs/privacy-policy.md) and
+[`docs/terms-of-service.md`](../docs/terms-of-service.md); keep each pair in sync.
 
 ## Screenshots to add
 
@@ -57,6 +59,7 @@ custom domain you own is required for verification. The chosen domain is
 
 - App home page: `https://meetingcopilot.lobato.vip/`
 - Privacy policy: `https://meetingcopilot.lobato.vip/privacy.html`
+- Terms of service: `https://meetingcopilot.lobato.vip/terms.html`
 - Logo: [`assets/logo.svg`](./assets/logo.svg) — export a square PNG (≥120×120) for
   the OAuth consent screen.
 

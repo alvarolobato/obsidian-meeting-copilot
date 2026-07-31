@@ -96,6 +96,7 @@ event read that still lists attendees.
 - [ ] Developer contact email: `alvarolobato@gmail.com`.
 - [ ] App home page: `https://meetingcopilot.lobato.vip/`.
 - [ ] Privacy policy URL: `https://meetingcopilot.lobato.vip/privacy.html`.
+- [ ] Terms of service URL: `https://meetingcopilot.lobato.vip/terms.html`.
 - [ ] Authorized domain: `lobato.vip` — the **top private domain**, not the full
   subdomain. Verify the `lobato.vip` **domain property** in Search Console (DNS `TXT`)
   with the same Google account that owns the Cloud project; the
