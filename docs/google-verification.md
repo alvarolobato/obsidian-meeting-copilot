@@ -33,6 +33,11 @@ The directory/group scopes stay available for users who supply their own Google 
 credentials (Advanced settings), so power users keep name/group resolution without
 those scopes touching the published app's verification.
 
+> **Decision (2026-07-31):** verified app = **calendar-only**. The plugin-side change
+> that narrows the default requested scopes to calendar-only (keeping directory/groups
+> as a bring-your-own-credentials opt-in) is **owned by a separate app-code PR**, not
+> this docs/site branch. This pack assumes that change ships before submission.
+
 ---
 
 ## 2. Scope justifications (paste into Verification Center)
@@ -78,7 +83,7 @@ event read that still lists attendees.
   vault. OAuth tokens are stored in Obsidian per-vault local storage on the device.
 - Data is never sold, shared, or used for advertising or model training.
 - Adheres to the Google API Services User Data Policy, including Limited Use.
-- Full policy: `https://<DOMAIN>/privacy.html` (see [privacy-policy.md](./privacy-policy.md)).
+- Full policy: `https://meetingcopilot.lobato.vip/privacy.html` (see [privacy-policy.md](./privacy-policy.md)).
 
 ---
 
@@ -89,10 +94,22 @@ event read that still lists attendees.
 - [ ] App logo uploaded (`website/assets/logo.png`, square, ≥120×120).
 - [ ] User support email: `alvarolobato@gmail.com`.
 - [ ] Developer contact email: `alvarolobato@gmail.com`.
-- [ ] App home page: `https://<DOMAIN>/`.
-- [ ] Privacy policy URL: `https://<DOMAIN>/privacy.html`.
-- [ ] Authorized domain: `<DOMAIN>` (verified in Search Console).
+- [ ] App home page: `https://meetingcopilot.lobato.vip/`.
+- [ ] Privacy policy URL: `https://meetingcopilot.lobato.vip/privacy.html`.
+- [ ] Authorized domain: `lobato.vip` — the **top private domain**, not the full
+  subdomain. Verify the `lobato.vip` **domain property** in Search Console (DNS `TXT`)
+  with the same Google account that owns the Cloud project; the
+  `meetingcopilot.lobato.vip` home page is then covered.
 - [ ] Scopes: `calendar.readonly` (only).
+
+### DNS + hosting for `meetingcopilot.lobato.vip`
+
+- [ ] At the `lobato.vip` registrar/DNS, add a `CNAME`: `meetingcopilot` →
+  `alvarolobato.github.io`.
+- [ ] GitHub repo → **Settings → Pages**: Source = **GitHub Actions**; Custom domain =
+  `meetingcopilot.lobato.vip` (GitHub writes the `CNAME` file); then **Enforce HTTPS**.
+- [ ] Search Console: add `lobato.vip` as a **Domain** property and complete the DNS
+  `TXT` verification.
 
 ---
 
