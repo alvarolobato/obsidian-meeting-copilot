@@ -733,8 +733,9 @@ ul.mc-action-tasks {
 	--mc-cal-caption: #6c6b66;
 	--mc-cal-accent: var(--mc-cal-accent-meeting);
 	--mc-cal-accent-live: oklch(0.72 0.16 25);
+	--mc-cal-accent-one-on-one: oklch(0.62 0.12 250);
+	--mc-cal-accent-recurring: oklch(0.66 0.14 300);
 	--mc-cal-accent-meeting: oklch(0.68 0.13 190);
-	--mc-cal-accent-personal: oklch(0.62 0.12 250);
 	--mc-cal-accent-block: oklch(0.73 0.14 90);
 	--mc-cal-serif: "Source Serif 4", "Source Serif Pro", "Iowan Old Style",
 		Georgia, "Times New Roman", serif;
@@ -765,11 +766,14 @@ ul.mc-action-tasks {
 .mc-cal-accent-live {
 	--mc-cal-accent: var(--mc-cal-accent-live);
 }
+.mc-cal-accent-one-on-one {
+	--mc-cal-accent: var(--mc-cal-accent-one-on-one);
+}
+.mc-cal-accent-recurring {
+	--mc-cal-accent: var(--mc-cal-accent-recurring);
+}
 .mc-cal-accent-meeting {
 	--mc-cal-accent: var(--mc-cal-accent-meeting);
-}
-.mc-cal-accent-personal {
-	--mc-cal-accent: var(--mc-cal-accent-personal);
 }
 .mc-cal-accent-block {
 	--mc-cal-accent: var(--mc-cal-accent-block);
