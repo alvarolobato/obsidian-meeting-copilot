@@ -8,6 +8,22 @@ trackers, matching the plugin's privacy stance.
 The privacy policy here mirrors the canonical
 [`docs/privacy-policy.md`](../docs/privacy-policy.md); keep the two in sync.
 
+## Screenshots to add
+
+The landing page has labeled placeholder frames (diagonal-hatch "coming soon"
+panels). To fill one, drop the image in `assets/` and replace the matching
+`<div class="shot">…</div>` block in `index.html` with `<img src="assets/NAME.png"
+alt="…">`. Expected slots:
+
+| File | Where it shows |
+| --- | --- |
+| `hero.png` | Hero — a wide dashboard/agenda shot (16:10 looks best) |
+| `agenda.png` | "Your agenda, always in reach" |
+| `recording.png` | "Both sides of the conversation" |
+| `transcription.png` | "On-device or remote — your call" |
+| `enrichment.png` | "From transcript to takeaways" |
+| `dashboard.png` | "Notes that file themselves" |
+
 ## Local preview
 
 Open `index.html` in a browser, or serve the folder:

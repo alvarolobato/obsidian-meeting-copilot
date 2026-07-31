@@ -3,8 +3,8 @@
 <head>
 	<meta charset="utf-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1" />
-	<title>Meeting Copilot — Meeting notes & transcription for Obsidian</title>
-	<meta name="description" content="Meeting Copilot is an Obsidian plugin for macOS: Google Calendar sync, dual-channel recording, on-device or remote transcription, and AI meeting summaries — all on your own machine." />
+	<title>Meeting Copilot — Meeting notes, recording & transcription for Obsidian</title>
+	<meta name="description" content="Meeting Copilot is an Obsidian plugin for macOS: Google Calendar sync, dual-channel recording, on-device or remote transcription, speaker separation, and AI meeting summaries — all on your own Mac." />
 	<link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
 	<link rel="stylesheet" href="styles.css" />
 	<meta property="og:title" content="Meeting Copilot for Obsidian" />
@@ -21,14 +21,16 @@
 			<nav class="nav-links">
 				<a href="#features">Features</a>
 				<a href="#how">How it works</a>
+				<a href="#requirements">Requirements</a>
+				<a href="#install">Install</a>
 				<a href="#privacy">Privacy</a>
-				<a href="https://github.com/alvarolobato/obsidian-meeting-copilot">GitHub</a>
 			</nav>
-			<a class="btn" href="https://github.com/alvarolobato/obsidian-meeting-copilot#installation">Install</a>
+			<a class="btn" href="#install">Install</a>
 		</div>
 	</header>
 
 	<main>
+		<!-- ===================== HERO ===================== -->
 		<section class="hero">
 			<div class="wrap">
 				<span class="eyebrow">Obsidian plugin · macOS</span>
@@ -39,105 +41,247 @@
 					own endpoint, and drafts AI summaries — entirely on your Mac.
 				</p>
 				<div class="cta">
-					<a class="btn" href="https://github.com/alvarolobato/obsidian-meeting-copilot#installation">Get started</a>
+					<a class="btn" href="#install">Get started</a>
 					<a class="btn ghost" href="https://github.com/alvarolobato/obsidian-meeting-copilot">View on GitHub</a>
 				</div>
 				<p class="fineprint">Free &amp; open source · Runs locally · No account, no server</p>
+
+				<!-- Replace the .stage below with: <img src="assets/hero.png" alt="Meeting Copilot in Obsidian"> -->
+				<div class="shot hero-shot">
+					<div class="chrome"><span></span><span></span><span></span></div>
+					<div class="stage">Product screenshot — dashboard &amp; agenda sidebar (coming soon)</div>
+				</div>
 			</div>
 		</section>
 
+		<!-- ===================== FEATURE OVERVIEW GRID ===================== -->
 		<section id="features">
 			<div class="wrap">
 				<div class="section-head">
 					<h2>Everything a meeting note needs</h2>
-					<p>From the moment an event lands on your calendar to a searchable, summarized note in your vault.</p>
+					<p>From the moment an event lands on your calendar to a searchable, summarized note in your vault — without leaving Obsidian.</p>
 				</div>
 				<div class="grid">
 					<div class="card">
-						<div class="icon" aria-hidden="true">
-							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
-						</div>
+						<div class="icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></div>
 						<h3>Google Calendar sync</h3>
-						<p>Your agenda appears in a sidebar. Each event becomes a meeting note, and you're prompted around start and end times. Read-only — the plugin never edits your calendar.</p>
+						<p>An agenda sidebar, auto-created meeting notes, and start/stop prompts around each event. Read-only — never edits your calendar.</p>
 					</div>
 					<div class="card">
-						<div class="icon" aria-hidden="true">
-							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8"/></svg>
-						</div>
+						<div class="icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8"/></svg></div>
 						<h3>Dual-channel recording</h3>
-						<p>Captures system audio and your microphone on separate tracks, so you and the other side stay cleanly labeled in the transcript.</p>
+						<p>System audio and microphone captured on separate tracks, so you and everyone else stay cleanly labeled.</p>
 					</div>
 					<div class="card">
-						<div class="icon" aria-hidden="true">
-							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h3l2 6 4-16 2 10 2-4h3"/></svg>
-						</div>
-						<h3>On-device or remote transcription</h3>
-						<p>Run Whisper locally so audio never leaves your Mac, or point at any OpenAI-compatible endpoint you control. Your choice, your keys.</p>
+						<div class="icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h3l2 6 4-16 2 10 2-4h3"/></svg></div>
+						<h3>Flexible transcription</h3>
+						<p>On-device Whisper (audio never leaves your Mac) or any OpenAI-compatible endpoint you control, with speaker separation.</p>
 					</div>
 					<div class="card">
-						<div class="icon" aria-hidden="true">
-							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.5 5.5L20 11l-5.5 2.5L12 19l-2.5-5.5L4 11l5.5-2.5z"/></svg>
-						</div>
-						<h3>AI summaries</h3>
-						<p>Optional enrichment drafts a summary, decisions, and action items from the transcript — which can flow into your task manager.</p>
+						<div class="icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.5 5.5L20 11l-5.5 2.5L12 19l-2.5-5.5L4 11l5.5-2.5z"/></svg></div>
+						<h3>AI summaries &amp; actions</h3>
+						<p>Draft a summary, decisions, and action items from the transcript — with action items liftable into your task manager.</p>
 					</div>
 					<div class="card">
-						<div class="icon" aria-hidden="true">
-							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6"/><rect x="12" y="8" width="3" height="10"/><rect x="17" y="5" width="3" height="13"/></svg>
-						</div>
-						<h3>Meetings dashboard</h3>
-						<p>A generated dashboard rolls up your meeting notes, with recording retention that tidies up audio once a transcript is saved.</p>
+						<div class="icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6"/><rect x="12" y="8" width="3" height="10"/><rect x="17" y="5" width="3" height="13"/></svg></div>
+						<h3>Dashboard &amp; retention</h3>
+						<p>A generated meetings dashboard rolls up your notes, and recordings auto-prune once a transcript is safely saved.</p>
 					</div>
 					<div class="card">
-						<div class="icon" aria-hidden="true">
-							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-						</div>
+						<div class="icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
 						<h3>Local &amp; private</h3>
-						<p>No Meeting Copilot server exists. Everything lives in your Obsidian vault on your device — nothing is sent to the developer.</p>
+						<p>No Meeting Copilot server exists. Everything lives in your Obsidian vault on your device.</p>
 					</div>
 				</div>
 			</div>
 		</section>
 
-		<section id="how" style="background:var(--bg-2);border-block:1px solid var(--border)">
+		<!-- ===================== DETAILED FEATURE ROWS ===================== -->
+		<section style="background:var(--bg-2);border-block:1px solid var(--border);padding-block:32px">
+			<div class="wrap">
+
+				<div class="feature-row">
+					<div class="copy">
+						<span class="eyebrow-sm">Calendar</span>
+						<h3>Your agenda, always in reach</h3>
+						<p>Connect Google Calendar once and your upcoming meetings appear in a sidebar inside Obsidian. Each event can become a structured note, and you're nudged right when a meeting begins.</p>
+						<ul class="feature-list">
+							<li>Agenda sidebar with look-ahead / look-back windows</li>
+							<li>One click to create a note and start recording</li>
+							<li>Start / end prompts — in-app when Obsidian is frontmost, native macOS notification otherwise</li>
+							<li>Skips declined meetings; filter out noise with exclusion keywords</li>
+							<li>Read-only access — the plugin never writes to your calendar</li>
+						</ul>
+					</div>
+					<!-- Replace with: <img src="assets/agenda.png" alt="Agenda sidebar"> -->
+					<div class="shot"><div class="chrome"><span></span><span></span><span></span></div><div class="stage">Agenda sidebar &amp; meeting prompt (coming soon)</div></div>
+				</div>
+
+				<div class="feature-row reverse">
+					<div class="copy">
+						<span class="eyebrow-sm">Recording</span>
+						<h3>Both sides of the conversation</h3>
+						<p>A lightweight macOS helper captures system audio and your microphone as separate channels, so the transcript can tell you apart from everyone else — no virtual cables or extra apps.</p>
+						<ul class="feature-list">
+							<li>Separate “me” and “them” tracks for clean speaker labels</li>
+							<li>Ribbon button for instant ad-hoc recordings</li>
+							<li>Modern Core Audio process tap, with a fallback for older macOS</li>
+							<li>Compact 24&nbsp;kHz audio, saved as WAV or AAC</li>
+						</ul>
+					</div>
+					<!-- Replace with: <img src="assets/recording.png" alt="Recording controls"> -->
+					<div class="shot"><div class="chrome"><span></span><span></span><span></span></div><div class="stage">Recording controls &amp; status (coming soon)</div></div>
+				</div>
+
+				<div class="feature-row">
+					<div class="copy">
+						<span class="eyebrow-sm">Transcription</span>
+						<h3>On-device or remote — your call</h3>
+						<p>Run Whisper locally so audio never leaves your Mac, or point Meeting Copilot at any OpenAI-compatible endpoint with your own key. Either way you get accurate, speaker-aware transcripts.</p>
+						<ul class="feature-list">
+							<li>On-device Whisper models, downloaded once and checksum-verified</li>
+							<li>Remote engines (OpenAI, LiteLLM, …) for the fastest, highest-accuracy models</li>
+							<li>Speaker separation labels you vs. others</li>
+							<li>Language selection, custom dictionary, and auto-transcribe on stop</li>
+							<li>Optional fallback endpoint if the primary is unavailable</li>
+						</ul>
+					</div>
+					<!-- Replace with: <img src="assets/transcription.png" alt="Transcription settings"> -->
+					<div class="shot"><div class="chrome"><span></span><span></span><span></span></div><div class="stage">Transcript with speaker labels (coming soon)</div></div>
+				</div>
+
+				<div class="feature-row reverse">
+					<div class="copy">
+						<span class="eyebrow-sm">AI enrichment</span>
+						<h3>From transcript to takeaways</h3>
+						<p>Turn a raw transcript into a usable note: a concise summary, the decisions made, and clear next steps — using the model and prompt you choose. Enrichment can run automatically after each transcription.</p>
+						<ul class="feature-list">
+							<li>Summary, decisions, and action items drafted for you</li>
+							<li>Lift action items into checkboxes for the Tasks plugin</li>
+							<li>Bring your own model and customize the enrichment prompt</li>
+							<li>Auto-enrich after transcription, or on demand</li>
+						</ul>
+					</div>
+					<!-- Replace with: <img src="assets/enrichment.png" alt="AI summary"> -->
+					<div class="shot"><div class="chrome"><span></span><span></span><span></span></div><div class="stage">AI summary &amp; action items (coming soon)</div></div>
+				</div>
+
+				<div class="feature-row">
+					<div class="copy">
+						<span class="eyebrow-sm">Organize</span>
+						<h3>Notes that file themselves</h3>
+						<p>Meeting Copilot keeps your vault tidy: folder templates route one-offs, recurring series, 1:1s, and ad-hoc meetings to the right place, and a dashboard gives you one view of everything.</p>
+						<ul class="feature-list">
+							<li>Folder templates for one-off, series, 1:1, and ad-hoc meetings</li>
+							<li>Customizable note title patterns and templates</li>
+							<li>Generated meetings dashboard (pairs well with Dataview)</li>
+							<li>Retention trims old recordings — only after a transcript is saved</li>
+						</ul>
+					</div>
+					<!-- Replace with: <img src="assets/dashboard.png" alt="Meetings dashboard"> -->
+					<div class="shot"><div class="chrome"><span></span><span></span><span></span></div><div class="stage">Meetings dashboard (coming soon)</div></div>
+				</div>
+
+			</div>
+		</section>
+
+		<!-- ===================== HOW IT WORKS ===================== -->
+		<section id="how">
 			<div class="wrap">
 				<div class="section-head">
 					<h2>How it works</h2>
 					<p>Four steps from calendar invite to a finished note.</p>
 				</div>
 				<div class="steps">
-					<div class="step">
-						<h3>Connect your calendar</h3>
-						<p>Authenticate with Google once. Meeting Copilot reads your upcoming events, read-only.</p>
-					</div>
-					<div class="step">
-						<h3>Record the meeting</h3>
-						<p>Start recording from the agenda or the ribbon. Both audio channels are captured locally.</p>
-					</div>
-					<div class="step">
-						<h3>Transcribe</h3>
-						<p>Whisper runs on your Mac, or your configured endpoint transcribes — with speaker labels.</p>
-					</div>
-					<div class="step">
-						<h3>Summarize &amp; file</h3>
-						<p>AI enrichment drafts a summary and action items straight into your Obsidian note.</p>
-					</div>
+					<div class="step"><h3>Connect your calendar</h3><p>Authenticate with Google once. Meeting Copilot reads your upcoming events, read-only.</p></div>
+					<div class="step"><h3>Record the meeting</h3><p>Start from the agenda or the ribbon. Both audio channels are captured locally.</p></div>
+					<div class="step"><h3>Transcribe</h3><p>Whisper runs on your Mac, or your configured endpoint transcribes — with speaker labels.</p></div>
+					<div class="step"><h3>Summarize &amp; file</h3><p>AI enrichment drafts a summary and action items straight into your Obsidian note.</p></div>
 				</div>
 			</div>
 		</section>
 
+		<!-- ===================== REQUIREMENTS ===================== -->
+		<section id="requirements" style="background:var(--bg-2);border-block:1px solid var(--border)">
+			<div class="wrap">
+				<div class="section-head">
+					<h2>Requirements</h2>
+					<p>Meeting Copilot is a macOS-only desktop plugin — the recorder taps system audio natively.</p>
+				</div>
+				<div class="tiles">
+					<div class="tile"><h4>macOS 13.3+</h4><p>Apple Silicon. System-audio capture uses a modern Core Audio process tap (with a fallback on older releases).</p></div>
+					<div class="tile"><h4>Obsidian Desktop</h4><p>Version 1.8.7 or newer, on macOS. The plugin is desktop-only.</p></div>
+					<div class="tile"><h4>Google account</h4><p>Optional — only if you want calendar sync. Read-only access, revocable anytime.</p></div>
+					<div class="tile"><h4>An AI endpoint</h4><p>Optional — for remote transcription or AI summaries. Skip it entirely with on-device Whisper.</p></div>
+				</div>
+			</div>
+		</section>
+
+		<!-- ===================== INSTALL ===================== -->
+		<section id="install">
+			<div class="wrap">
+				<div class="section-head">
+					<h2>Install</h2>
+					<p>Two ways to get it. The helper that records system audio downloads automatically on first use.</p>
+				</div>
+				<div class="install-cols">
+					<div class="tile">
+						<h4>BRAT (recommended)</h4>
+						<p>Install the <a href="https://github.com/TfTHacker/obsidian42-brat">BRAT</a> plugin, then add this repository:</p>
+						<div class="codeblock">alvarolobato/obsidian-meeting-copilot</div>
+						<p>BRAT keeps you on the latest release automatically.</p>
+					</div>
+					<div class="tile">
+						<h4>Manual</h4>
+						<p>Download <code>main.js</code>, <code>manifest.json</code>, and <code>styles.css</code> from the <a href="https://github.com/alvarolobato/obsidian-meeting-copilot/releases/latest">latest release</a> into:</p>
+						<div class="codeblock">.obsidian/plugins/meeting-copilot/</div>
+						<p>Then enable the plugin and grant the macOS permission prompts on first recording.</p>
+					</div>
+				</div>
+				<p style="text-align:center;margin-top:26px;color:var(--text-dim)">
+					Optional companions: <a href="https://github.com/blacksmithgu/obsidian-dataview">Dataview</a> (dashboard) and
+					<a href="https://github.com/obsidian-tasks-group/obsidian-tasks">Tasks</a> (action-item tracking).
+				</p>
+			</div>
+		</section>
+
+		<!-- ===================== FAQ ===================== -->
+		<section style="background:var(--bg-2);border-block:1px solid var(--border)">
+			<div class="wrap">
+				<div class="section-head"><h2>Questions</h2></div>
+				<div class="faq">
+					<details open>
+						<summary>Is my data private?</summary>
+						<p>Yes. There's no Meeting Copilot server. Notes, recordings, and your Google login token stay on your device, and the plugin talks only to Google's official APIs and any AI endpoint you configure yourself. See the <a href="privacy.html">Privacy Policy</a>.</p>
+					</details>
+					<details>
+						<summary>Does transcription need the internet?</summary>
+						<p>No. On-device Whisper runs entirely on your Mac and never uploads audio. You can also choose a remote endpoint if you prefer the fastest cloud models — that choice is yours.</p>
+					</details>
+					<details>
+						<summary>Do I need an API key?</summary>
+						<p>Only for remote transcription or AI summaries. If you use on-device Whisper and skip enrichment, no key or account is required.</p>
+					</details>
+					<details>
+						<summary>Does it work on Windows or Linux?</summary>
+						<p>Not currently. The recorder captures system audio using macOS-specific APIs, so Meeting Copilot is macOS-only for now.</p>
+					</details>
+					<details>
+						<summary>Is it free?</summary>
+						<p>Yes — Meeting Copilot is free and open source. Any cost would come only from a cloud AI endpoint you choose to use.</p>
+					</details>
+				</div>
+			</div>
+		</section>
+
+		<!-- ===================== PRIVACY BANNER ===================== -->
 		<section id="privacy">
 			<div class="wrap">
 				<div class="privacy-banner">
 					<svg class="shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
 					<div class="body">
 						<h2>Privacy by design</h2>
-						<p>
-							Meeting Copilot has no backend. It talks only to Google's official APIs
-							from your own machine, reads your calendar read-only, and keeps your
-							notes, recordings, and login tokens on your device. Read the full
-							<a href="privacy.html">Privacy Policy</a>.
-						</p>
+						<p>Meeting Copilot has no backend. It talks only to Google's official APIs from your own machine, reads your calendar read-only, and keeps your notes, recordings, and login tokens on your device. Read the full <a href="privacy.html">Privacy Policy</a>.</p>
 					</div>
 				</div>
 			</div>
