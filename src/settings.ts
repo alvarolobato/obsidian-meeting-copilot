@@ -657,13 +657,17 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     });
             });
 
-        // Advanced: credential overrides — expanded by default so a build
-        // with no bundled credentials (or a user who needs their own Google
-        // Cloud project) can find the Client ID/Secret fields immediately,
-        // without knowing to click an easy-to-miss collapsed section first.
+        // Advanced: credential overrides — expanded by default only when
+        // there's no bundled Client ID/secret to fall back on (a community
+        // build), so that user *must* find the fields immediately rather
+        // than hunting for an easy-to-miss collapsed section. When bundled
+        // credentials already work (the common case), it stays collapsed.
         const advancedDetails = containerEl.createEl("details", {
             cls: "mc-advanced-credentials",
-            attr: { "data-mc-details": "google-credentials", open: "" },
+            attr: {
+                "data-mc-details": "google-credentials",
+                ...(this.plugin.hasBundledGoogleCredentials() ? {} : { open: "" }),
+            },
         });
         advancedDetails.createEl("summary", {
             text: s.settings.advancedCredentials.summary,

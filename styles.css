@@ -942,6 +942,7 @@ ul.mc-action-tasks {
 	border: 1px solid var(--mc-cal-border-hi);
 	border-radius: 12px;
 	background: var(--mc-cal-card-hi);
+	cursor: pointer;
 }
 
 .mc-cal-now.is-compact {

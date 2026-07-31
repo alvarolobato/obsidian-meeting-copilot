@@ -1353,6 +1353,15 @@ export default class SystemRecordingPlugin extends Plugin {
 		return this.oauth.isAuthenticated();
 	}
 
+	/** False for a community build compiled with no baked-in Google OAuth
+	 * client id/secret (see `src/auth/credentials.ts`) — used by the settings
+	 * tab to decide whether the Advanced Credentials section should expand
+	 * itself by default (the user *must* fill it in) or stay collapsed (the
+	 * common case, where bundled credentials already work). */
+	hasBundledGoogleCredentials(): boolean {
+		return Boolean(BUNDLED_CLIENT_ID && BUNDLED_CLIENT_SECRET);
+	}
+
 	/** Whether the current sign-in was granted the given scope — used by the
 	 * settings tab to show a "re-authenticate to grant this" hint when a
 	 * user turns an optional scope on after already having connected. */

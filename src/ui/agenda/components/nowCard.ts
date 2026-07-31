@@ -60,14 +60,20 @@ export function renderNowCard(opts: NowCardOptions): void {
 				cls: "mc-cal-now-cta",
 				text: a.actions.openNote,
 			});
-			openNote.addEventListener("click", () => opts.onOpenNote(meeting));
+			openNote.addEventListener("click", (evt) => {
+				evt.stopPropagation();
+				opts.onOpenNote(meeting);
+			});
 		}
 		const stop = actions.createEl("button", {
 			cls: "mc-cal-now-cta is-danger",
 			text: opts.stoppingThis ? a.actions.stopping : a.actions.stop,
 		});
 		stop.disabled = opts.stoppingThis;
-		stop.addEventListener("click", () => opts.onStop());
+		stop.addEventListener("click", (evt) => {
+			evt.stopPropagation();
+			opts.onStop();
+		});
 	} else {
 		const primary = actions.createEl("button", {
 			cls: "mc-cal-now-cta",
@@ -75,11 +81,14 @@ export function renderNowCard(opts: NowCardOptions): void {
 		});
 		// Keep the action in lockstep with the label: open the existing note, or
 		// (no note yet) create it and start recording.
-		primary.addEventListener("click", () =>
-			meeting.note
-				? opts.onOpenNote(meeting)
-				: opts.onCreateAndRecord(meeting)
-		);
+		primary.addEventListener("click", (evt) => {
+			evt.stopPropagation();
+			if (meeting.note) {
+				opts.onOpenNote(meeting);
+			} else {
+				opts.onCreateAndRecord(meeting);
+			}
+		});
 	}
 
 	if (opts.onOpenLink && meeting.meetingUrl) {
@@ -88,6 +97,14 @@ export function renderNowCard(opts: NowCardOptions): void {
 			attr: { "aria-label": a.actions.openLink },
 		});
 		setIcon(link, "video");
-		link.addEventListener("click", () => opts.onOpenLink!(meeting));
+		link.addEventListener("click", (evt) => {
+			evt.stopPropagation();
+			opts.onOpenLink!(meeting);
+		});
 	}
+
+	// Clicking anywhere else on the card opens the note (or creates it,
+	// never starting a recording as a side effect) — same primary-click
+	// semantics as a regular day-card event row (see eventRow.ts).
+	card.addEventListener("click", () => opts.onOpenNote(meeting));
 }
