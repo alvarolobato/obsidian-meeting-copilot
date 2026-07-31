@@ -148,20 +148,6 @@ header.site {
 		);
 	pointer-events: none;
 }
-.hero .eyebrow {
-	display: inline-flex;
-	align-items: center;
-	gap: 8px;
-	font-size: 0.8rem;
-	letter-spacing: 0.04em;
-	text-transform: uppercase;
-	color: var(--violet-bright);
-	background: var(--violet-dim);
-	border: 1px solid var(--border);
-	padding: 6px 14px;
-	border-radius: 999px;
-	margin-bottom: 26px;
-}
 .hero h1 {
 	font-size: clamp(2.1rem, 5vw, 3.4rem);
 	line-height: 1.08;
