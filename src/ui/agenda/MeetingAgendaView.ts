@@ -1,23 +1,21 @@
-// Portions adapted from obsidian-meetings-plus (0BSD)
-// https://github.com/jabaho9523/obsidian-meetings-plus
-// See THIRD_PARTY_NOTICES.md.
-
 import { ItemView, WorkspaceLeaf, moment, setIcon } from "obsidian";
 import { t } from "../../i18n";
-import type { TypedEventBus } from "../../util/events";
+import type { TypedEventBus } from "../../util/eventBus";
 import type { AgendaMeeting } from "./agendaModel";
-import { renderStatusHeader } from "./components/statusHeader";
-import { renderCurrentMeeting } from "./components/currentMeeting";
-import { renderMeetingRow, RowHandlers } from "./components/meetingRow";
+import { renderAgendaHeader } from "./components/agendaHeader";
+import { renderNowCard } from "./components/nowCard";
+import { renderEventRow, RowHandlers } from "./components/eventRow";
 
 export const VIEW_TYPE_AGENDA = "meeting-copilot-agenda";
-export const AGENDA_ICON = "calendar-clock";
+export const AGENDA_ICON = "calendar-days";
 
 const IMMINENT_WINDOW_MS = 10 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** Below this content width the view switches to its narrow side-panel layout. */
+const COMPACT_MAX_WIDTH = 460;
 
 export interface AgendaViewEvents extends Record<string, unknown> {
-	/** Emitted whenever meeting/recording state changes and the view should reload. */
+	/** Fired whenever meeting/recording state changes and the view should reload. */
 	changed: void;
 }
 
@@ -28,6 +26,10 @@ export interface AgendaViewHost {
 	setLookAhead(n: number): void;
 	isAuthenticated(): boolean;
 	authenticate(): Promise<void>;
+	/** True while a previously-started `authenticate()` is still waiting on the browser consent flow. */
+	isAuthenticating(): boolean;
+	/** Abandons an in-flight `authenticate()` call, if any. */
+	cancelAuthenticate(): void;
 	/** Fetch meetings within [fromMs, toMs], enriched with note/recording state. */
 	fetchMeetings(fromMs: number, toMs: number): Promise<AgendaMeeting[]>;
 	isRecordingThis(meeting: AgendaMeeting): boolean;
@@ -45,9 +47,15 @@ export interface AgendaViewHost {
 	events: TypedEventBus<AgendaViewEvents>;
 }
 
+/**
+ * The "Coming up" agenda. Renders one card per day in the look-ahead window,
+ * with a highlighted "Now" card for a live/imminent meeting. The same view
+ * serves both the main workspace tab and the narrow side panel — it measures its
+ * own width and drops to a compact layout below {@link COMPACT_MAX_WIDTH}.
+ */
 export class MeetingAgendaView extends ItemView {
-	private earlierTodayCollapsed = true;
-	private focusedDay = dayKey(new Date());
+	private earlierCollapsed = true;
+	private focusedDay = keyOf(new Date());
 	private meetings: AgendaMeeting[] = [];
 	private loading = false;
 	private errorMsg: string | null = null;
@@ -55,8 +63,7 @@ export class MeetingAgendaView extends ItemView {
 	private skipped = new Set<string>();
 	private unsub: (() => void) | null = null;
 	private tickTimer: number | null = null;
-	/** After a day-navigation re-render, scroll the list back to the top so the header stays in view. */
-	private scrollToTopOnRender = false;
+	private resetScroll = false;
 	private reloadSeq = 0;
 
 	constructor(leaf: WorkspaceLeaf, private host: AgendaViewHost) {
@@ -77,7 +84,7 @@ export class MeetingAgendaView extends ItemView {
 
 	onOpen(): Promise<void> {
 		this.unsub = this.host.events.on("changed", () => void this.reload());
-		// Re-render each minute so "Now / starts in N min" stays fresh.
+		// Re-render every minute so "Now / starts in N min" stays fresh.
 		this.tickTimer = window.setInterval(() => this.render(), 60_000);
 		void this.reload();
 		return Promise.resolve();
@@ -94,6 +101,11 @@ export class MeetingAgendaView extends ItemView {
 		return Promise.resolve();
 	}
 
+	/** Re-render on leaf resize so the compact/wide layout tracks the width. */
+	onResize(): void {
+		if (this.contentEl.childElementCount > 0) this.render();
+	}
+
 	/** Fetches the current window and re-renders. Safe against overlapping calls. */
 	async reload(): Promise<void> {
 		if (!this.host.isAuthenticated()) {
@@ -108,10 +120,9 @@ export class MeetingAgendaView extends ItemView {
 		const lookAhead = Math.max(1, this.host.getLookAhead());
 		const lookBack = Math.max(0, Math.min(30, this.host.getLookBack()));
 		const today = startOfDay(new Date());
-		const focused = dateFromKey(this.focusedDay);
+		const focused = dateOf(this.focusedDay);
 		const from = Math.min(today.getTime() - lookBack * DAY_MS, focused.getTime());
-		const to =
-			Math.max(today.getTime(), focused.getTime()) + lookAhead * DAY_MS;
+		const to = Math.max(today.getTime(), focused.getTime()) + lookAhead * DAY_MS;
 
 		try {
 			const meetings = await this.host.fetchMeetings(from, to);
@@ -130,6 +141,11 @@ export class MeetingAgendaView extends ItemView {
 		}
 	}
 
+	private isCompact(): boolean {
+		const w = this.contentEl.clientWidth;
+		return w > 0 && w < COMPACT_MAX_WIDTH;
+	}
+
 	private subtext(): string {
 		const a = t().agenda;
 		if (!this.host.isAuthenticated()) return a.notConnected;
@@ -142,27 +158,32 @@ export class MeetingAgendaView extends ItemView {
 	render(): void {
 		this.contentEl.empty();
 		const a = t().agenda;
-		const root = this.contentEl.createDiv({ cls: "meeting-copilot-container" });
+		const compact = this.isCompact();
+
+		const root = this.contentEl.createDiv({ cls: "mc-cal" });
+		if (compact) root.addClass("is-compact");
+		const shell = root.createDiv({ cls: "mc-cal-inner" });
 
 		const lookAhead = Math.max(1, this.host.getLookAhead());
 		const lookBack = Math.max(0, Math.min(30, this.host.getLookBack()));
 		const now = Date.now();
 		const today = startOfDay(new Date(now));
-		const todayKey = dayKey(today);
-		const minKey = dayKey(new Date(today.getTime() - lookBack * DAY_MS));
+		const todayKey = keyOf(today);
+		const minKey = keyOf(new Date(today.getTime() - lookBack * DAY_MS));
 		if (this.focusedDay < minKey) this.focusedDay = minKey;
 
 		const visible = this.visibleMeetings();
-		const daysWithMeetings = new Set(visible.map((m) => dayKey(m.start)));
+		const daysWithMeetings = new Set(visible.map((m) => keyOf(m.start)));
 
-		renderStatusHeader({
-			parent: root,
+		renderAgendaHeader({
+			parent: shell,
 			subtext: this.subtext(),
 			lookAheadDays: lookAhead,
 			focusedDay: this.focusedDay,
 			today: todayKey,
 			minDay: minKey,
 			daysWithMeetings,
+			compact,
 			onRefresh: () => void this.reload(),
 			onOpenSettings: () => this.host.openSettings(),
 			onPickDay: (k) => this.jumpToDay(k),
@@ -170,25 +191,22 @@ export class MeetingAgendaView extends ItemView {
 		});
 
 		if (!this.host.isAuthenticated()) {
-			this.renderConnectState(root);
+			this.renderConnectState(shell);
 			return;
 		}
 
 		if (this.errorMsg) {
-			root.createDiv({
-				cls: "meeting-copilot-error-row",
-				text: this.errorMsg,
-			});
+			shell.createDiv({ cls: "mc-cal-error", text: this.errorMsg });
 		}
 
 		const byDay = new Map<string, AgendaMeeting[]>();
 		for (const m of visible) {
-			const k = dayKey(m.start);
+			const k = keyOf(m.start);
 			if (!byDay.has(k)) byDay.set(k, []);
 			byDay.get(k)!.push(m);
 		}
 
-		// Current/imminent card — only when focused on today.
+		// "Now" card — only when focused on today and a meeting is imminent/live.
 		let currentId: string | null = null;
 		if (this.focusedDay === todayKey) {
 			const todays = byDay.get(todayKey) ?? [];
@@ -199,74 +217,62 @@ export class MeetingAgendaView extends ItemView {
 			);
 			if (current) {
 				currentId = current.id;
-				renderCurrentMeeting({
-					parent: root,
+				renderNowCard({
+					parent: shell,
 					meeting: current,
 					recordingThis: this.host.isRecordingThis(current),
 					stoppingThis: this.host.isStoppingThis(current),
+					compact,
 					onOpenNote: (m) => this.host.onOpenOrCreate(m),
 					onCreateAndRecord: (m) => this.host.onCreateAndRecord(m),
 					onStop: () => this.host.onStop(),
-					onOpenLink: current.meetingUrl
-						? (m) => this.openLink(m)
-						: null,
+					onOpenLink: current.meetingUrl ? (m) => this.openLink(m) : null,
 				});
 			}
 		}
 
-		const focusedDate = dateFromKey(this.focusedDay);
-		const agenda = root.createDiv({ cls: "meeting-copilot-agenda" });
+		const focusedDate = dateOf(this.focusedDay);
+		const list = shell.createDiv({ cls: "mc-cal-days" });
 		let emptyRun = 0;
 		let renderedAny = false;
 
 		for (let i = 0; i < lookAhead; i++) {
 			const date = new Date(focusedDate.getTime() + i * DAY_MS);
-			const key = dayKey(date);
+			const key = keyOf(date);
 			const dayMeetings = byDay.get(key) ?? [];
 			const isFocusedDay = i === 0;
-			const isTodayKey = key === todayKey;
 
 			if (dayMeetings.length === 0 && !isFocusedDay) {
 				emptyRun++;
 				continue;
 			}
 			if (emptyRun > 0) {
-				this.renderEmptyRun(agenda, emptyRun);
+				this.renderGap(list, emptyRun);
 				emptyRun = 0;
 			}
 			renderedAny = true;
-			const label = dayLabel(
+			this.renderDay(list, {
 				date,
-				isTodayKey,
-				isTomorrow(date, today),
-				isYesterday(date, today)
-			);
-			this.renderDay(agenda, {
 				key,
-				label,
 				meetings: dayMeetings,
-				isToday: isTodayKey,
+				isToday: key === todayKey,
 				isPast: key < todayKey,
 				now,
 				isFocusedDay,
 				currentId,
+				compact,
 			});
 		}
 
-		if (emptyRun > 0) this.renderEmptyRun(agenda, emptyRun);
+		if (emptyRun > 0) this.renderGap(list, emptyRun);
 		if (!renderedAny && emptyRun === 0) {
-			agenda.createDiv({
-				cls: "meeting-copilot-empty",
-				text: a.nothingScheduled,
-			});
+			list.createDiv({ cls: "mc-cal-empty", text: a.nothingScheduled });
 		}
 
-		if (this.scrollToTopOnRender) {
-			this.scrollToTopOnRender = false;
-			// Reset the list to the top so the header (and its Prev/Next buttons)
-			// stays visible. Previously we scrolled the focused day into view with
-			// `block: "start"`, which pushed the header off-screen — forcing a
-			// scroll back up before Next could be clicked again.
+		if (this.resetScroll) {
+			this.resetScroll = false;
+			// Return the list to the top so the header (and its Prev/Next controls)
+			// stays in view after a day jump.
 			window.requestAnimationFrame(() => {
 				this.contentEl.scrollTop = 0;
 			});
@@ -275,51 +281,80 @@ export class MeetingAgendaView extends ItemView {
 
 	private renderConnectState(parent: HTMLElement): void {
 		const a = t().agenda;
-		const box = parent.createDiv({ cls: "meeting-copilot-empty-cta" });
-		box.createEl("p", { text: a.connectPrompt });
+		const box = parent.createDiv({ cls: "mc-cal-connect" });
+
+		if (this.host.isAuthenticating()) {
+			box.createEl("p", {
+				cls: "mc-cal-connect-text",
+				text: a.connectConnecting,
+			});
+			const cancelBtn = box.createEl("button", {
+				cls: "mc-cal-connect-cta is-cancel",
+			});
+			const spinner = cancelBtn.createSpan({ cls: "mc-cal-connect-spinner" });
+			setIcon(spinner, "loader-circle");
+			cancelBtn.createSpan({ text: a.connectCancel });
+			cancelBtn.addEventListener("click", () => {
+				this.host.cancelAuthenticate();
+				// `authenticateCalendar()` always emits "changed" once the
+				// cancelled call actually settles (see main.ts), which this
+				// view already reloads on (see onOpen) — no extra wiring
+				// needed here, and it works even if this view instance wasn't
+				// the one that started the connect attempt.
+			});
+			return;
+		}
+
+		box.createEl("p", { cls: "mc-cal-connect-text", text: a.connectPrompt });
 		const btn = box.createEl("button", {
-			cls: "mod-cta",
+			cls: "mc-cal-connect-cta",
 			text: a.connectCta,
 		});
 		btn.addEventListener("click", () => {
-			void (async () => {
-				await this.host.authenticate();
-				await this.reload();
-			})();
+			// `authenticate()` synchronously flips `isAuthenticating()` to true
+			// before its first await, so rendering right after kicking it off
+			// (not after awaiting it) is what shows the connecting/cancel
+			// state. Completion (success, failure, or cancel) always emits
+			// "changed", which reloads this view the normal way.
+			void this.host.authenticate();
+			this.render();
 		});
 	}
 
 	private renderDay(
 		parent: HTMLElement,
 		o: {
+			date: Date;
 			key: string;
-			label: string;
 			meetings: AgendaMeeting[];
 			isToday: boolean;
 			isPast: boolean;
 			now: number;
 			isFocusedDay: boolean;
 			currentId: string | null;
+			compact: boolean;
 		}
 	): void {
 		const a = t().agenda;
-		const day = parent.createDiv({ cls: "meeting-copilot-day" });
-		day.setAttribute("data-day", o.key);
-		if (o.isToday) day.addClass("meeting-copilot-day-today");
-		if (o.isPast) day.addClass("meeting-copilot-day-past");
+		const day = parent.createDiv({ cls: "mc-cal-day" });
+		if (o.isToday) day.addClass("is-today");
+		if (o.isPast) day.addClass("is-past");
 
-		const header = day.createDiv({ cls: "meeting-copilot-day-header" });
-		header.createSpan({ cls: "meeting-copilot-day-label", text: o.label });
+		const date = day.createDiv({ cls: "mc-cal-day-date" });
+		date.createDiv({
+			cls: "mc-cal-day-num",
+			text: String(o.date.getDate()),
+		});
+		date.createDiv({
+			cls: "mc-cal-day-mon",
+			text: moment(o.date).format("MMM"),
+		});
+		date.createDiv({
+			cls: "mc-cal-day-dow",
+			text: moment(o.date).format("ddd"),
+		});
 
-		if (o.meetings.length === 0) {
-			day.createDiv({
-				cls: "meeting-copilot-day-empty-inline",
-				text: a.noMeetings,
-			});
-			return;
-		}
-
-		const body = day.createDiv({ cls: "meeting-copilot-day-body" });
+		const card = day.createDiv({ cls: "mc-cal-day-card" });
 
 		let toRender = o.meetings;
 		let earlier: AgendaMeeting[] = [];
@@ -331,62 +366,63 @@ export class MeetingAgendaView extends ItemView {
 		}
 
 		if (toRender.length === 0 && earlier.length === 0) {
-			day.createDiv({
-				cls: "meeting-copilot-day-empty-inline",
-				text: a.nothingElse,
+			card.createDiv({
+				cls: "mc-cal-day-empty",
+				text: o.meetings.length === 0 ? a.noMeetings : a.nothingElse,
 			});
 		}
 
 		for (const meeting of toRender) {
-			renderMeetingRow({
-				parent: body,
+			renderEventRow({
+				parent: card,
 				meeting,
 				now: o.now,
 				handlers: this.rowHandlers(),
+				compact: o.compact,
 			});
 		}
 
-		if (earlier.length > 0) this.renderEarlierToday(day, earlier, o.now);
+		if (earlier.length > 0) this.renderEarlier(card, earlier, o.now, o.compact);
 	}
 
-	private renderEarlierToday(
+	private renderEarlier(
 		parent: HTMLElement,
 		meetings: AgendaMeeting[],
-		now: number
+		now: number,
+		compact: boolean
 	): void {
 		const a = t().agenda;
-		const section = parent.createDiv({
-			cls: "meeting-copilot-earlier-section",
-		});
-		if (this.earlierTodayCollapsed) {
-			section.addClass("meeting-copilot-collapsed");
-		}
-		const header = section.createDiv({ cls: "meeting-copilot-earlier-header" });
-		const chevron = header.createSpan({ cls: "meeting-copilot-chevron" });
+		const section = parent.createDiv({ cls: "mc-cal-earlier" });
+		if (this.earlierCollapsed) section.addClass("is-collapsed");
+
+		const header = section.createDiv({ cls: "mc-cal-earlier-head" });
+		const chevron = header.createSpan({ cls: "mc-cal-earlier-chevron" });
 		setIcon(chevron, "chevron-down");
-		header.createSpan({ text: a.earlierToday });
+		header.createSpan({ cls: "mc-cal-earlier-label", text: a.earlierToday });
 		header.createSpan({
-			cls: "meeting-copilot-section-count",
+			cls: "mc-cal-earlier-count",
 			text: String(meetings.length),
 		});
 		header.addEventListener("click", () => {
-			this.earlierTodayCollapsed = !this.earlierTodayCollapsed;
+			this.earlierCollapsed = !this.earlierCollapsed;
 			this.render();
 		});
-		const body = section.createDiv({ cls: "meeting-copilot-earlier-body" });
+
+		const body = section.createDiv({ cls: "mc-cal-earlier-body" });
 		for (const meeting of meetings) {
-			renderMeetingRow({
+			renderEventRow({
 				parent: body,
 				meeting,
 				now,
 				handlers: this.rowHandlers(),
+				compact,
 			});
 		}
 	}
 
-	private renderEmptyRun(parent: HTMLElement, count: number): void {
+	private renderGap(parent: HTMLElement, count: number): void {
 		parent.createDiv({
-			cls: "meeting-copilot-empty-run",
+			cls: "mc-cal-gap",
 			text: t().agenda.daysWithoutEvents(count),
 		});
 	}
@@ -419,7 +455,7 @@ export class MeetingAgendaView extends ItemView {
 
 	private jumpToDay(k: string): void {
 		this.focusedDay = k;
-		this.scrollToTopOnRender = true;
+		this.resetScroll = true;
 		void this.reload();
 	}
 
@@ -439,35 +475,14 @@ function startOfDay(d: Date): Date {
 	return x;
 }
 
-export function dayKey(d: Date): string {
+function keyOf(d: Date): string {
 	const y = d.getFullYear();
 	const m = String(d.getMonth() + 1).padStart(2, "0");
 	const dd = String(d.getDate()).padStart(2, "0");
 	return `${y}-${m}-${dd}`;
 }
 
-function dateFromKey(k: string): Date {
+function dateOf(k: string): Date {
 	const [y, m, d] = k.split("-").map((x) => parseInt(x, 10));
 	return new Date(y!, (m ?? 1) - 1, d ?? 1);
-}
-
-function isTomorrow(d: Date, today: Date): boolean {
-	return dayKey(d) === dayKey(new Date(today.getTime() + DAY_MS));
-}
-
-function isYesterday(d: Date, today: Date): boolean {
-	return dayKey(d) === dayKey(new Date(today.getTime() - DAY_MS));
-}
-
-function dayLabel(
-	d: Date,
-	isToday: boolean,
-	isTom: boolean,
-	isYest: boolean
-): string {
-	const a = t().agenda;
-	if (isToday) return a.todayLabel;
-	if (isTom) return a.tomorrowLabel;
-	if (isYest) return a.yesterdayLabel;
-	return moment(d).format("ddd, MMM D");
 }

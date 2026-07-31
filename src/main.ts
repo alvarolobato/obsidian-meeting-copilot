@@ -44,7 +44,14 @@ import {
 } from "./transcribe/localModels";
 import * as path from "path";
 import * as fs from "fs";
-import { GoogleOAuth, type StoredTokens } from "./auth/googleOAuth";
+import {
+	CONTACTS_OTHER_READONLY_SCOPE,
+	CredentialsMissingError,
+	DIRECTORY_READONLY_SCOPE,
+	GoogleOAuth,
+	GROUPS_READONLY_SCOPE,
+	type StoredTokens,
+} from "./auth/googleOAuth";
 import { parseKeywords } from "./calendar/eventFilter";
 import { CalendarScheduler, GRACE_MS, ScheduledEvent } from "./calendar/scheduler";
 import { eventEndStopAction } from "./calendar/eventEnd";
@@ -134,9 +141,12 @@ import {
 	createPeopleDirectory,
 	PersonNameCache,
 } from "./calendar/personDirectory";
+import { syncOtherContacts } from "./calendar/otherContactsSync";
 import {
 	DIRECTORY_CACHE_FILENAME,
 	DirectoryCache,
+	OTHER_CONTACTS_RESYNC_INTERVAL_MS,
+	PEOPLE_MAX_REQUESTS_PER_MINUTE,
 	PeopleApiRateLimiter,
 } from "./calendar/directoryCache";
 import { findExpiredRecordings, underFolder } from "./recordings/retention";
@@ -184,8 +194,9 @@ import {
     shouldSuggestAdhocTitle,
 } from "./enrich/adhocTitle";
 import { RenameModal } from "./ui/renameModal";
+import { DashboardPromptModal } from "./ui/dashboardPromptModal";
 import { t } from "./i18n";
-import { TypedEventBus } from "./util/events";
+import { TypedEventBus } from "./util/eventBus";
 import {
     AgendaMeeting,
     buildNoteIndex,
@@ -202,7 +213,7 @@ import {
 import {
     populateMeetingMenu,
     RowHandlers,
-} from "./ui/agenda/components/meetingRow";
+} from "./ui/agenda/components/eventRow";
 import { registerIcons, RECORD_ICON } from "./ui/icons";
 import {
 	notifyOs,
@@ -312,12 +323,27 @@ export default class SystemRecordingPlugin extends Plugin {
 				this.settings.googleTokens = tokens;
 				await this.saveSettings();
 			},
+			getOptionalScopes: () => {
+				const scopes: string[] = [];
+				if (this.settings.scopeGroupsEnabled) scopes.push(GROUPS_READONLY_SCOPE);
+				if (this.settings.scopeDirectoryEnabled) scopes.push(DIRECTORY_READONLY_SCOPE);
+				if (this.settings.scopeOtherContactsEnabled) {
+					scopes.push(CONTACTS_OTHER_READONLY_SCOPE);
+				}
+				return scopes;
+			},
 		},
 		() => this.onCalendarAuthExpired()
 	);
 	private scheduler: CalendarScheduler | null = null;
 	/** True once the refresh token died; suppresses the looping calendar-error notice until reconnect. */
 	private authExpired = false;
+	/** Set while `authenticateCalendar()` is waiting on the browser consent flow — lets a "Cancel" button abandon it instead of leaving the button stuck forever. */
+	private authAbort: AbortController | null = null;
+	/** The in-flight `authenticateCalendar()` promise, if any — see {@link getAuthPromise}. */
+	private authPromise: Promise<void> | null = null;
+	/** True when this vault had no `data.json` at all before this load — see {@link loadSettings}. */
+	private isCleanInstall = false;
 	/** Tier 1 meeting detector + its poll interval id (macOS only). */
 	private detector: MeetingDetector | null = null;
 	private detectorIntervalId: number | null = null;
@@ -412,6 +438,8 @@ export default class SystemRecordingPlugin extends Plugin {
 	>();
 	/** Bumped to cancel an in-flight background expansion when a newer fetch wins. */
 	private groupExpandGeneration = 0;
+	/** Guards against overlapping otherContacts syncs (see scheduleOtherContactsSync). */
+	private otherContactsSyncInFlight = false;
 	private agendaEvents = new TypedEventBus<AgendaViewEvents>();
 
     async onload() {
@@ -711,7 +739,36 @@ export default class SystemRecordingPlugin extends Plugin {
 		this.registerDomEvent(document, "visibilitychange", () => {
 			if (document.visibilityState === "visible") this.onPromptWindowFocused();
 		});
+
+		this.app.workspace.onLayoutReady(() => this.maybeOfferDashboardCreation());
     }
+
+	/**
+	 * Offers to create the meetings dashboard note once, on a genuine clean
+	 * install (no prior `data.json` — see {@link loadSettings}) that doesn't
+	 * already have one (an upgrade where the user made one, or made one
+	 * before dismissing, shouldn't be asked again). Deferred to
+	 * `onLayoutReady` so it never competes with Obsidian's own startup
+	 * rendering.
+	 */
+	private maybeOfferDashboardCreation(): void {
+		if (!this.isCleanInstall) return;
+		if (this.settings.dashboardPromptDismissed) return;
+		if (this.dashboardNoteExists()) return;
+		const s = t().dashboardPrompt;
+		new DashboardPromptModal(this.app, {
+			heading: s.heading,
+			desc: s.desc,
+			createLabel: s.create,
+			laterLabel: s.later,
+			dontAskAgainLabel: s.dontAskAgain,
+			onCreate: () => void this.createDashboard(),
+			onDontAskAgain: () => {
+				this.settings.dashboardPromptDismissed = true;
+				void this.saveSettings();
+			},
+		}).open();
+	}
 
 	/** One-shot startup dump so "no notifications" reports have concrete context. */
 	private logNotificationEnvironment(): void {
@@ -786,6 +843,11 @@ export default class SystemRecordingPlugin extends Plugin {
                   sttModelId?: string;
               })
             | null;
+        // No `data.json` at all is Obsidian's own signal for "this plugin has
+        // never been configured on this vault before" — used to gate the
+        // one-time dashboard-creation prompt (see onload()) so it only offers
+        // on an actual clean install, not every upgrade.
+        this.isCleanInstall = raw === null;
         this.settings = Object.assign(
             {},
             DEFAULT_SETTINGS,
@@ -1291,17 +1353,95 @@ export default class SystemRecordingPlugin extends Plugin {
 		return this.oauth.isAuthenticated();
 	}
 
-	async authenticateCalendar(): Promise<void> {
+	/** False for a community build compiled with no baked-in Google OAuth
+	 * client id/secret (see `src/auth/credentials.ts`) — used by the settings
+	 * tab to decide whether the Advanced Credentials section should expand
+	 * itself by default (the user *must* fill it in) or stay collapsed (the
+	 * common case, where bundled credentials already work). */
+	hasBundledGoogleCredentials(): boolean {
+		return Boolean(BUNDLED_CLIENT_ID && BUNDLED_CLIENT_SECRET);
+	}
+
+	/** Whether the current sign-in was granted the given scope — used by the
+	 * settings tab to show a "re-authenticate to grant this" hint when a
+	 * user turns an optional scope on after already having connected. */
+	hasGoogleScope(scope: string): boolean {
+		return this.oauth.hasScope(scope);
+	}
+
+	/**
+	 * Coalesces concurrent callers onto one in-flight attempt: returns the same
+	 * promise if already running, rather than opening a second browser tab/
+	 * loopback server. {@link getAuthPromise} exposes that promise so the
+	 * settings tab's Cancel button can await it even if a *different* click
+	 * (e.g. from the agenda's Connect button) is the one that actually started
+	 * it — the agenda view itself doesn't need this: it just reloads on the
+	 * "changed" event this always emits below, regardless of who started or
+	 * cancelled the attempt.
+	 */
+	authenticateCalendar(): Promise<void> {
+		if (this.authPromise) return this.authPromise;
+		const promise = this.runAuthenticateCalendar();
+		this.authPromise = promise;
+		void promise.finally(() => {
+			this.authPromise = null;
+		});
+		return promise;
+	}
+
+	private async runAuthenticateCalendar(): Promise<void> {
+		const abort = new AbortController();
+		this.authAbort = abort;
 		try {
-			await this.oauth.authenticate();
+			await this.oauth.authenticate(abort.signal);
 			this.authExpired = false;
 			// New consent / token — retry Groups expansion from a clean slate.
 			this.resetGroupAttendeeExpansion();
 			void this.updateScheduler();
-			this.agendaEvents.emit("changed", undefined);
 		} catch (e) {
-			new Notice(e instanceof Error ? e.message : String(e));
+			if (e instanceof Error && e.name === "AbortError") {
+				new Notice(t().oauth.cancelled);
+			} else if (e instanceof CredentialsMissingError) {
+				// Not just an inert error notice: take the user straight to
+				// where they can fix it (the now always-expanded Advanced
+				// Credentials section) instead of leaving them to hunt for it.
+				new Notice(e.message);
+				this.openPluginSettings();
+			} else {
+				new Notice(e instanceof Error ? e.message : String(e));
+			}
+		} finally {
+			this.authAbort = null;
+			// Fires on every outcome (success, real failure, or cancel) so any
+			// open agenda view — even one created after this attempt started —
+			// reloads out of its connecting/cancel state, not just the instance
+			// that happened to click "Authenticate".
+			this.agendaEvents.emit("changed", undefined);
 		}
+	}
+
+	/** True while {@link authenticateCalendar} is waiting on the browser consent flow. */
+	isAuthenticating(): boolean {
+		return this.authAbort !== null;
+	}
+
+	/** True when a usable client id/secret pair (bundled or user-provided) is
+	 * available — false for a community build with no bundled credentials
+	 * until the user enters their own in the Advanced Credentials section. */
+	hasGoogleCredentials(): boolean {
+		return this.oauth.hasCredentials();
+	}
+
+	/** The in-flight {@link authenticateCalendar} call, if any — see that
+	 * method's doc comment for why this is looked up fresh rather than cached
+	 * per-view. */
+	getAuthPromise(): Promise<void> | null {
+		return this.authPromise;
+	}
+
+	/** Cancels an in-flight {@link authenticateCalendar} call, if any. */
+	cancelAuthenticate(): void {
+		this.authAbort?.abort();
 	}
 
 	/** Drop session expansion state so the next fetch re-looks up groups/names.
@@ -1332,16 +1472,32 @@ export default class SystemRecordingPlugin extends Plugin {
 			},
 		});
 		await this.directoryCache.load();
+		// Seed from the persisted timestamps so a reload's fresh rate limiter
+		// doesn't start its local count at zero against Google's real,
+		// server-side quota window (see PeopleApiRateLimiter's doc comment).
+		this.peopleRateLimiter = new PeopleApiRateLimiter(
+			PEOPLE_MAX_REQUESTS_PER_MINUTE,
+			() => Date.now(),
+			this.directoryCache.peopleRateLimitTimestamps,
+			(timestamps) => this.directoryCache.setPeopleRateLimitTimestamps(timestamps)
+		);
 	}
 
 	private createGroupDirectory() {
-		return createCloudIdentityDirectory(this.oauth, this.directoryCache);
+		return createCloudIdentityDirectory(
+			this.oauth,
+			this.directoryCache,
+			this.settings.scopeGroupsEnabled
+		);
 	}
 
 	private createPersonDirectory() {
 		return createPeopleDirectory(this.oauth, {
 			directoryCache: this.directoryCache,
 			rateLimiter: this.peopleRateLimiter,
+			debugLogging: this.settings.debugLogging,
+			nameCache: this.personNameCache,
+			enabled: this.settings.scopeDirectoryEnabled,
 		});
 	}
 
@@ -2147,6 +2303,40 @@ export default class SystemRecordingPlugin extends Plugin {
 	}
 
 	/**
+	 * Kicks off a background otherContacts sync (display names for people
+	 * you've corresponded with over Gmail — see `otherContactsSync.ts`) at
+	 * most once per {@link OTHER_CONTACTS_RESYNC_INTERVAL_MS}. No-ops when
+	 * the setting is off, not authenticated, already mid-sync, or the user
+	 * hasn't re-consented to the scope yet (setting just turned on, or an
+	 * old install predates it).
+	 */
+	private scheduleOtherContactsSync(): void {
+		if (!this.settings.scopeOtherContactsEnabled) return;
+		if (!this.isCalendarAuthenticated()) return;
+		if (this.otherContactsSyncInFlight) return;
+		if (!this.oauth.hasScope(CONTACTS_OTHER_READONLY_SCOPE)) return;
+		if (
+			Date.now() - this.directoryCache.otherContactsSyncedAt <
+			OTHER_CONTACTS_RESYNC_INTERVAL_MS
+		) {
+			return;
+		}
+		this.otherContactsSyncInFlight = true;
+		syncOtherContacts(this.oauth, this.directoryCache, this.peopleRateLimiter)
+			.then((result) => {
+				if (result.updated > 0) this.agendaEvents.emit("changed", undefined);
+			})
+			.catch((err) => {
+				mcLog("otherContacts", "sync failed", {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			})
+			.finally(() => {
+				this.otherContactsSyncInFlight = false;
+			});
+	}
+
+	/**
 	 * Await expansion for a single meeting before writing a note so attendees
 	 * don't land as an unexpanded group label when the user creates a note
 	 * before the background pass finishes.
@@ -2546,15 +2736,37 @@ export default class SystemRecordingPlugin extends Plugin {
 
     // MARK: - Meeting agenda
 
-    /** Opens (or reveals) the agenda view in the right sidebar. */
+    /**
+     * Opens (or reveals) the agenda view. The `agendaPlacement` setting decides
+     * whether it attaches to a main-panel tab (default) or the right sidebar; an
+     * already-open view is just revealed wherever it currently lives.
+     */
     async openAgenda(): Promise<void> {
         const { workspace } = this.app;
         let leaf = workspace.getLeavesOfType(VIEW_TYPE_AGENDA)[0] ?? null;
         if (!leaf) {
-            leaf = workspace.getRightLeaf(false);
+            leaf =
+                this.settings.agendaPlacement === "sidebar"
+                    ? workspace.getRightLeaf(false)
+                    : workspace.getLeaf("tab");
             await leaf?.setViewState({ type: VIEW_TYPE_AGENDA, active: true });
         }
         if (leaf) void workspace.revealLeaf(leaf);
+    }
+
+    /**
+     * Moves any already-open agenda view to wherever `agendaPlacement` now
+     * points. Without this, an existing leaf just sits where it was created —
+     * `openAgenda()` only picks a location for a *new* leaf — so flipping the
+     * setting silently did nothing until the view was closed (no in-app way to
+     * do that for a sidebar leaf) or the app restarted.
+     */
+    async relocateAgenda(): Promise<void> {
+        const { workspace } = this.app;
+        const existing = workspace.getLeavesOfType(VIEW_TYPE_AGENDA);
+        if (existing.length === 0) return;
+        for (const leaf of existing) leaf.detach();
+        await this.openAgenda();
     }
 
     /** Tells any open agenda view to reload (e.g. after a settings change). */
@@ -2572,6 +2784,8 @@ export default class SystemRecordingPlugin extends Plugin {
             },
             isAuthenticated: () => this.isCalendarAuthenticated(),
             authenticate: () => this.authenticateCalendar(),
+            isAuthenticating: () => this.isAuthenticating(),
+            cancelAuthenticate: () => this.cancelAuthenticate(),
             fetchMeetings: (fromMs, toMs) => this.fetchAgendaMeetings(fromMs, toMs),
             isRecordingThis: (m) => this.isRecordingMeeting(m),
             isStoppingThis: (m) => this.isStoppingMeeting(m),
@@ -3755,6 +3969,10 @@ export default class SystemRecordingPlugin extends Plugin {
                 : [],
             invitees: [],
             organizer: str("organizer") || null,
+            // Frontmatter doesn't carry the organizer's email (only a display
+            // label, if that) for this note-derived, non-calendar meeting.
+            organizerEmail: null,
+            organizerIsSelf: false,
             iCalUID: str("ical_uid") || null,
             recurringEventId: str("recurring_event_id") || null,
             oneOnOnePartner: str("one_on_one_with") || null,
@@ -3804,6 +4022,7 @@ export default class SystemRecordingPlugin extends Plugin {
         );
         this.applyCachedExpandedAttendees(events);
         this.scheduleGroupAttendeeExpand(events);
+        this.scheduleOtherContactsSync();
         const index = buildNoteIndex(this.app);
         return events
             .map((e) => toAgendaMeeting(e, index))
@@ -6350,6 +6569,18 @@ export default class SystemRecordingPlugin extends Plugin {
         return fm?.status === "recorded";
     }
 
+    /** Where the dashboard note lives (or would be created), given the current
+     * one-off folder template. Doesn't check existence — see {@link dashboardNoteExists}. */
+    private dashboardNotePath(): string {
+        const folder = templateStaticRoot(this.settings.oneOffFolderTemplate) || "Meetings";
+        return normalizePath(`${folder}/Meetings Dashboard.md`);
+    }
+
+    /** True when the dashboard note already exists at its conventional path. */
+    private dashboardNoteExists(): boolean {
+        return this.app.vault.getAbstractFileByPath(this.dashboardNotePath()) instanceof TFile;
+    }
+
     /**
      * Creates or refreshes the plugin-rendered meetings dashboard note. Only the
      * plugin-managed block between markers is rewritten, so user edits around it
@@ -6366,7 +6597,7 @@ export default class SystemRecordingPlugin extends Plugin {
                     /* created concurrently */
                 });
         }
-        const path = normalizePath(`${folder}/Meetings Dashboard.md`);
+        const path = this.dashboardNotePath();
         const block = buildDashboardBlock();
         const existing = this.app.vault.getAbstractFileByPath(path);
         let file: TFile;

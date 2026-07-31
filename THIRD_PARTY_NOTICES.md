@@ -30,30 +30,6 @@ OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTIO
 ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ```
 
-## Meetings Plus (agenda sidebar view)
-
-- Author: Jacob Holm
-- Source: https://github.com/jabaho9523/obsidian-meetings-plus
-- License: 0BSD
-
-The meeting agenda sidebar view is adapted from Meetings Plus. Specifically, the
-following files carry adapted code (and each has an attribution header):
-
-- `src/ui/agenda/MeetingAgendaView.ts` (agenda layout, day grouping, empty-run
-  collapsing, "earlier today" section) — from `src/ui/MeetingsPlusView.ts`
-- `src/ui/agenda/components/statusHeader.ts` — from `src/ui/components/status-header.ts`
-- `src/ui/agenda/components/datePicker.ts` — from `src/ui/components/date-picker.ts`
-- `src/ui/agenda/components/meetingRow.ts` — from `src/ui/components/meeting-row.ts`
-- `src/ui/agenda/components/currentMeeting.ts` — from `src/ui/components/current-meeting.ts`
-- `src/util/events.ts` — from `src/util/events.ts`
-- `src/calendar/meetingUrl.ts` (provider URL regexes) — from `src/calendar/parser.ts`
-- The `meeting-copilot-*` rules in `styles.css` — from Meetings Plus `styles.css`
-
-```
-Meetings Plus is distributed under the 0BSD license, which imposes no
-attribution requirement; this credit is provided as a courtesy.
-```
-
 ## AI Transcriber (vendored transcription engine)
 
 - Author: Musashino Software

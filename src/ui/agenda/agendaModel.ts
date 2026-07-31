@@ -25,6 +25,10 @@ export interface AgendaMeeting {
 	/** Raw invitees for deferred Cloud Identity group expansion. */
 	invitees: ExpandableAttendee[];
 	organizer: string | null;
+	/** The organizer's email (lowercased/trimmed); null when unavailable. */
+	organizerEmail: string | null;
+	/** True when the signed-in user organized the event. */
+	organizerIsSelf: boolean;
 	iCalUID: string | null;
 	recurringEventId: string | null;
 	/** The other attendee's display name (or email) for a 1:1; null for anything else. */
@@ -89,6 +93,8 @@ export function toAgendaMeeting(
 		attendees: ev.attendees,
 		invitees: ev.invitees,
 		organizer: ev.organizer,
+		organizerEmail: ev.organizerEmail,
+		organizerIsSelf: ev.organizerIsSelf,
 		iCalUID: ev.iCalUID,
 		recurringEventId: ev.recurringEventId,
 		oneOnOnePartner: ev.oneOnOnePartner,

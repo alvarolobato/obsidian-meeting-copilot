@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
 	DirectoryCache,
 	GROUP_TTL_MS,
+	PEOPLE_RATE_WINDOW_MS,
 	PEOPLE_TTL_MS,
 	PeopleApiRateLimiter,
 	type DirectoryCacheStore,
@@ -95,6 +96,36 @@ describe("DirectoryCache", () => {
 		expect(cache.getGroup("group@x.com")?.resource).toBe("groups/g");
 		expect(cache.getGroup("notgroup@x.com")).toBeUndefined();
 	});
+
+	it("persists and reloads rate-limit timestamps", async () => {
+		const store = memoryStore();
+		const now = vi.fn(() => 1_000_000);
+		const cache = new DirectoryCache(store, now, 0);
+		cache.setPeopleRateLimitTimestamps([999_000, 999_500, 1_000_000]);
+		await cache.flush();
+
+		const loaded = new DirectoryCache(store, now, 0);
+		await loaded.load();
+		expect(loaded.peopleRateLimitTimestamps).toEqual([
+			999_000, 999_500, 1_000_000,
+		]);
+	});
+
+	it("prunes stale rate-limit timestamps on load", async () => {
+		const store = memoryStore(
+			JSON.stringify({
+				version: 1,
+				people: {},
+				groups: {},
+				rateLimitTimestamps: [0, 500_000, 990_000],
+			})
+		);
+		// now = 1_000_000: only the last timestamp is within the last
+		// PEOPLE_RATE_WINDOW_MS (60s).
+		const cache = new DirectoryCache(store, () => 1_000_000, 0);
+		await cache.load();
+		expect(cache.peopleRateLimitTimestamps).toEqual([990_000]);
+	});
 });
 
 describe("PeopleApiRateLimiter", () => {
@@ -111,5 +142,40 @@ describe("PeopleApiRateLimiter", () => {
 		expect(limiter.waitMs()).toBeGreaterThan(0);
 		t = 60_001;
 		expect(limiter.waitMs()).toBe(0);
+	});
+
+	it("seeded with persisted timestamps, already counts toward the cap (a reload isn't a fresh 60/min)", () => {
+		const t = 1_000_000;
+		// Simulate a just-superseded instance having already made 3 of 3
+		// allowed requests moments ago; a fresh limiter with no memory of
+		// this would wrongly allow 3 more immediately.
+		const limiter = new PeopleApiRateLimiter(
+			3,
+			() => t,
+			[t - 100, t - 50, t - 10]
+		);
+		expect(limiter.waitMs()).toBeGreaterThan(0);
+	});
+
+	it("ignores seeded timestamps already outside the window", () => {
+		const t = 1_000_000;
+		const limiter = new PeopleApiRateLimiter(
+			3,
+			() => t,
+			[t - PEOPLE_RATE_WINDOW_MS - 1]
+		);
+		expect(limiter.waitMs()).toBe(0);
+	});
+
+	it("reports the running timestamp list via onChange on every record", () => {
+		const seen: number[][] = [];
+		let t = 0;
+		const limiter = new PeopleApiRateLimiter(5, () => t, [], (ts) =>
+			seen.push(ts)
+		);
+		limiter.record();
+		t = 10;
+		limiter.record();
+		expect(seen).toEqual([[0], [0, 10]]);
 	});
 });

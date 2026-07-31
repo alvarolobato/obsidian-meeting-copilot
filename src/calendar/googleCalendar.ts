@@ -28,6 +28,10 @@ export interface GCalEvent {
 	 */
 	invitees: ExpandableAttendee[];
 	organizer: string | null;
+	/** The organizer's email (lowercased/trimmed); null when unavailable. */
+	organizerEmail: string | null;
+	/** True when the signed-in user organized the event (`organizer.self`). */
+	organizerIsSelf: boolean;
 	/** Stable identifier shared across every instance of a recurring series. */
 	iCalUID: string | null;
 	/** Present only on instances of a recurring series; points at the master event. */
@@ -276,6 +280,9 @@ export async function listEvents(
 		const end = new Date(ev.end?.dateTime ?? "");
 		const organizer =
 			(ev.organizer?.displayName || ev.organizer?.email || "").trim() || null;
+		const organizerEmail =
+			(ev.organizer?.email ?? "").trim().toLowerCase() || null;
+		const organizerIsSelf = ev.organizer?.self === true;
 		return {
 			id: ev.id ?? "",
 			summary: ev.summary ?? "(no title)",
@@ -291,15 +298,17 @@ export async function listEvents(
 			attendees: mapAttendees(ev.attendees),
 			invitees: mapInvitees(ev.attendees),
 			organizer,
+			organizerEmail,
+			organizerIsSelf,
 			iCalUID: ev.iCalUID ?? null,
 			recurringEventId: ev.recurringEventId ?? null,
 			// 1:1 detection stays on the raw invite (a user+group is not a 1:1).
 			oneOnOnePartner: oneOnOnePartner(ev.attendees, {
-				organizerIsSelf: ev.organizer?.self === true,
+				organizerIsSelf,
 				attendeesOmitted: ev.attendeesOmitted === true,
 			}),
 			oneOnOnePartnerEmail: oneOnOnePartnerEmail(ev.attendees, {
-				organizerIsSelf: ev.organizer?.self === true,
+				organizerIsSelf,
 				attendeesOmitted: ev.attendeesOmitted === true,
 			}),
 		};

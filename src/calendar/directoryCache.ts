@@ -9,9 +9,22 @@ export const GROUP_TTL_MS = 7 * 24 * 60 * 60 * 1000;
  * expand can't 429 itself. Groups lookups are cheaper and uncapped here.
  */
 export const PEOPLE_MAX_REQUESTS_PER_MINUTE = 60;
+/** The People API quota's rolling window; shared by {@link PeopleApiRateLimiter}
+ * and the persisted timestamps below so both prune on the same boundary. */
+export const PEOPLE_RATE_WINDOW_MS = 60_000;
+/** Minimum gap between otherContacts syncs — this data (who you've emailed,
+ * their name) changes rarely, so a session/day boundary is plenty. */
+export const OTHER_CONTACTS_RESYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 /** Debounce disk writes after a burst of cache fills. */
 export const DIRECTORY_CACHE_SAVE_DEBOUNCE_MS = 1500;
 export const DIRECTORY_CACHE_FILENAME = "directory-cache.json";
+/**
+ * Only bump this for a breaking shape change — a version bump discards every
+ * cached entry on next load, and since names are cached ~365 days, that
+ * forces every still-cached person to be looked up again in one burst, which
+ * has blown through the People API's 90/min quota (429s) before. Prefer an
+ * additive field over a bump when possible.
+ */
 export const DIRECTORY_CACHE_VERSION = 1;
 
 export interface CachedPerson {
@@ -33,6 +46,28 @@ export interface DirectoryCacheFile {
 	version: number;
 	people: Record<string, CachedPerson>;
 	groups: Record<string, CachedGroup>;
+	/**
+	 * Epoch-ms timestamps of recent People API requests (see
+	 * {@link PeopleApiRateLimiter}), so a fresh plugin instance (a reload, not
+	 * a new day) knows how much of Google's real, server-side 60s quota
+	 * window is already spent instead of starting its local count at zero —
+	 * two reloads within the same minute previously could each believe they
+	 * were under the local cap while cumulatively exceeding Google's actual
+	 * 90/min. Optional/omittable: absent on old cache files, and irrelevant
+	 * once pruned to empty.
+	 */
+	rateLimitTimestamps?: number[];
+	/**
+	 * Google People API sync token for the user's "Other contacts" (see
+	 * `otherContactsSync.ts`). Lets a resync fetch only what changed since
+	 * last time instead of paging through the whole list again. `null`/absent
+	 * means the next sync does a full fetch (first run, or after the token
+	 * was rejected as expired).
+	 */
+	otherContactsSyncToken?: string | null;
+	/** Epoch ms of the last successful (full or incremental) otherContacts
+	 * sync; caps resync frequency since this data changes rarely. */
+	otherContactsSyncedAt?: number;
 }
 
 export interface DirectoryCacheStore {
@@ -59,6 +94,11 @@ export class DirectoryCache {
 	private saveTimer: ReturnType<typeof setTimeout> | null = null;
 	/** When set, People network calls should wait (429 / soft rate limit). */
 	peopleRateLimitedUntil = 0;
+	/** Recent People API request timestamps; seeds a fresh {@link PeopleApiRateLimiter}
+	 * after a reload. Pruned to {@link PEOPLE_RATE_WINDOW_MS} on load. */
+	peopleRateLimitTimestamps: number[] = [];
+	otherContactsSyncToken: string | null = null;
+	otherContactsSyncedAt = 0;
 
 	constructor(
 		private readonly store: DirectoryCacheStore | null,
@@ -99,6 +139,11 @@ export class DirectoryCache {
 					});
 				}
 			}
+			this.peopleRateLimitTimestamps = (parsed.rateLimitTimestamps ?? []).filter(
+				(t) => typeof t === "number" && isFresh(t, PEOPLE_RATE_WINDOW_MS, now)
+			);
+			this.otherContactsSyncToken = parsed.otherContactsSyncToken ?? null;
+			this.otherContactsSyncedAt = parsed.otherContactsSyncedAt ?? 0;
 		} catch (err) {
 			console.warn(
 				"[Meeting Copilot] Failed to load directory cache; starting empty.",
@@ -212,6 +257,22 @@ export class DirectoryCache {
 		this.peopleRateLimitedUntil = this.now() + cooldownMs;
 	}
 
+	/** Called by {@link PeopleApiRateLimiter} on every recorded request so its
+	 * state survives a plugin reload — see {@link DirectoryCacheFile.rateLimitTimestamps}. */
+	setPeopleRateLimitTimestamps(timestamps: number[]): void {
+		this.peopleRateLimitTimestamps = timestamps;
+		this.markDirty();
+	}
+
+	/** Records a completed otherContacts sync (see `otherContactsSync.ts`).
+	 * `syncToken: null` forces the next sync to do a full fetch (e.g. after
+	 * Google rejected the previous token as expired). */
+	setOtherContactsSynced(syncToken: string | null): void {
+		this.otherContactsSyncToken = syncToken;
+		this.otherContactsSyncedAt = this.now();
+		this.markDirty();
+	}
+
 	toJSON(): DirectoryCacheFile {
 		const now = this.now();
 		const people: Record<string, CachedPerson> = {};
@@ -222,7 +283,17 @@ export class DirectoryCache {
 		for (const [email, entry] of this.groups) {
 			if (isFresh(entry.at, GROUP_TTL_MS, now)) groups[email] = entry;
 		}
-		return { version: DIRECTORY_CACHE_VERSION, people, groups };
+		const rateLimitTimestamps = this.peopleRateLimitTimestamps.filter((t) =>
+			isFresh(t, PEOPLE_RATE_WINDOW_MS, now)
+		);
+		return {
+			version: DIRECTORY_CACHE_VERSION,
+			people,
+			groups,
+			rateLimitTimestamps,
+			otherContactsSyncToken: this.otherContactsSyncToken,
+			otherContactsSyncedAt: this.otherContactsSyncedAt,
+		};
 	}
 
 	private markDirty(): void {
@@ -261,20 +332,35 @@ export class DirectoryCache {
 /**
  * Sliding-window limiter for People API calls. Returns how many ms to wait
  * before the next call is allowed (0 = go now).
+ *
+ * Seedable with `initialTimestamps` and an `onChange` callback so its state
+ * can survive a plugin reload: Google's quota window is real-world-clock,
+ * server-side, and doesn't reset just because our process restarted, so a
+ * fresh limiter starting its local count at zero could believe it's under
+ * the local cap while a just-superseded instance already spent most of the
+ * same real 60s window — two reloads within a minute could cumulatively
+ * exceed Google's actual 90/min even though each stayed under our 60/min
+ * locally. See {@link DirectoryCacheFile.rateLimitTimestamps}.
  */
 export class PeopleApiRateLimiter {
-	private timestamps: number[] = [];
+	private timestamps: number[];
 
 	constructor(
 		private readonly maxPerMinute = PEOPLE_MAX_REQUESTS_PER_MINUTE,
-		private readonly now: () => number = () => Date.now()
-	) {}
+		private readonly now: () => number = () => Date.now(),
+		initialTimestamps: number[] = [],
+		private readonly onChange?: (timestamps: number[]) => void
+	) {
+		this.timestamps = [...initialTimestamps];
+		this.prune(this.now());
+	}
 
 	/** Record a request that is about to go out. */
 	record(): void {
 		const now = this.now();
 		this.prune(now);
 		this.timestamps.push(now);
+		this.onChange?.(this.timestamps.slice());
 	}
 
 	/** Ms until a slot frees, or 0 if under the cap. */
@@ -283,11 +369,11 @@ export class PeopleApiRateLimiter {
 		this.prune(now);
 		if (this.timestamps.length < this.maxPerMinute) return 0;
 		const oldest = this.timestamps[0]!;
-		return Math.max(0, 60_000 - (now - oldest) + 1);
+		return Math.max(0, PEOPLE_RATE_WINDOW_MS - (now - oldest) + 1);
 	}
 
 	private prune(now: number): void {
-		const cutoff = now - 60_000;
+		const cutoff = now - PEOPLE_RATE_WINDOW_MS;
 		while (this.timestamps.length > 0 && this.timestamps[0]! < cutoff) {
 			this.timestamps.shift();
 		}

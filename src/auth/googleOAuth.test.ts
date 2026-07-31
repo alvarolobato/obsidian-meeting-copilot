@@ -1,10 +1,15 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // `obsidian` is aliased to test/obsidian-mock.ts at runtime; import the test
 // hook from that same module directly so tsc sees its types too.
 import { __setRequestUrl } from "../../test/obsidian-mock";
 import {
 	GoogleOAuth,
 	AuthInvalidatedError,
+	CredentialsMissingError,
+	CALENDAR_READONLY_SCOPE,
+	CONTACTS_OTHER_READONLY_SCOPE,
+	DIRECTORY_READONLY_SCOPE,
+	GROUPS_READONLY_SCOPE,
 	type StoredTokens,
 	type OAuthStorage,
 } from "./googleOAuth";
@@ -23,6 +28,7 @@ function makeStorage(tokens: StoredTokens | null): {
 			getCredentials: () => ({ client_id: "id", client_secret: "sec" }),
 			getTokens: () => current,
 			setTokens,
+			getOptionalScopes: () => [],
 		},
 	};
 }
@@ -120,5 +126,186 @@ describe("GoogleOAuth.getAccessToken", () => {
 		const oauth = new GoogleOAuth(storage);
 		await expect(oauth.getAccessToken()).resolves.toBe("valid");
 		expect(calls).not.toHaveBeenCalled();
+	});
+});
+
+describe("GoogleOAuth.hasCredentials / authenticate credential guard", () => {
+	it("is true when the storage has bundled or user credentials", () => {
+		const { storage } = makeStorage(null);
+		const oauth = new GoogleOAuth(storage);
+		expect(oauth.hasCredentials()).toBe(true);
+	});
+
+	it("is false when getCredentials() returns null (e.g. a community build with no bundled secret and no override)", () => {
+		const storage: OAuthStorage = {
+			getCredentials: () => null,
+			getTokens: () => null,
+			setTokens: async () => {},
+			getOptionalScopes: () => [],
+		};
+		const oauth = new GoogleOAuth(storage);
+		expect(oauth.hasCredentials()).toBe(false);
+	});
+
+	it("authenticate() throws CredentialsMissingError (not a generic Error) when credentials are missing", async () => {
+		const storage: OAuthStorage = {
+			getCredentials: () => null,
+			getTokens: () => null,
+			setTokens: async () => {},
+			getOptionalScopes: () => [],
+		};
+		const oauth = new GoogleOAuth(storage);
+		await expect(oauth.authenticate()).rejects.toBeInstanceOf(
+			CredentialsMissingError
+		);
+	});
+});
+
+describe("GoogleOAuth.hasScope", () => {
+	it("is true when the stored token's granted scope includes it", () => {
+		const { storage } = makeStorage({
+			...expired,
+			scope:
+				"https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/contacts.other.readonly",
+		});
+		const oauth = new GoogleOAuth(storage);
+		expect(
+			oauth.hasScope(
+				"https://www.googleapis.com/auth/contacts.other.readonly"
+			)
+		).toBe(true);
+	});
+
+	it("is false for a scope added after the user's last consent (not in the granted string)", () => {
+		const { storage } = makeStorage({
+			...expired,
+			scope: "https://www.googleapis.com/auth/calendar.readonly",
+		});
+		const oauth = new GoogleOAuth(storage);
+		expect(
+			oauth.hasScope(
+				"https://www.googleapis.com/auth/contacts.other.readonly"
+			)
+		).toBe(false);
+	});
+
+	it("is false with no stored tokens at all", () => {
+		const { storage } = makeStorage(null);
+		const oauth = new GoogleOAuth(storage);
+		expect(oauth.hasScope("https://www.googleapis.com/auth/calendar.readonly")).toBe(
+			false
+		);
+	});
+});
+
+describe("GoogleOAuth.authenticate cancellation", () => {
+	beforeEach(() => {
+		// authenticate() opens the system browser and schedules its 5-minute
+		// timeout via `window.*` — stub just enough for the loopback server to
+		// start and be torn down without a real browser or jsdom.
+		(globalThis as unknown as { window: unknown }).window = {
+			open: vi.fn(),
+			setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms),
+			clearTimeout: (id: unknown) => clearTimeout(id as Parameters<typeof clearTimeout>[0]),
+		};
+	});
+
+	afterEach(() => {
+		delete (globalThis as unknown as { window?: unknown }).window;
+	});
+
+	it("throws AbortError immediately if the signal is already aborted", async () => {
+		const { storage } = makeStorage(null);
+		const oauth = new GoogleOAuth(storage);
+		const controller = new AbortController();
+		controller.abort();
+
+		await expect(oauth.authenticate(controller.signal)).rejects.toMatchObject({
+			name: "AbortError",
+		});
+	});
+
+	it("rejects with AbortError when cancelled while waiting on the browser redirect", async () => {
+		const { storage } = makeStorage(null);
+		const oauth = new GoogleOAuth(storage);
+		const controller = new AbortController();
+
+		const authPromise = oauth.authenticate(controller.signal);
+		// Give the loopback server a tick to bind its ephemeral port before
+		// cancelling, mirroring a user clicking "Cancel" mid-flight.
+		await new Promise((r) => setTimeout(r, 10));
+		controller.abort();
+
+		await expect(authPromise).rejects.toMatchObject({ name: "AbortError" });
+	});
+});
+
+describe("GoogleOAuth.authenticate scope composition", () => {
+	let openedUrl = "";
+	beforeEach(() => {
+		openedUrl = "";
+		(globalThis as unknown as { window: unknown }).window = {
+			open: (url: string) => {
+				openedUrl = url;
+			},
+			setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms),
+			clearTimeout: (id: unknown) => clearTimeout(id as Parameters<typeof clearTimeout>[0]),
+		};
+	});
+
+	afterEach(() => {
+		delete (globalThis as unknown as { window?: unknown }).window;
+	});
+
+	/** Starts authenticate(), lets it open the browser, then cancels — we only
+	 * need the requested URL, not a completed sign-in. */
+	async function authenticateAndCaptureScope(oauth: GoogleOAuth): Promise<string | null> {
+		const controller = new AbortController();
+		const authPromise = oauth.authenticate(controller.signal);
+		await new Promise((r) => setTimeout(r, 10));
+		controller.abort();
+		await expect(authPromise).rejects.toMatchObject({ name: "AbortError" });
+		return new URL(openedUrl).searchParams.get("scope");
+	}
+
+	it("always includes calendar.readonly plus only the currently-enabled optional scopes", async () => {
+		const { storage } = makeStorage(null);
+		const oauth = new GoogleOAuth({
+			...storage,
+			getOptionalScopes: () => [CONTACTS_OTHER_READONLY_SCOPE],
+		});
+		const scope = await authenticateAndCaptureScope(oauth);
+		expect(scope).toContain(CALENDAR_READONLY_SCOPE);
+		expect(scope).toContain(CONTACTS_OTHER_READONLY_SCOPE);
+		expect(scope).not.toContain(GROUPS_READONLY_SCOPE);
+		expect(scope).not.toContain(DIRECTORY_READONLY_SCOPE);
+	});
+
+	it("requests only calendar.readonly when every optional scope is turned off", async () => {
+		const { storage } = makeStorage(null);
+		const oauth = new GoogleOAuth({ ...storage, getOptionalScopes: () => [] });
+		const scope = await authenticateAndCaptureScope(oauth);
+		expect(scope).toBe(CALENDAR_READONLY_SCOPE);
+	});
+
+	it("includes all three optional scopes when all are enabled", async () => {
+		const { storage } = makeStorage(null);
+		const oauth = new GoogleOAuth({
+			...storage,
+			getOptionalScopes: () => [
+				GROUPS_READONLY_SCOPE,
+				DIRECTORY_READONLY_SCOPE,
+				CONTACTS_OTHER_READONLY_SCOPE,
+			],
+		});
+		const scope = await authenticateAndCaptureScope(oauth);
+		expect(scope).toBe(
+			[
+				CALENDAR_READONLY_SCOPE,
+				GROUPS_READONLY_SCOPE,
+				DIRECTORY_READONLY_SCOPE,
+				CONTACTS_OTHER_READONLY_SCOPE,
+			].join(" ")
+		);
 	});
 });

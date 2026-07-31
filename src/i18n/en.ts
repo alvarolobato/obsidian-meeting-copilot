@@ -185,11 +185,14 @@ export const en = {
 	},
 	agenda: {
 		title: "Meetings",
+		comingUp: "Coming up",
 		notConnected: "Not connected",
 		loading: "Loading…",
 		lastRefreshed: (rel: string) => `Updated ${rel}`,
 		connectPrompt: "Connect your Google Calendar to see meetings here.",
 		connectCta: "Connect Google Calendar",
+		connectConnecting: "Waiting for you to finish in the browser…",
+		connectCancel: "Cancel",
 		nothingScheduled: "Nothing scheduled.",
 		noMeetings: "No meetings",
 		nothingElse: "Nothing else scheduled",
@@ -298,6 +301,13 @@ export const en = {
 				`Couldn't complete the follow-up: ${msg}`,
 		},
 	},
+	dashboardPrompt: {
+		heading: "Create your meetings dashboard?",
+		desc: "A dashboard note gives you one place to see upcoming/past meetings, open action items, and follow-ups — updated live as you record and enrich meetings. You can also create it anytime from the command palette.",
+		create: "Create",
+		later: "Later",
+		dontAskAgain: "Don't ask again",
+	},
 	settings: {
 		// Version line at the top of the settings tab. Release builds show just
 		// the version; custom/local builds append this marker with provenance.
@@ -394,8 +404,10 @@ export const en = {
 			name: "Google authentication",
 			descAuthenticated: "Authenticated. Re-authenticating refreshes the token.",
 			descUnauthenticated: "Not authenticated. Click to connect your Google Calendar.",
+			descConnecting: "Waiting for you to finish in the browser…",
 			buttonReauthenticate: "Re-authenticate",
 			buttonAuthenticate: "Authenticate",
+			buttonCancel: "Cancel",
 		},
 		advancedCredentials: {
 			summary: "Advanced: custom OAuth credentials",
@@ -409,13 +421,30 @@ export const en = {
 			name: "Client secret",
 			desc: "OAuth client secret from your Google Cloud Desktop app.",
 		},
+		optionalScopes: {
+			heading: "Optional permissions",
+			desc: "Calendar access is always required. These extra permissions only improve attendee names on the agenda — turn any off to reduce what's requested at sign-in. Turning one back on needs a re-authenticate before Google actually grants it.",
+		},
+		scopeGroups: {
+			name: "Expand Google Group invitees",
+			desc: "When a calendar invite lists a Google Group (e.g. a team distribution list) as an attendee, expand it into the individual people on that group instead of showing the group's raw address. Uses the Cloud Identity Groups API (`cloud-identity.groups.readonly`). Off: group invitees show as one humanized group label instead of the people in it.",
+		},
+		scopeDirectory: {
+			name: "Resolve attendee names from your Workspace directory",
+			desc: "Looks up a real display name for attendees your calendar invite doesn't already label (e.g. a bare email address). Uses the People API's directory scope (`directory.readonly`) — some Workspace domains disable this for third-party apps regardless of this setting. Off: those attendees show a name guessed from their email address instead.",
+		},
+		scopeOtherContacts: {
+			name: "Resolve attendee names from Google \"Other contacts\"",
+			desc: "A second, independent source for attendee display names — your own auto-populated Gmail correspondence history, not your organization's directory — useful when the directory lookup above is blocked by a Workspace admin. Uses the People API's other-contacts scope (`contacts.other.readonly`). Off: those attendees show a name guessed from their email address instead.",
+		},
+		scopeReauthNeeded: "Re-authenticate above to grant this — your current sign-in predates it.",
 		calendarAutoRecord: {
 			name: "Calendar meeting notifications",
 			desc: "Notify you around each event's start with Join / Record options. Turn on 'Auto-start recording' below for hands-free recording.",
 		},
 		notifyBeforeStart: {
-			name: "Notify before start (minutes)",
-			desc: "How many minutes before a meeting starts to show the heads-up notification. 0 turns off the pre-start heads-up — you're still prompted at the start time (0–60).",
+			name: "Heads-up lead time (minutes)",
+			desc: "Give yourself a warning this many minutes ahead of a meeting's start. Set to 0 to skip the early warning — you'll still be prompted right at start time (0–60).",
 		},
 		calendarAutoStart: {
 			name: "Auto-start recording",
@@ -445,13 +474,19 @@ export const en = {
 			name: "Open meeting link automatically",
 			desc: "If the event has a meeting link (Google Meet, Zoom, Teams, or Webex), open it in the browser at the start time.",
 		},
+		agendaPlacement: {
+			name: "Agenda placement",
+			desc: "Whether the meeting agenda opens as a main-panel tab or in the right sidebar.",
+			main: "Main panel",
+			sidebar: "Side panel",
+		},
 		agendaLookAhead: {
-			name: "Agenda look-ahead (days)",
-			desc: "How many upcoming days the meeting agenda renders.",
+			name: "Agenda horizon (days)",
+			desc: "Furthest a scheduled meeting can be in the future and still show up in the agenda.",
 		},
 		agendaLookBack: {
-			name: "Agenda look-back (days)",
-			desc: "How many past days you can navigate back to in the agenda (0–30).",
+			name: "Agenda history (days)",
+			desc: "Furthest back you can page into past meetings from the agenda (0–30).",
 		},
 		notificationsHeading: "Notifications (macOS)",
 		notificationStyle: {
@@ -693,6 +728,7 @@ export const en = {
 		noRefreshToken:
 			"No refresh_token was returned. Add yourself as a test user on the OAuth consent screen and try again.",
 		authComplete: "✅ Calendar authentication complete",
+		cancelled: "Calendar authentication cancelled.",
 		timeout: "Authentication timed out (5 minutes).",
 		htmlError: (err: string) => `<h1>OAuth error</h1><p>${err}</p>`,
 		htmlStateMismatch: "<h1>state mismatch</h1>",
