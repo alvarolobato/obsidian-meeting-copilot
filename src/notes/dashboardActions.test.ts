@@ -28,6 +28,7 @@ function group(over: Partial<ActionNoteGroup>): ActionNoteGroup {
 		path: "Meetings/x.md",
 		title: "x",
 		date: new Date("2026-07-10T10:00:00"),
+		status: "",
 		tasks: [task({ text: "do it" })],
 		...over,
 	};

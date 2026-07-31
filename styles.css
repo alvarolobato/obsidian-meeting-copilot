@@ -475,16 +475,32 @@
 	flex-direction: column;
 }
 
-/* Same divider rhythm as the meetings lists' .mc-cal-event rows above, so
- * scrolling through this section reads as the same product. */
+/* Same divider rhythm — and the same coloured accent bar — as the meetings
+ * list above, so scrolling through this section reads as the same product. */
 .mc-action-note {
-	padding: 10px 2px;
+	display: flex;
+	gap: 10px;
+	padding: 10px 4px;
 	border-top: 1px solid var(--mc-cal-border);
 }
 
 .mc-action-note:first-child {
 	padding-top: 0;
 	border-top: none;
+}
+
+.mc-action-note-bar {
+	flex: none;
+	align-self: stretch;
+	width: 3px;
+	min-height: 20px;
+	border-radius: 2px;
+	background: var(--mc-cal-accent);
+}
+
+.mc-action-note-body {
+	flex: 1 1 auto;
+	min-width: 0;
 }
 
 .mc-action-note-header {
@@ -1182,21 +1198,28 @@ ul.mc-action-tasks {
 	gap: 6px;
 }
 
+/* Pill-shaped (fully rounded) rather than the square icon buttons elsewhere,
+ * with a border so they read as a control against the card instead of a
+ * flat icon — the border picks up the row's own accent colour on hover. */
 .mc-cal-event-btn {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: 26px;
-	height: 26px;
+	width: 28px;
+	height: 28px;
 	padding: 0;
-	border: none;
-	border-radius: 7px;
+	border: 1px solid var(--mc-cal-border-hi);
+	border-radius: 999px;
 	background: var(--mc-cal-chip);
 	color: var(--mc-cal-icon);
 	cursor: pointer;
 	box-shadow: none;
 	opacity: 0.85;
-	transition: background 0.12s ease, color 0.12s ease, opacity 0.12s ease;
+	transition:
+		background 0.12s ease,
+		color 0.12s ease,
+		opacity 0.12s ease,
+		border-color 0.12s ease;
 }
 
 .mc-cal-event:hover .mc-cal-event-btn {
@@ -1205,6 +1228,7 @@ ul.mc-action-tasks {
 
 .mc-cal-event-btn:hover {
 	background: var(--mc-cal-chip-hi);
+	border-color: var(--mc-cal-accent);
 	color: var(--mc-cal-text);
 }
 

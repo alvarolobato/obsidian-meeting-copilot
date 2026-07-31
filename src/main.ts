@@ -3581,8 +3581,17 @@ export default class SystemRecordingPlugin extends Plugin {
         },
         today: Date
     ): void {
-        const note = parent.createDiv({ cls: "mc-action-note" });
-        const header = note.createDiv({ cls: "mc-action-note-header" });
+        // Same accent-bar language as the meetings list above: coloured by
+        // pipeline status, falling back to the neutral "scheduled" tone for a
+        // foreign note that carries none.
+        const hasStatus = !!group.status && group.status !== "—";
+        const accentCls = hasStatus
+            ? `mc-cal-accent-status-${group.status}`
+            : "mc-cal-accent-status-scheduled";
+        const note = parent.createDiv({ cls: `mc-action-note ${accentCls}` });
+        note.createDiv({ cls: "mc-action-note-bar" });
+        const body = note.createDiv({ cls: "mc-action-note-body" });
+        const header = body.createDiv({ cls: "mc-action-note-header" });
         const file = this.app.vault.getAbstractFileByPath(group.path);
         const title = header.createEl("a", {
             cls: "mc-action-note-title internal-link",
@@ -3603,7 +3612,7 @@ export default class SystemRecordingPlugin extends Plugin {
             });
         }
 
-        const ul = note.createEl("ul", { cls: "mc-action-tasks" });
+        const ul = body.createEl("ul", { cls: "mc-action-tasks" });
         for (const task of group.tasks) {
             const li = ul.createEl("li", {
                 cls: task.done
@@ -3709,10 +3718,12 @@ export default class SystemRecordingPlugin extends Plugin {
                 typeof titleRaw === "string" && titleRaw
                     ? titleRaw
                     : file.basename;
+            const statusRaw = fm?.["status"];
             groups.push({
                 path: file.path,
                 title,
                 date: this.resolveNoteDate(file, fm),
+                status: typeof statusRaw === "string" ? statusRaw : "",
                 tasks,
             });
         }

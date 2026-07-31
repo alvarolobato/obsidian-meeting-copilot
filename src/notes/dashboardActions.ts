@@ -40,6 +40,8 @@ export interface ActionNoteGroup {
 	title: string;
 	/** The note's origin date (frontmatter/filename/mtime); null when unknown. */
 	date: Date | null;
+	/** The note's `status` frontmatter (scheduled/recorded/transcribed/enriched); empty when absent (a foreign note with no pipeline state). */
+	status: string;
 	tasks: ActionTask[];
 }
 
