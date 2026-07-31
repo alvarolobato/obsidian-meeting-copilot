@@ -239,21 +239,11 @@ export const en = {
 		/** View tab title and the ribbon icon's tooltip. */
 		title: "Meetings dashboard",
 		sections: {
-			attention: "Needs attention",
-			upcoming: "Upcoming meetings",
 			past: "Past meetings",
 			actions: "Open action items",
 			followups: "Meeting follow-ups",
 		},
 		attention: {
-			allClear: "All meetings are complete. 🎉",
-			count: (n: number) =>
-				`${n} meeting${n === 1 ? "" : "s"} need attention`,
-			refresh: "Refresh",
-			colMeeting: "Meeting",
-			colWhen: "When",
-			colStatus: "Status",
-			colActions: "Actions",
 			moreActions: "More actions",
 			missing: {
 				date: "date",
@@ -270,12 +260,10 @@ export const en = {
 				`${current} / ${total}`,
 		},
 		meetings: {
-			upcomingCount: (n: number) =>
-				`${n} upcoming meeting${n === 1 ? "" : "s"}`,
 			pastCount: (n: number) =>
 				`${n} past meeting${n === 1 ? "" : "s"}`,
-			upcomingEmpty: "No upcoming meetings.",
-			pastEmpty: "No past meetings yet.",
+			pastEmpty: "No meetings need attention, and nothing in the last couple of days.",
+			noDate: "No date",
 			loading: "Loading calendar…",
 			calendarError: "Couldn't load calendar meetings; showing notes only.",
 			createNote: "Create note",

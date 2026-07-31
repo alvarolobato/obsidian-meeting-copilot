@@ -101,7 +101,6 @@ import { isServiceFailure } from "./util/serviceFailure";
 import { computeAttention, type AttentionInput } from "./notes/attention";
 import {
     meetingRows,
-    type MeetingDirection,
     normalizePageSize,
     PAGE_SIZE_OPTIONS,
     paginate,
@@ -2691,9 +2690,8 @@ export default class SystemRecordingPlugin extends Plugin {
 
     private dashboardHost(): DashboardViewHost {
         return {
-            renderAttention: (el) => this.renderAttention(el),
-            renderMeetingsSection: (el, direction, page, force) =>
-                this.renderMeetingsSection(el, direction, page, force),
+            renderPastMeetings: (el, page, force) =>
+                this.renderPastMeetings(el, page, force),
             renderActionItems: (el, page, force) =>
                 this.renderActionItems(el, page, force),
             renderFollowUps: (el, page, force) =>
@@ -2774,180 +2772,8 @@ export default class SystemRecordingPlugin extends Plugin {
      * haven't finished the scheduled → recorded → transcribed → enriched
      * pipeline, each with buttons to open, transcribe, and enrich.
      */
-    private renderAttention(el: HTMLElement): void {
-        const restoreScroll = this.preserveScroll(el);
-        el.empty();
-        const d = t().dashboard.attention;
-        const acts = t().agenda.actions;
-
-        const roots = this.configuredMeetingRoots();
-        const byPath = new Map<string, TFile>();
-        const inputs: AttentionInput[] = [];
-        // Meeting notes can live in any of several folders now (per-series,
-        // per-1:1, ad-hoc, or wherever the user moved them). A note carrying
-        // our own `event_id` is unambiguously plugin-owned and always shown;
-        // otherwise (a foreign note that merely has `meeting_url`/`recording`
-        // frontmatter) only surface it when it also lives under one of the
-        // folders we're configured to write to — surfacing Transcribe/Enrich
-        // buttons for a note the plugin doesn't own would rewrite it.
-        for (const entry of scanMeetingNotes(this.app)) {
-            const recLink = recordingLinkTarget(entry.recording);
-            const hasRecording = recLink !== "";
-            const pluginOwned = entry.eventId !== null;
-            const legacyMatch =
-                (hasRecording || entry.hasMeetingUrl) &&
-                roots.some((root) => underFolder(entry.file.path, root));
-            if (!pluginOwned && !legacyMatch) continue;
-
-            const fm = this.app.metadataCache.getFileCache(entry.file)?.frontmatter as
-                | Record<string, unknown>
-                | undefined;
-            const titleRaw = fm?.["title"];
-            const title =
-                typeof titleRaw === "string" && titleRaw
-                    ? titleRaw
-                    : entry.file.basename;
-
-            // "Processing" = the plugin is already advancing this note on its
-            // own — the recording is transcribing/queued, or it's being
-            // enriched — so there's nothing for the user to do; skip it below.
-            const recDest = hasRecording
-                ? this.app.metadataCache.getFirstLinkpathDest(
-                      recLink,
-                      entry.file.path
-                  )
-                : null;
-            const processing =
-                this.taskQueue.has(this.enrichTaskId(entry.file.path)) ||
-                (recDest instanceof TFile &&
-                    this.taskQueue.has(recDest.path));
-
-            byPath.set(entry.file.path, entry.file);
-            inputs.push({
-                path: entry.file.path,
-                title,
-                start: entry.stamp ? parseStampDate(entry.stamp) : null,
-                status: entry.status,
-                hasRecording,
-                processing,
-            });
-        }
-
-        const rows = computeAttention(inputs);
-
-        const header = el.createDiv({ cls: "mc-attention-header" });
-        header.createSpan({ text: d.count(rows.length) });
-        const refresh = header.createEl("button", { text: d.refresh });
-        refresh.onclick = () => this.renderAttention(el);
-
-        if (rows.length === 0) {
-            el.createEl("p", { text: d.allClear, cls: "mc-attention-empty" });
-            restoreScroll();
-            return;
-        }
-
-        const table = el.createEl("table", { cls: "mc-attention" });
-        const head = table.createEl("thead").createEl("tr");
-        for (const h of [d.colMeeting, d.colWhen, d.colStatus, d.colActions]) {
-            head.createEl("th", { text: h });
-        }
-        const body = table.createEl("tbody");
-        const pad = (n: number): string => String(n).padStart(2, "0");
-        const statusLabels = t().dashboard.meetings.status as Record<string, string>;
-        const now = new Date();
-        // "Jul 30 · 16:00" — drops the year (same-year is the overwhelming
-        // common case) and never wraps, unlike the old "YYYY-MM-DD HH:mm".
-        const fmtWhen = (dt: Date): string => {
-            const datePart = dt.toLocaleDateString(undefined, {
-                month: "short",
-                day: "numeric",
-                year: dt.getFullYear() === now.getFullYear() ? undefined : "numeric",
-            });
-            return `${datePart} · ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
-        };
-
-        for (const row of rows) {
-            const file = byPath.get(row.path);
-            const tr = body.createEl("tr");
-
-            const nameTd = tr.createEl("td");
-            const link = nameTd.createEl("a", {
-                text: row.title,
-                cls: "internal-link",
-            });
-            link.onclick = (e): void => {
-                e.preventDefault();
-                if (file) this.openFileInTab(file);
-            };
-
-            tr.createEl("td", {
-                text: row.start ? fmtWhen(row.start) : "—",
-                cls: "mc-attention-when",
-            });
-
-            // Status + missing pieces share one column: a dot (colour already
-            // used by the meetings tables below, so the same colour means the
-            // same thing everywhere) plus its label, then the specific
-            // missing badges — a status word alone doesn't say what to do
-            // next, and a badge alone doesn't say how far the note got.
-            const statusTd = tr.createEl("td", { cls: "mc-attention-status" });
-            statusTd.createSpan({ cls: `mc-status-dot mc-status-${row.status}` });
-            statusTd.createSpan({
-                text: statusLabels[row.status] ?? row.status,
-                cls: "mc-attention-status-label",
-            });
-            for (const m of row.missing) {
-                statusTd.createSpan({
-                    text: d.missing[m],
-                    cls: `mc-badge mc-badge-${m}`,
-                });
-            }
-
-            const actTd = tr.createEl("td", { cls: "mc-attention-actions" });
-            if (!file) continue;
-            const meeting = this.agendaMeetingFromNote(file);
-
-            // One primary action inline; anything else (transcribe, enrich)
-            // lives behind a single overflow menu, same split-button pattern
-            // the agenda's own event rows use — a wall of text buttons per
-            // row is what made this table wide in the first place.
-            const openBtn = actTd.createEl("button", {
-                cls: "mc-icon-btn",
-                attr: { "aria-label": acts.openNote },
-            });
-            setIcon(openBtn, "file-text");
-            openBtn.onclick = (): void => this.openFileInTab(file);
-
-            const moreBtn = actTd.createEl("button", {
-                cls: "mc-icon-btn",
-                attr: { "aria-label": d.moreActions },
-            });
-            setIcon(moreBtn, "ellipsis");
-            moreBtn.onclick = (evt): void => {
-                const menu = new Menu();
-                if (meeting.recording) {
-                    menu.addItem((item) =>
-                        item
-                            .setTitle(acts.transcribe)
-                            .setIcon("captions")
-                            .onClick(() => void this.transcribeRecording(meeting))
-                    );
-                }
-                menu.addItem((item) =>
-                    item
-                        .setTitle(acts.enrich)
-                        .setIcon("sparkles")
-                        .onClick(() => void this.enqueueEnrich(file))
-                );
-                menu.showAtMouseEvent(evt);
-            };
-        }
-
-        restoreScroll();
-    }
-
     /**
-     * Fetches the calendar events for the dashboard's Upcoming/Past tables,
+     * Fetches the calendar events for the dashboard's past-meetings table,
      * over the *same* window the agenda sidebar uses (look-back/look-ahead
      * days), and caches the raw events briefly so the two blocks — and repeated
      * re-renders from paging/refresh — share a single request. Note/recording
@@ -3007,22 +2833,33 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /**
-     * Renders one of the dashboard's paginated meeting tables. It merges the
-     * vault's meeting notes with the calendar events the agenda already loads
-     * ({@link loadDashboardEvents}), so a scheduled meeting shows up before its
-     * note exists: those rows aren't links and carry a "create note" action,
-     * while noted rows link to the note. `direction` picks the bucket (upcoming
-     * = `start >= now`, soonest first; past = newest first) and its persisted
-     * per-page size (10/20/50/100). `page` is 1-based; the controls re-render
-     * this same element. `force` re-fetches the calendar (the Refresh button).
+     * Renders the dashboard's single "Past meetings" section: recent meeting
+     * notes/calendar events (the last {@link PAST_WINDOW_DAYS} days) plus any
+     * *older* recorded meeting that still needs a transcript or summary —
+     * those stay visible regardless of age and are flagged inline (missing-
+     * piece badges, an overflow menu for Transcribe/Enrich) instead of living
+     * in a separate "Needs attention" table. Merges the vault's meeting notes
+     * with the calendar events the agenda already loads
+     * ({@link loadDashboardEvents}): a scheduled meeting with no note yet
+     * shows a "create note" action; noted meetings link straight to the note.
+     * `page` is 1-based; the controls re-render this same element. `force`
+     * re-fetches the calendar (the Refresh button).
      */
-    private async renderMeetingsSection(
+    private async renderPastMeetings(
         el: HTMLElement,
-        direction: MeetingDirection,
         page = 1,
         force = false
     ): Promise<void> {
+        const PAST_WINDOW_DAYS = 2;
+        // Sentinel "start" for a row with no usable date at all (a broken
+        // frontmatter stamp) so it still sorts — to the very top, same as
+        // `computeAttention`'s own "broken date first" rule — without giving
+        // `DashboardMeetingRow.start` a null case just for this one row kind.
+        const NO_DATE_SENTINEL = new Date(8640000000000000);
+
         const d = t().dashboard.meetings;
+        const ad = t().dashboard.attention;
+        const acts = t().agenda.actions;
         const seq = this.nextRenderSeq(el);
         const restoreScroll = this.preserveScroll(el);
         // Only clear up front on the very first paint (nothing to preserve).
@@ -3043,11 +2880,11 @@ export default class SystemRecordingPlugin extends Plugin {
         // A newer render started while the calendar loaded — let it win.
         if (this.renderSeq.get(el) !== seq) return;
 
-        // Vault notes: any meeting note we own (`event_id`) or a legacy
-        // `meeting_url` note the dashboard has always listed.
+        const roots = this.configuredMeetingRoots();
         const notesByPath = new Map<string, TFile>();
         const meetingsByKey = new Map<string, AgendaMeeting>();
         const inputs: DashboardMeetingInput[] = [];
+        const attentionInputs: AttentionInput[] = [];
         // Collapse notes sharing a key (event id, or path for legacy url-only
         // notes) to the most recently modified one, so a duplicated `event_id`
         // (e.g. a sync-conflict copy) shows the meeting once, not twice.
@@ -3063,11 +2900,26 @@ export default class SystemRecordingPlugin extends Plugin {
             typeof v === "string"
                 ? v.trim().replace(/\/+$/, "").toLowerCase()
                 : "";
-        // One vault scan feeds both the noted-meeting inputs below and the
-        // note index used to dedup calendar events (reused, not re-walked).
+        // One vault scan feeds the noted-meeting inputs below, the "needs
+        // attention" inputs, and the note index used to dedup calendar events
+        // — reused, not re-walked. Two independent inclusion rules apply: the
+        // past-meetings list itself (any plugin-owned note, or a legacy
+        // `meeting_url` note wherever it lives) and "needs attention" (also
+        // requires a recording, and — for a foreign note — that it lives
+        // under one of our configured folders, so we don't offer to rewrite a
+        // note we don't own).
         const scanned = scanMeetingNotes(this.app);
         for (const entry of scanned) {
-            if (entry.eventId === null && !entry.hasMeetingUrl) continue;
+            const recLink = recordingLinkTarget(entry.recording);
+            const hasRecording = recLink !== "";
+            const pluginOwned = entry.eventId !== null;
+            const inPastList = pluginOwned || entry.hasMeetingUrl;
+            const inAttention =
+                pluginOwned ||
+                ((hasRecording || entry.hasMeetingUrl) &&
+                    roots.some((root) => underFolder(entry.file.path, root)));
+            if (!inPastList && !inAttention) continue;
+
             const fm = this.app.metadataCache.getFileCache(entry.file)
                 ?.frontmatter as Record<string, unknown> | undefined;
             const titleRaw = fm?.["title"];
@@ -3075,24 +2927,53 @@ export default class SystemRecordingPlugin extends Plugin {
                 typeof titleRaw === "string" && titleRaw
                     ? titleRaw
                     : entry.file.basename;
-            const url = normalizeUrl(fm?.["meeting_url"]);
-            if (url) notedUrls.add(url);
-            const key = entry.eventId ?? entry.file.path;
-            const mtime = entry.file.stat?.mtime ?? 0;
-            const existing = notedByKey.get(key);
-            if (existing && existing.mtime >= mtime) continue;
-            notedByKey.set(key, {
-                input: {
-                    key,
+            const start = entry.stamp ? parseStampDate(entry.stamp) : null;
+
+            if (inPastList) {
+                const url = normalizeUrl(fm?.["meeting_url"]);
+                if (url) notedUrls.add(url);
+                const key = entry.eventId ?? entry.file.path;
+                const mtime = entry.file.stat?.mtime ?? 0;
+                const existing = notedByKey.get(key);
+                if (!existing || existing.mtime < mtime) {
+                    notedByKey.set(key, {
+                        input: {
+                            key,
+                            title,
+                            start,
+                            status: entry.status ?? "",
+                            hasRecording,
+                            notePath: entry.file.path,
+                        },
+                        file: entry.file,
+                        mtime,
+                    });
+                }
+            }
+            if (inAttention) {
+                notesByPath.set(entry.file.path, entry.file);
+                // "Processing" = the plugin is already advancing this note on
+                // its own — the recording is transcribing/queued, or it's
+                // being enriched — so there's nothing for the user to do.
+                const recDest = hasRecording
+                    ? this.app.metadataCache.getFirstLinkpathDest(
+                          recLink,
+                          entry.file.path
+                      )
+                    : null;
+                const processing =
+                    this.taskQueue.has(this.enrichTaskId(entry.file.path)) ||
+                    (recDest instanceof TFile &&
+                        this.taskQueue.has(recDest.path));
+                attentionInputs.push({
+                    path: entry.file.path,
                     title,
-                    start: entry.stamp ? parseStampDate(entry.stamp) : null,
-                    status: entry.status ?? "",
-                    hasRecording: recordingLinkTarget(entry.recording) !== "",
-                    notePath: entry.file.path,
-                },
-                file: entry.file,
-                mtime,
-            });
+                    start,
+                    status: entry.status,
+                    hasRecording,
+                    processing,
+                });
+            }
         }
         for (const { input, file } of notedByKey.values()) {
             notesByPath.set(file.path, file);
@@ -3121,12 +3002,44 @@ export default class SystemRecordingPlugin extends Plugin {
             });
         }
 
-        const rows = meetingRows(inputs, new Date(), direction);
-        const pageSize = normalizePageSize(
-            direction === "past"
-                ? this.settings.dashboardPastPageSize
-                : this.settings.dashboardUpcomingPageSize
+        const attentionByPath = new Map(
+            computeAttention(attentionInputs).map((row) => [row.path, row])
         );
+
+        const now = new Date();
+        let rows = meetingRows(inputs, now, "past");
+        // Attention items the merge above doesn't already cover (a broken
+        // date, or matched only by the stricter attention predicate) still
+        // need a row of their own.
+        const represented = new Set(
+            rows.map((r) => r.notePath).filter((p): p is string => p !== null)
+        );
+        for (const ar of attentionByPath.values()) {
+            if (represented.has(ar.path)) continue;
+            rows.push({
+                key: ar.path,
+                title: ar.title,
+                start: ar.start ?? NO_DATE_SENTINEL,
+                status: ar.status,
+                hasRecording: true,
+                notePath: ar.path,
+            });
+            represented.add(ar.path);
+        }
+
+        // Only the last couple of days by default; a meeting that still needs
+        // attention stays visible regardless of age.
+        const cutoff = now.getTime() - PAST_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+        rows = rows
+            .filter((r) => {
+                const needsAttention = r.notePath
+                    ? attentionByPath.has(r.notePath)
+                    : false;
+                return needsAttention || r.start.getTime() >= cutoff;
+            })
+            .sort((a, b) => b.start.getTime() - a.start.getTime());
+
+        const pageSize = normalizePageSize(this.settings.dashboardPastPageSize);
         const view = paginate(rows, pageSize, page);
         // Remember the page so an auto-refresh re-renders where the user is.
         el.dataset.mcPage = String(view.page);
@@ -3141,10 +3054,7 @@ export default class SystemRecordingPlugin extends Plugin {
         }
 
         if (view.total === 0) {
-            el.createEl("p", {
-                text: direction === "past" ? d.pastEmpty : d.upcomingEmpty,
-                cls: "mc-meetings-empty",
-            });
+            el.createEl("p", { text: d.pastEmpty, cls: "mc-meetings-empty" });
         } else {
             // Card rows — the exact same .mc-cal-event markup the agenda's own
             // day cards use, so this list reads as part of the same product
@@ -3153,18 +3063,24 @@ export default class SystemRecordingPlugin extends Plugin {
             // the whole row clickable (open the note, or create one).
             const list = el.createDiv({ cls: "mc-cal-events" });
             const pad = (n: number): string => String(n).padStart(2, "0");
+            const isNoDate = (dt: Date): boolean =>
+                dt.getTime() === NO_DATE_SENTINEL.getTime();
             const timeStr = (dt: Date): string =>
-                `${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+                isNoDate(dt) ? d.noDate : `${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
             const dayKey = (dt: Date): string =>
-                `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(
-                    dt.getDate()
-                )}`;
+                isNoDate(dt)
+                    ? "no-date"
+                    : `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(
+                          dt.getDate()
+                      )}`;
             const dayLabel = (dt: Date): string =>
-                dt.toLocaleDateString(undefined, {
-                    weekday: "short",
-                    month: "short",
-                    day: "numeric",
-                });
+                isNoDate(dt)
+                    ? d.noDate
+                    : dt.toLocaleDateString(undefined, {
+                          weekday: "short",
+                          month: "short",
+                          day: "numeric",
+                      });
             const statusLabels = d.status as Record<string, string>;
 
             // Aggregate by day: a subheader replaces a per-row date. Rows are
@@ -3184,6 +3100,9 @@ export default class SystemRecordingPlugin extends Plugin {
                     ? notesByPath.get(row.notePath)
                     : null;
                 const meeting = !file ? meetingsByKey.get(row.key) : null;
+                const attention = row.notePath
+                    ? attentionByPath.get(row.notePath)
+                    : undefined;
                 // Keyed off `file` (not `row.notePath`) so this can never
                 // disagree with the click/action branching below — a notePath
                 // whose file lookup misses must not show a status label next
@@ -3197,6 +3116,7 @@ export default class SystemRecordingPlugin extends Plugin {
                     cls: `mc-cal-event ${accentCls}`,
                 });
                 if (file) rowEl.addClass("has-note");
+                if (attention) rowEl.addClass("needs-attention");
                 rowEl.createDiv({ cls: "mc-cal-event-bar" });
 
                 const rowBody = rowEl.createDiv({ cls: "mc-cal-event-body" });
@@ -3204,27 +3124,68 @@ export default class SystemRecordingPlugin extends Plugin {
                     cls: "mc-cal-event-title",
                     text: row.title,
                 });
+                const meta = rowBody.createDiv({ cls: "mc-cal-event-meta" });
                 const metaParts = [timeStr(row.start)];
                 if (hasStatus) {
                     metaParts.push(statusLabels[row.status] ?? row.status);
                 }
-                rowBody.createDiv({
-                    cls: "mc-cal-event-meta",
-                    text: metaParts.join(" · "),
-                });
+                meta.createSpan({ text: metaParts.join(" · ") });
+                if (attention) {
+                    for (const m of attention.missing) {
+                        meta.createSpan({
+                            text: ad.missing[m],
+                            cls: `mc-badge mc-badge-${m}`,
+                        });
+                    }
+                }
 
                 if (file) {
                     rowEl.addEventListener("click", () =>
                         this.openFileInTab(file)
                     );
+                    // Attention rows get one extra action — an overflow menu
+                    // for Transcribe/Enrich — alongside the row's normal
+                    // click-to-open; everything else about the row (accent,
+                    // meta, click target) is identical to a plain past-note
+                    // row.
+                    if (attention) {
+                        const attnMeeting = this.agendaMeetingFromNote(file);
+                        const actions = rowEl.createDiv({
+                            cls: "mc-cal-event-actions",
+                        });
+                        const moreBtn = actions.createEl("button", {
+                            cls: "mc-cal-event-btn",
+                            attr: { "aria-label": ad.moreActions },
+                        });
+                        setIcon(moreBtn, "ellipsis");
+                        moreBtn.addEventListener("click", (e) => {
+                            e.stopPropagation();
+                            const menu = new Menu();
+                            if (attnMeeting.recording) {
+                                menu.addItem((item) =>
+                                    item
+                                        .setTitle(acts.transcribe)
+                                        .setIcon("captions")
+                                        .onClick(() =>
+                                            void this.transcribeRecording(
+                                                attnMeeting
+                                            )
+                                        )
+                                );
+                            }
+                            menu.addItem((item) =>
+                                item
+                                    .setTitle(acts.enrich)
+                                    .setIcon("sparkles")
+                                    .onClick(() => void this.enqueueEnrich(file))
+                            );
+                            menu.showAtMouseEvent(e);
+                        });
+                    }
                 } else if (meeting) {
                     const createNote = (): void => {
                         void this.createNoteOnly(meeting).then(() =>
-                            this.renderMeetingsSection(
-                                el,
-                                direction,
-                                view.page
-                            )
+                            this.renderPastMeetings(el, view.page)
                         );
                     };
                     rowEl.addEventListener("click", createNote);
@@ -3245,10 +3206,7 @@ export default class SystemRecordingPlugin extends Plugin {
         }
 
         this.renderDashToolbar(el, {
-            countText:
-                direction === "past"
-                    ? d.pastCount(view.total)
-                    : d.upcomingCount(view.total),
+            countText: d.pastCount(view.total),
             legend: [
                 { cls: "mc-status-scheduled", label: d.status.scheduled },
                 { cls: "mc-status-recorded", label: d.status.recorded },
@@ -3258,18 +3216,14 @@ export default class SystemRecordingPlugin extends Plugin {
             pageSize,
             view,
             onPageSize: (n): void => {
-                if (direction === "past") {
-                    this.settings.dashboardPastPageSize = n;
-                } else {
-                    this.settings.dashboardUpcomingPageSize = n;
-                }
+                this.settings.dashboardPastPageSize = n;
                 void this.saveSettings();
                 // A different page size shifts every boundary; back to page 1.
-                void this.renderMeetingsSection(el, direction, 1);
+                void this.renderPastMeetings(el, 1);
             },
-            onGoTo: (p): void => void this.renderMeetingsSection(el, direction, p),
+            onGoTo: (p): void => void this.renderPastMeetings(el, p),
             onRefresh: (): void =>
-                void this.renderMeetingsSection(el, direction, view.page, true),
+                void this.renderPastMeetings(el, view.page, true),
         });
 
         restoreScroll();

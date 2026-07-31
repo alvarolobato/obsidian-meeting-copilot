@@ -150,8 +150,6 @@ export interface SystemRecordingSettings {
 	agendaLookBackDays: number;
 	/** Where the "Coming up" agenda opens: a main-panel tab or the right sidebar. */
 	agendaPlacement: "main" | "sidebar";
-	/** How many upcoming meetings the dashboard shows per page (10/20/50/100). Set via the dashboard's own dropdown. */
-	dashboardUpcomingPageSize: number;
 	/** How many past meetings the dashboard shows per page (10/20/50/100). Set via the dashboard's own dropdown. */
 	dashboardPastPageSize: number;
 	/** How many notes-with-open-tasks the dashboard's action-items list shows per page (10/20/50/100). Set via the dashboard's own dropdown. */
@@ -306,7 +304,6 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	agendaLookAheadDays: 7,
 	agendaLookBackDays: 7,
 	agendaPlacement: "main",
-	dashboardUpcomingPageSize: 10,
 	dashboardPastPageSize: 10,
 	dashboardActionsPageSize: 10,
 	dashboardFollowupsPageSize: 10,

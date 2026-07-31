@@ -316,12 +316,13 @@
 }
 
 /* =========================================================================
- * Meetings dashboard view (mc-dash) — needs-attention, upcoming/past
- * meetings, open action items, and follow-ups. Opened as a plain tab, no
- * vault file — see MeetingDashboardView.ts. Shares the agenda's design
- * tokens (--mc-cal-*, defined below) and header classes (.mc-cal-inner,
- * .mc-cal-head*); the DOM each section renders is unchanged from when it
- * rendered into a note's code block, only the styling below is new.
+ * Meetings dashboard view (mc-dash) — past meetings (recent, or older but
+ * still needing attention), open action items, and follow-ups. Opened as a
+ * plain tab, no vault file — see MeetingDashboardView.ts. Shares the
+ * agenda's design tokens (--mc-cal-*, defined below) and header classes
+ * (.mc-cal-inner, .mc-cal-head*); the DOM each section renders is unchanged
+ * from when it rendered into a note's code block, only the styling below is
+ * new.
  * ====================================================================== */
 
 .mc-dash-section {
@@ -344,82 +345,8 @@
 	color: var(--mc-cal-text);
 }
 
-/* ---- "Needs attention" ------------------------------------------------- */
-
-.mc-attention-header {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 8px;
-	margin-bottom: 10px;
-}
-
-.mc-attention-header button {
-	background: transparent;
-	border: 1px solid var(--mc-cal-border-hi);
-	color: var(--mc-cal-muted);
-	font-size: 12px;
-	box-shadow: none;
-}
-
-.mc-attention-header button:hover {
-	color: var(--mc-cal-text);
-}
-
-.mc-attention-empty {
-	color: var(--mc-cal-muted);
-}
-
-table.mc-attention {
-	width: 100%;
-	border-collapse: collapse;
-	font-size: 12px;
-}
-
-table.mc-attention th,
-table.mc-attention td {
-	text-align: left;
-	padding: 6px 10px;
-	border-bottom: 1px solid var(--mc-cal-border);
-	vertical-align: middle;
-}
-
-table.mc-attention th {
-	font-weight: 500;
-	color: var(--mc-cal-muted);
-}
-
-table.mc-attention a.internal-link {
-	color: var(--mc-cal-text);
-	text-decoration: none;
-}
-
-table.mc-attention a.internal-link:hover {
-	text-decoration: underline;
-}
-
-/* "When" column: one line, never wraps. */
-.mc-attention-when {
-	white-space: nowrap;
-	color: var(--mc-cal-muted);
-	font-variant-numeric: tabular-nums;
-}
-
-/* "Status" column: dot + label + any missing-piece badges, one line. */
-.mc-attention-status {
-	white-space: nowrap;
-}
-
-.mc-attention-status-label {
-	margin-right: 6px;
-}
-
-.mc-attention-actions {
-	display: flex;
-	align-items: center;
-	gap: 2px;
-	white-space: nowrap;
-}
+/* ---- Missing-piece badges (a past-meeting row that still needs attention
+ * shows these inline, next to its time/status meta). ---------------------- */
 
 .mc-badge {
 	display: inline-block;
@@ -499,6 +426,18 @@ table.mc-attention a.internal-link:hover {
 }
 .mc-cal-accent-status-enriched {
 	--mc-cal-accent: oklch(0.68 0.15 145);
+}
+
+/* A row that still needs a transcript/summary (or a broken date): a warning
+ * accent overrides the plain status colour, plus a faint tint so it stands
+ * out at a glance in a list otherwise sorted newest-first. */
+.mc-cal-event.needs-attention {
+	--mc-cal-accent: var(--mc-cal-accent-live);
+	background: color-mix(in oklch, var(--mc-cal-accent-live) 6%, transparent);
+}
+
+.mc-cal-event.needs-attention:hover {
+	background: color-mix(in oklch, var(--mc-cal-accent-live) 11%, var(--mc-cal-card-hi));
 }
 
 /* Status shown as a small colour-coded dot in "Needs attention" (the row

@@ -1,6 +1,5 @@
 import { ItemView, WorkspaceLeaf, setIcon } from "obsidian";
 import { t } from "../../i18n";
-import type { MeetingDirection } from "../../notes/dashboardMeetings";
 
 export const VIEW_TYPE_DASHBOARD = "meeting-copilot-dashboard";
 export const DASHBOARD_ICON = "layout-dashboard";
@@ -14,13 +13,7 @@ export const DASHBOARD_ICON = "layout-dashboard";
  * way the old note-embedded blocks worked.
  */
 export interface DashboardViewHost {
-	renderAttention(el: HTMLElement): void;
-	renderMeetingsSection(
-		el: HTMLElement,
-		direction: MeetingDirection,
-		page?: number,
-		force?: boolean
-	): Promise<void>;
+	renderPastMeetings(el: HTMLElement, page?: number, force?: boolean): Promise<void>;
 	renderActionItems(el: HTMLElement, page?: number, force?: boolean): Promise<void>;
 	renderFollowUps(el: HTMLElement, page?: number, force?: boolean): Promise<void>;
 	trackDashboardBlock(el: HTMLElement, rerender: () => void): void;
@@ -28,10 +21,11 @@ export interface DashboardViewHost {
 }
 
 /**
- * The meetings dashboard: needs-attention, upcoming/past meetings, open
- * action items, and follow-ups. Opened as a plain workspace tab — no vault
- * file backs it (see AGENTS.md / the PR description for why this replaced
- * the old "Create/update meetings dashboard" note).
+ * The meetings dashboard: past meetings (with anything that still needs
+ * attention highlighted inline), open action items, and follow-ups. Opened as
+ * a plain workspace tab — no vault file backs it (see AGENTS.md / the PR
+ * description for why this replaced the old "Create/update meetings
+ * dashboard" note).
  */
 export class MeetingDashboardView extends ItemView {
 	constructor(
@@ -72,22 +66,10 @@ export class MeetingDashboardView extends ItemView {
 		setIcon(settingsBtn, "settings-2");
 		settingsBtn.addEventListener("click", () => this.host.openSettings());
 
-		this.renderSection(root, d.sections.attention, (body) => {
-			this.host.renderAttention(body);
-			this.host.trackDashboardBlock(body, () => this.host.renderAttention(body));
-		});
-
-		this.renderSection(root, d.sections.upcoming, (body) => {
-			void this.host.renderMeetingsSection(body, "upcoming");
-			this.host.trackDashboardBlock(body, () =>
-				void this.host.renderMeetingsSection(body, "upcoming", this.blockPage(body))
-			);
-		});
-
 		this.renderSection(root, d.sections.past, (body) => {
-			void this.host.renderMeetingsSection(body, "past");
+			void this.host.renderPastMeetings(body);
 			this.host.trackDashboardBlock(body, () =>
-				void this.host.renderMeetingsSection(body, "past", this.blockPage(body))
+				void this.host.renderPastMeetings(body, this.blockPage(body))
 			);
 		});
 
