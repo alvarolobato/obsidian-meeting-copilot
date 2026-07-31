@@ -2848,21 +2848,23 @@ export default class SystemRecordingPlugin extends Plugin {
 
         const table = el.createEl("table", { cls: "mc-attention" });
         const head = table.createEl("thead").createEl("tr");
-        for (const h of [
-            d.colMeeting,
-            d.colDate,
-            d.colStatus,
-            d.colMissing,
-            d.colActions,
-        ]) {
+        for (const h of [d.colMeeting, d.colWhen, d.colStatus, d.colActions]) {
             head.createEl("th", { text: h });
         }
         const body = table.createEl("tbody");
         const pad = (n: number): string => String(n).padStart(2, "0");
-        const fmtDate = (dt: Date): string =>
-            `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(
-                dt.getDate()
-            )} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+        const statusLabels = t().dashboard.meetings.status as Record<string, string>;
+        const now = new Date();
+        // "Jul 30 · 16:00" — drops the year (same-year is the overwhelming
+        // common case) and never wraps, unlike the old "YYYY-MM-DD HH:mm".
+        const fmtWhen = (dt: Date): string => {
+            const datePart = dt.toLocaleDateString(undefined, {
+                month: "short",
+                day: "numeric",
+                year: dt.getFullYear() === now.getFullYear() ? undefined : "numeric",
+            });
+            return `${datePart} · ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+        };
 
         for (const row of rows) {
             const file = byPath.get(row.path);
@@ -2878,12 +2880,24 @@ export default class SystemRecordingPlugin extends Plugin {
                 if (file) this.openFileInTab(file);
             };
 
-            tr.createEl("td", { text: row.start ? fmtDate(row.start) : "—" });
-            tr.createEl("td", { text: row.status });
+            tr.createEl("td", {
+                text: row.start ? fmtWhen(row.start) : "—",
+                cls: "mc-attention-when",
+            });
 
-            const missTd = tr.createEl("td");
+            // Status + missing pieces share one column: a dot (colour already
+            // used by the meetings tables below, so the same colour means the
+            // same thing everywhere) plus its label, then the specific
+            // missing badges — a status word alone doesn't say what to do
+            // next, and a badge alone doesn't say how far the note got.
+            const statusTd = tr.createEl("td", { cls: "mc-attention-status" });
+            statusTd.createSpan({ cls: `mc-status-dot mc-status-${row.status}` });
+            statusTd.createSpan({
+                text: statusLabels[row.status] ?? row.status,
+                cls: "mc-attention-status-label",
+            });
             for (const m of row.missing) {
-                missTd.createSpan({
+                statusTd.createSpan({
                     text: d.missing[m],
                     cls: `mc-badge mc-badge-${m}`,
                 });
@@ -2892,18 +2906,41 @@ export default class SystemRecordingPlugin extends Plugin {
             const actTd = tr.createEl("td", { cls: "mc-attention-actions" });
             if (!file) continue;
             const meeting = this.agendaMeetingFromNote(file);
-            const openBtn = actTd.createEl("button", { text: acts.openNote });
+
+            // One primary action inline; anything else (transcribe, enrich)
+            // lives behind a single overflow menu, same split-button pattern
+            // the agenda's own event rows use — a wall of text buttons per
+            // row is what made this table wide in the first place.
+            const openBtn = actTd.createEl("button", {
+                cls: "mc-icon-btn",
+                attr: { "aria-label": acts.openNote },
+            });
+            setIcon(openBtn, "file-text");
             openBtn.onclick = (): void => this.openFileInTab(file);
-            if (meeting.recording) {
-                const trBtn = actTd.createEl("button", {
-                    text: acts.transcribe,
-                });
-                trBtn.onclick = (): void => void this.transcribeRecording(
-                    meeting
+
+            const moreBtn = actTd.createEl("button", {
+                cls: "mc-icon-btn",
+                attr: { "aria-label": d.moreActions },
+            });
+            setIcon(moreBtn, "ellipsis");
+            moreBtn.onclick = (evt): void => {
+                const menu = new Menu();
+                if (meeting.recording) {
+                    menu.addItem((item) =>
+                        item
+                            .setTitle(acts.transcribe)
+                            .setIcon("captions")
+                            .onClick(() => void this.transcribeRecording(meeting))
+                    );
+                }
+                menu.addItem((item) =>
+                    item
+                        .setTitle(acts.enrich)
+                        .setIcon("sparkles")
+                        .onClick(() => void this.enqueueEnrich(file))
                 );
-            }
-            const enBtn = actTd.createEl("button", { text: acts.enrich });
-            enBtn.onclick = (): void => void this.enqueueEnrich(file);
+                menu.showAtMouseEvent(evt);
+            };
         }
 
         restoreScroll();
@@ -3109,8 +3146,12 @@ export default class SystemRecordingPlugin extends Plugin {
                 cls: "mc-meetings-empty",
             });
         } else {
-            const table = el.createEl("table", { cls: "mc-meetings" });
-            const body = table.createEl("tbody");
+            // Card rows — the exact same .mc-cal-event markup the agenda's own
+            // day cards use, so this list reads as part of the same product
+            // instead of a spreadsheet: a coloured accent bar (by status, same
+            // colours as the dot/legend below), title + time/status meta, and
+            // the whole row clickable (open the note, or create one).
+            const list = el.createDiv({ cls: "mc-cal-events" });
             const pad = (n: number): string => String(n).padStart(2, "0");
             const timeStr = (dt: Date): string =>
                 `${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
@@ -3124,86 +3165,81 @@ export default class SystemRecordingPlugin extends Plugin {
                     month: "short",
                     day: "numeric",
                 });
+            const statusLabels = d.status as Record<string, string>;
 
-            // Aggregate by day: a subheader row per date replaces a per-row
-            // date column. Rows are already sorted, so a running key is enough.
+            // Aggregate by day: a subheader replaces a per-row date. Rows are
+            // already sorted, so a running key is enough.
             let lastDay = "";
             for (const row of view.rows) {
                 const key = dayKey(row.start);
                 if (key !== lastDay) {
                     lastDay = key;
-                    const dayTr = body.createEl("tr", {
-                        cls: "mc-meetings-dayrow",
-                    });
-                    dayTr.createEl("td", {
-                        cls: "mc-meetings-day",
+                    list.createDiv({
+                        cls: "mc-dash-daylabel",
                         text: dayLabel(row.start),
-                        attr: { colspan: "2" },
                     });
                 }
 
-                const tr = body.createEl("tr");
                 const file = row.notePath
                     ? notesByPath.get(row.notePath)
                     : null;
+                const meeting = !file ? meetingsByKey.get(row.key) : null;
+                // Keyed off `file` (not `row.notePath`) so this can never
+                // disagree with the click/action branching below — a notePath
+                // whose file lookup misses must not show a status label next
+                // to a create-note button for the same row.
+                const hasStatus = !!file && row.status && row.status !== "—";
+                const accentCls = hasStatus
+                    ? `mc-cal-accent-status-${row.status}`
+                    : "mc-cal-accent-status-scheduled";
 
-                // Time + title in one column; the time is a fixed-width prefix.
-                const whenTd = tr.createEl("td", { cls: "mc-meetings-when" });
-                whenTd.createSpan({
-                    cls: "mc-meetings-time",
-                    text: timeStr(row.start),
+                const rowEl = list.createDiv({
+                    cls: `mc-cal-event ${accentCls}`,
                 });
-                if (file) {
-                    const link = whenTd.createEl("a", {
-                        text: row.title,
-                        cls: "mc-meetings-title internal-link",
-                    });
-                    link.onclick = (e): void => {
-                        e.preventDefault();
-                        this.openFileInTab(file);
-                    };
-                } else {
-                    // No note yet: plain (non-link) title. The create-note icon
-                    // in the trailing cell already signals there's no note, so
-                    // there's no "No note" status text.
-                    whenTd.createSpan({
-                        text: row.title,
-                        cls: "mc-meetings-title mc-meeting-nonote",
-                    });
-                }
+                if (file) rowEl.addClass("has-note");
+                rowEl.createDiv({ cls: "mc-cal-event-bar" });
 
-                // Trailing cell merges the old Status + Actions columns: for a
-                // noted row, a colour-coded status dot (status is its tooltip);
-                // for a note-less row, the create-note icon. Both centre in a
-                // fixed-width cell so a lone dot lines up with the icon above.
-                const trailTd = tr.createEl("td", { cls: "mc-meetings-trail" });
-                if (row.notePath && row.status && row.status !== "—") {
-                    const label =
-                        (d.status as Record<string, string>)[row.status] ??
-                        row.status;
-                    const dot = trailTd.createSpan({
-                        cls: `mc-status-dot mc-status-${row.status}`,
+                const rowBody = rowEl.createDiv({ cls: "mc-cal-event-body" });
+                rowBody.createDiv({
+                    cls: "mc-cal-event-title",
+                    text: row.title,
+                });
+                const metaParts = [timeStr(row.start)];
+                if (hasStatus) {
+                    metaParts.push(statusLabels[row.status] ?? row.status);
+                }
+                rowBody.createDiv({
+                    cls: "mc-cal-event-meta",
+                    text: metaParts.join(" · "),
+                });
+
+                if (file) {
+                    rowEl.addEventListener("click", () =>
+                        this.openFileInTab(file)
+                    );
+                } else if (meeting) {
+                    const createNote = (): void => {
+                        void this.createNoteOnly(meeting).then(() =>
+                            this.renderMeetingsSection(
+                                el,
+                                direction,
+                                view.page
+                            )
+                        );
+                    };
+                    rowEl.addEventListener("click", createNote);
+                    const actions = rowEl.createDiv({
+                        cls: "mc-cal-event-actions",
                     });
-                    dot.setAttribute("aria-label", label);
-                } else if (!row.notePath) {
-                    const meeting = meetingsByKey.get(row.key);
-                    if (meeting) {
-                        const create = trailTd.createEl("button", {
-                            cls: "mc-icon-btn",
-                        });
-                        setIcon(create, "file-plus");
-                        create.setAttribute("aria-label", d.createNote);
-                        create.onclick = (e): void => {
-                            e.preventDefault();
-                            void this.createNoteOnly(meeting).then(() =>
-                                this.renderMeetingsSection(
-                                    el,
-                                    direction,
-                                    view.page
-                                )
-                            );
-                        };
-                    }
+                    const create = actions.createEl("button", {
+                        cls: "mc-cal-event-btn",
+                        attr: { "aria-label": d.createNote },
+                    });
+                    setIcon(create, "file-plus");
+                    create.addEventListener("click", (e) => {
+                        e.stopPropagation();
+                        createNote();
+                    });
                 }
             }
         }

@@ -251,10 +251,10 @@ export const en = {
 				`${n} meeting${n === 1 ? "" : "s"} need attention`,
 			refresh: "Refresh",
 			colMeeting: "Meeting",
-			colDate: "Date",
+			colWhen: "When",
 			colStatus: "Status",
-			colMissing: "Missing",
 			colActions: "Actions",
+			moreActions: "More actions",
 			missing: {
 				date: "date",
 				transcript: "transcript",

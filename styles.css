@@ -398,23 +398,27 @@ table.mc-attention a.internal-link:hover {
 	text-decoration: underline;
 }
 
+/* "When" column: one line, never wraps. */
+.mc-attention-when {
+	white-space: nowrap;
+	color: var(--mc-cal-muted);
+	font-variant-numeric: tabular-nums;
+}
+
+/* "Status" column: dot + label + any missing-piece badges, one line. */
+.mc-attention-status {
+	white-space: nowrap;
+}
+
+.mc-attention-status-label {
+	margin-right: 6px;
+}
+
 .mc-attention-actions {
 	display: flex;
-	flex-wrap: wrap;
-	gap: 6px;
-}
-
-.mc-attention-actions button {
-	font-size: 12px;
-	padding: 3px 10px;
-	background: var(--mc-cal-chip);
-	border: 1px solid var(--mc-cal-border-hi);
-	color: var(--mc-cal-text);
-	box-shadow: none;
-}
-
-.mc-attention-actions button:hover {
-	background: var(--mc-cal-chip-hi);
+	align-items: center;
+	gap: 2px;
+	white-space: nowrap;
 }
 
 .mc-badge {
@@ -442,7 +446,9 @@ table.mc-attention a.internal-link:hover {
 	color: var(--mc-cal-text);
 }
 
-/* ---- Meetings tables (upcoming/past) ------------------------------------ */
+/* ---- Meetings (upcoming/past) — reuses the agenda's own .mc-cal-event card
+ * rows (see the "Coming up" section below) so the dashboard reads as one
+ * product with the agenda instead of a separate, plainer spreadsheet. ---- */
 
 .mc-meetings-empty,
 .mc-meetings-loading,
@@ -455,88 +461,48 @@ table.mc-attention a.internal-link:hover {
 	color: var(--mc-cal-accent-live);
 }
 
-table.mc-meetings {
-	width: 100%;
-	border-collapse: collapse;
-	font-size: 12.5px;
-	line-height: 1.4;
+.mc-cal-events {
+	display: flex;
+	flex-direction: column;
 }
 
-table.mc-meetings td {
-	padding: 2px 8px;
-	border: none;
-	vertical-align: middle;
-}
-
-/* Date group subheader: one row per day, so the rows below drop the date. */
-.mc-meetings-day {
-	padding-top: 14px !important;
-	padding-bottom: 2px !important;
+/* Date group subheader between runs of same-day rows. */
+.mc-dash-daylabel {
+	padding: 14px 2px 6px;
 	color: var(--mc-cal-muted);
 	font-weight: 600;
 	text-transform: uppercase;
 	letter-spacing: 0.03em;
 	font-size: 11px;
-	border-bottom: 1px solid var(--mc-cal-border);
 }
 
-.mc-meetings-dayrow:first-child .mc-meetings-day {
-	padding-top: 0 !important;
+.mc-cal-events > .mc-dash-daylabel:first-child {
+	padding-top: 2px;
 }
 
-/* Time + title share one column; the time is a fixed-width, muted prefix. */
-.mc-meetings-when {
-	width: 100%;
-	white-space: nowrap;
+/* Suppress the event row's own top border right after a day label — the
+ * label's spacing already separates it from the row above. */
+.mc-dash-daylabel + .mc-cal-event {
+	border-top: none;
 }
 
-.mc-meetings-time {
-	display: inline-block;
-	min-width: 3.6em;
-	color: var(--mc-cal-muted);
-	font-variant-numeric: tabular-nums;
+/* Status colour reused as the row's accent bar — same colour, same meaning,
+ * as the dot in "Needs attention" and the toolbar legend below. */
+.mc-cal-accent-status-scheduled {
+	--mc-cal-accent: var(--mc-cal-caption);
+}
+.mc-cal-accent-status-recorded {
+	--mc-cal-accent: var(--mc-cal-accent-one-on-one);
+}
+.mc-cal-accent-status-transcribed {
+	--mc-cal-accent: var(--mc-cal-accent-block);
+}
+.mc-cal-accent-status-enriched {
+	--mc-cal-accent: oklch(0.68 0.15 145);
 }
 
-.mc-meetings-title.internal-link {
-	color: var(--mc-cal-text);
-	text-decoration: none;
-}
-
-.mc-meetings-title.internal-link:hover {
-	text-decoration: underline;
-}
-
-/* No-note rows: muted, non-link title (the create-note icon signals it). */
-.mc-meeting-nonote {
-	color: var(--mc-cal-muted);
-}
-
-/* Trailing cell merges status + the create-note icon; centred so a lone
- * status dot lines up under the create-note icon of other rows despite
- * their different widths. */
-.mc-meetings-trail {
-	white-space: nowrap;
-	width: 1.8em;
-}
-
-.mc-meetings-trail .mc-status-dot {
-	display: block;
-	margin: 0 auto;
-}
-
-.mc-meetings-trail .mc-icon-btn {
-	display: flex;
-	width: fit-content;
-	margin: 0 auto;
-	padding: 0;
-}
-
-.mc-meetings-trail .mc-icon-btn .svg-icon {
-	width: 14px;
-	height: 14px;
-}
-
-/* Status shown as a small colour-coded dot with the status as its tooltip. */
+/* Status shown as a small colour-coded dot in "Needs attention" (the row
+ * accent bar carries the same information in the meetings lists above). */
 .mc-status-dot {
 	display: inline-block;
 	width: 8px;
@@ -568,24 +534,41 @@ table.mc-meetings td {
 .mc-actions-list {
 	display: flex;
 	flex-direction: column;
-	gap: 14px;
+}
+
+/* Same divider rhythm as the meetings lists' .mc-cal-event rows above, so
+ * scrolling through this section reads as the same product. */
+.mc-action-note {
+	padding: 10px 2px;
+	border-top: 1px solid var(--mc-cal-border);
+}
+
+.mc-action-note:first-child {
+	padding-top: 0;
+	border-top: none;
 }
 
 .mc-action-note-header {
 	display: flex;
 	align-items: baseline;
 	gap: 8px;
+	margin-bottom: 4px;
 }
 
 .mc-action-note-title {
-	font-size: 12.5px;
-	font-weight: 500;
-	color: var(--mc-cal-text);
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--mc-cal-title);
+	text-decoration: none;
+}
+
+.mc-action-note-title:hover {
+	text-decoration: underline;
 }
 
 .mc-action-note-date {
-	color: var(--mc-cal-muted);
-	font-size: 12.5px;
+	color: var(--mc-cal-caption);
+	font-size: 11px;
 }
 
 ul.mc-action-tasks {
@@ -607,6 +590,7 @@ ul.mc-action-tasks {
 .mc-action-task-check {
 	margin: 0;
 	flex-shrink: 0;
+	accent-color: var(--mc-cal-accent-one-on-one);
 }
 
 /* Recently-completed tasks kept for their grace period: muted + struck. */
