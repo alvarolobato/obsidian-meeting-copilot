@@ -8,7 +8,12 @@ import {
 } from "obsidian";
 import type SystemRecordingPlugin from "./main";
 import type { InputDevice } from "./recorder";
-import type { StoredTokens } from "./auth/googleOAuth";
+import {
+	CONTACTS_OTHER_READONLY_SCOPE,
+	DIRECTORY_READONLY_SCOPE,
+	GROUPS_READONLY_SCOPE,
+	type StoredTokens,
+} from "./auth/googleOAuth";
 import {
 	DEFAULT_NOTE_TEMPLATE,
 	DEFAULT_TITLE_PATTERN,
@@ -99,6 +104,15 @@ export interface SystemRecordingSettings {
 	googleClientId: string;
 	googleClientSecret: string;
 	googleTokens: StoredTokens | null;
+	/**
+	 * The three optional OAuth scopes (beyond calendar.readonly, which is
+	 * always requested) — each purely improves attendee names on the agenda,
+	 * never required for the calendar/agenda feature itself. See
+	 * "Optional permissions" in the General settings tab.
+	 */
+	scopeGroupsEnabled: boolean;
+	scopeDirectoryEnabled: boolean;
+	scopeOtherContactsEnabled: boolean;
 	calendarAutoRecord: boolean;
 	/**
 	 * Automatically start recording at a calendar event's start, instead of only
@@ -230,6 +244,14 @@ const TEXTAREA_ROWS = 18;
  * `<details>` elsewhere, which default closed). */
 const DEFAULT_OPEN_DETAILS_KEYS: readonly string[] = ["google-credentials"];
 
+/**
+ * Default for the three optional OAuth scope toggles (groups/directory/other
+ * contacts) — on for now so existing behavior doesn't change underfoot. Flip
+ * to `false` once the app completes Google's verification review for these
+ * scopes (a smaller default request needs no review for new users).
+ */
+const OPTIONAL_SCOPES_DEFAULT = true;
+
 /** Settings panes shown as horizontal tabs inside the plugin settings view. */
 type SettingsTabId =
 	| "general"
@@ -272,6 +294,9 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	googleClientId: "",
 	googleClientSecret: "",
 	googleTokens: null,
+	scopeGroupsEnabled: OPTIONAL_SCOPES_DEFAULT,
+	scopeDirectoryEnabled: OPTIONAL_SCOPES_DEFAULT,
+	scopeOtherContactsEnabled: OPTIONAL_SCOPES_DEFAULT,
 	calendarAutoRecord: true,
 	calendarAutoStart: false,
 	calendarAutoStop: false,
@@ -675,6 +700,43 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     });
             });
 
+        new Setting(advancedDetails).setName(s.settings.optionalScopes.heading).setHeading();
+        advancedDetails.createEl("p", {
+            cls: "mc-advanced-credentials-desc",
+            text: s.settings.optionalScopes.desc,
+        });
+
+        this.renderScopeToggle(advancedDetails, {
+            name: s.settings.scopeGroups.name,
+            desc: s.settings.scopeGroups.desc,
+            scope: GROUPS_READONLY_SCOPE,
+            get: () => this.plugin.settings.scopeGroupsEnabled,
+            set: (v) => {
+                this.plugin.settings.scopeGroupsEnabled = v;
+            },
+            reset: () => this.plugin.resetGroupAttendeeExpansion(),
+        });
+        this.renderScopeToggle(advancedDetails, {
+            name: s.settings.scopeDirectory.name,
+            desc: s.settings.scopeDirectory.desc,
+            scope: DIRECTORY_READONLY_SCOPE,
+            get: () => this.plugin.settings.scopeDirectoryEnabled,
+            set: (v) => {
+                this.plugin.settings.scopeDirectoryEnabled = v;
+            },
+            reset: () => this.plugin.resetGroupAttendeeExpansion(),
+        });
+        this.renderScopeToggle(advancedDetails, {
+            name: s.settings.scopeOtherContacts.name,
+            desc: s.settings.scopeOtherContacts.desc,
+            scope: CONTACTS_OTHER_READONLY_SCOPE,
+            get: () => this.plugin.settings.scopeOtherContactsEnabled,
+            set: (v) => {
+                this.plugin.settings.scopeOtherContactsEnabled = v;
+            },
+            reset: () => this.plugin.resetGroupAttendeeExpansion(),
+        });
+
         new Setting(containerEl)
             .setName(s.settings.notificationsHeading)
             .setHeading();
@@ -855,6 +917,46 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                 await this.plugin.saveSettings();
             },
         });
+    }
+
+    /**
+     * One optional-OAuth-scope toggle: saves the setting, resets whatever
+     * session state assumed the old value (so a flip takes effect on the
+     * very next background pass, not just after a reload), and — only when
+     * turning ON while already connected — surfaces a "re-authenticate to
+     * grant this" hint, since Google only ever grants what was requested at
+     * the moment of the last consent.
+     */
+    private renderScopeToggle(
+        parent: HTMLElement,
+        opts: {
+            name: string;
+            desc: string;
+            scope: string;
+            get: () => boolean;
+            set: (value: boolean) => void;
+            reset: () => void;
+        }
+    ): void {
+        const s = t();
+        new Setting(parent)
+            .setName(opts.name)
+            .setDesc(opts.desc)
+            .addToggle((toggle) =>
+                toggle.setValue(opts.get()).onChange(async (value) => {
+                    opts.set(value);
+                    await this.plugin.saveSettings();
+                    opts.reset();
+                    this.plugin.refreshAgenda();
+                    if (
+                        value &&
+                        this.plugin.isCalendarAuthenticated() &&
+                        !this.plugin.hasGoogleScope(opts.scope)
+                    ) {
+                        new Notice(s.settings.scopeReauthNeeded);
+                    }
+                })
+            );
     }
 
     /** Rebuild remote vs local transcription rows without re-rendering the whole tab. */

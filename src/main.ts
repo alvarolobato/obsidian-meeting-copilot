@@ -47,7 +47,9 @@ import * as fs from "fs";
 import {
 	CONTACTS_OTHER_READONLY_SCOPE,
 	CredentialsMissingError,
+	DIRECTORY_READONLY_SCOPE,
 	GoogleOAuth,
+	GROUPS_READONLY_SCOPE,
 	type StoredTokens,
 } from "./auth/googleOAuth";
 import { parseKeywords } from "./calendar/eventFilter";
@@ -320,6 +322,15 @@ export default class SystemRecordingPlugin extends Plugin {
 			setTokens: async (tokens) => {
 				this.settings.googleTokens = tokens;
 				await this.saveSettings();
+			},
+			getOptionalScopes: () => {
+				const scopes: string[] = [];
+				if (this.settings.scopeGroupsEnabled) scopes.push(GROUPS_READONLY_SCOPE);
+				if (this.settings.scopeDirectoryEnabled) scopes.push(DIRECTORY_READONLY_SCOPE);
+				if (this.settings.scopeOtherContactsEnabled) {
+					scopes.push(CONTACTS_OTHER_READONLY_SCOPE);
+				}
+				return scopes;
 			},
 		},
 		() => this.onCalendarAuthExpired()
@@ -1342,6 +1353,13 @@ export default class SystemRecordingPlugin extends Plugin {
 		return this.oauth.isAuthenticated();
 	}
 
+	/** Whether the current sign-in was granted the given scope — used by the
+	 * settings tab to show a "re-authenticate to grant this" hint when a
+	 * user turns an optional scope on after already having connected. */
+	hasGoogleScope(scope: string): boolean {
+		return this.oauth.hasScope(scope);
+	}
+
 	/**
 	 * Coalesces concurrent callers onto one in-flight attempt: returns the same
 	 * promise if already running, rather than opening a second browser tab/
@@ -1457,7 +1475,11 @@ export default class SystemRecordingPlugin extends Plugin {
 	}
 
 	private createGroupDirectory() {
-		return createCloudIdentityDirectory(this.oauth, this.directoryCache);
+		return createCloudIdentityDirectory(
+			this.oauth,
+			this.directoryCache,
+			this.settings.scopeGroupsEnabled
+		);
 	}
 
 	private createPersonDirectory() {
@@ -1466,6 +1488,7 @@ export default class SystemRecordingPlugin extends Plugin {
 			rateLimiter: this.peopleRateLimiter,
 			debugLogging: this.settings.debugLogging,
 			nameCache: this.personNameCache,
+			enabled: this.settings.scopeDirectoryEnabled,
 		});
 	}
 
@@ -2274,10 +2297,12 @@ export default class SystemRecordingPlugin extends Plugin {
 	 * Kicks off a background otherContacts sync (display names for people
 	 * you've corresponded with over Gmail — see `otherContactsSync.ts`) at
 	 * most once per {@link OTHER_CONTACTS_RESYNC_INTERVAL_MS}. No-ops when
-	 * not authenticated, already mid-sync, or the user hasn't re-consented to
-	 * the scope yet (an old install predates it).
+	 * the setting is off, not authenticated, already mid-sync, or the user
+	 * hasn't re-consented to the scope yet (setting just turned on, or an
+	 * old install predates it).
 	 */
 	private scheduleOtherContactsSync(): void {
+		if (!this.settings.scopeOtherContactsEnabled) return;
 		if (!this.isCalendarAuthenticated()) return;
 		if (this.otherContactsSyncInFlight) return;
 		if (!this.oauth.hasScope(CONTACTS_OTHER_READONLY_SCOPE)) return;

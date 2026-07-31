@@ -20,6 +20,14 @@ export interface OAuthStorage {
 	getCredentials(): OAuthCredentials | null;
 	getTokens(): StoredTokens | null;
 	setTokens(tokens: StoredTokens | null): Promise<void>;
+	/**
+	 * Optional scopes (beyond {@link CALENDAR_READONLY_SCOPE}, which is always
+	 * requested) currently enabled in settings — see the "Optional
+	 * permissions" toggles in Settings. Requested fresh on every
+	 * {@link GoogleOAuth.authenticate} call, so turning one off takes effect
+	 * on the next re-authenticate without any other code change.
+	 */
+	getOptionalScopes(): string[];
 }
 
 /**
@@ -51,29 +59,38 @@ export class CredentialsMissingError extends Error {
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
-/**
- * Calendar events, Cloud Identity Groups (read-only), People directory
- * (read-only), and the user's own "Other contacts" (read-only). Groups
- * expands group invitees into people; the directory scope resolves display
- * names from the org directory when Calendar omits them — subject to the
- * Workspace admin's directory-sharing setting, which some domains disable
- * entirely for third-party apps. `contacts.other.readonly` is a second,
- * independent path to the same kind of data (display names) via the user's
- * own personal "Other contacts" (auto-populated from Gmail correspondence) —
- * that data is private to the user, not the org Directory, so it isn't
- * subject to that admin setting. Admin Directory scopes are intentionally
- * not requested.
- */
-const SCOPE = [
-	"https://www.googleapis.com/auth/calendar.readonly",
-	"https://www.googleapis.com/auth/cloud-identity.groups.readonly",
-	"https://www.googleapis.com/auth/directory.readonly",
-	"https://www.googleapis.com/auth/contacts.other.readonly",
-].join(" ");
 
-/** Scope string for the personal "Other contacts" read (display names), used
- * by {@link GoogleOAuth.hasScope} to check whether a re-auth is still needed
- * (existing tokens predate this scope until the user reconnects). */
+/**
+ * Always requested — reads calendar events, the whole reason this plugin
+ * exists. Not user-togglable, unlike the three below.
+ */
+export const CALENDAR_READONLY_SCOPE =
+	"https://www.googleapis.com/auth/calendar.readonly";
+/**
+ * Expands a Google Group invitee (e.g. a team distribution list on a
+ * calendar invite) into its individual members. User-togglable — see
+ * "Optional permissions" in Settings.
+ */
+export const GROUPS_READONLY_SCOPE =
+	"https://www.googleapis.com/auth/cloud-identity.groups.readonly";
+/**
+ * Resolves a real display name from the org Workspace directory for
+ * attendees Calendar didn't already label — subject to the Workspace
+ * admin's directory-sharing setting, which some domains disable entirely for
+ * third-party apps. User-togglable — see "Optional permissions" in Settings.
+ */
+export const DIRECTORY_READONLY_SCOPE =
+	"https://www.googleapis.com/auth/directory.readonly";
+/**
+ * A second, independent path to the same kind of data as
+ * {@link DIRECTORY_READONLY_SCOPE} (display names) via the user's own
+ * personal "Other contacts" (auto-populated from Gmail correspondence) —
+ * that data is private to the user, not the org Directory, so it isn't
+ * subject to that admin setting. User-togglable — see "Optional
+ * permissions" in Settings. Also used by {@link GoogleOAuth.hasScope} to
+ * check whether a re-auth is still needed (existing tokens predate this
+ * scope until the user reconnects).
+ */
 export const CONTACTS_OTHER_READONLY_SCOPE =
 	"https://www.googleapis.com/auth/contacts.other.readonly";
 
@@ -196,11 +213,15 @@ export class GoogleOAuth {
 		const { port, codePromise, close } = await startLoopbackServer(state, signal);
 		const redirectUri = `http://127.0.0.1:${port}/callback`;
 
+		const scope = [
+			CALENDAR_READONLY_SCOPE,
+			...this.storage.getOptionalScopes(),
+		].join(" ");
 		const authParams = new URLSearchParams({
 			client_id: creds.client_id,
 			redirect_uri: redirectUri,
 			response_type: "code",
-			scope: SCOPE,
+			scope,
 			access_type: "offline",
 			prompt: "consent",
 			state,

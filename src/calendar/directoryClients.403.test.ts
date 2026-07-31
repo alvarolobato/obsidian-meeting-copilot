@@ -146,3 +146,49 @@ describe("directory clients HTTP 403", () => {
 		expect(networkCalls).toBe(1); // no second network call
 	});
 });
+
+describe("createCloudIdentityDirectory enabled toggle", () => {
+	beforeEach(() => {
+		__setRequestUrl(() => ({ status: 200, json: {}, text: "" }));
+	});
+	afterEach(() => {
+		__setRequestUrl(() => ({ status: 200, json: {}, text: "" }));
+	});
+
+	it("skips the network call when enabled:false (the groups scope toggled off in settings)", async () => {
+		let networkCalls = 0;
+		__setRequestUrl(() => {
+			networkCalls++;
+			return { status: 200, json: { name: "groups/elg" }, text: "" };
+		});
+		const cache = new DirectoryCache(null, () => 1_000, 0);
+		const dir = createCloudIdentityDirectory(fakeOauth(), cache, false);
+		await expect(dir.lookup("elg@x.com")).resolves.toBeUndefined();
+		expect(networkCalls).toBe(0);
+	});
+
+	it("still resolves a directoryCache hit even when enabled:false", async () => {
+		let networkCalls = 0;
+		__setRequestUrl(() => {
+			networkCalls++;
+			return { status: 200, json: { name: "groups/elg" }, text: "" };
+		});
+		const cache = new DirectoryCache(null, () => 1_000, 0);
+		cache.setGroupLookup("elg@x.com", "groups/elg");
+		const dir = createCloudIdentityDirectory(fakeOauth(), cache, false);
+		await expect(dir.lookup("elg@x.com")).resolves.toBe("groups/elg");
+		expect(networkCalls).toBe(0);
+	});
+
+	it("skips listMembers' network call when enabled:false and members aren't cached", async () => {
+		let networkCalls = 0;
+		__setRequestUrl(() => {
+			networkCalls++;
+			return { status: 200, json: { memberships: [] }, text: "" };
+		});
+		const cache = new DirectoryCache(null, () => 1_000, 0);
+		const dir = createCloudIdentityDirectory(fakeOauth(), cache, false);
+		await expect(dir.listMembers("groups/elg")).resolves.toEqual([]);
+		expect(networkCalls).toBe(0);
+	});
+});

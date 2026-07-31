@@ -421,6 +421,23 @@ export const en = {
 			name: "Client secret",
 			desc: "OAuth client secret from your Google Cloud Desktop app.",
 		},
+		optionalScopes: {
+			heading: "Optional permissions",
+			desc: "Calendar access is always required. These extra permissions only improve attendee names on the agenda — turn any off to reduce what's requested at sign-in. Turning one back on needs a re-authenticate before Google actually grants it.",
+		},
+		scopeGroups: {
+			name: "Expand Google Group invitees",
+			desc: "When a calendar invite lists a Google Group (e.g. a team distribution list) as an attendee, expand it into the individual people on that group instead of showing the group's raw address. Uses the Cloud Identity Groups API (`cloud-identity.groups.readonly`). Off: group invitees show as one humanized group label instead of the people in it.",
+		},
+		scopeDirectory: {
+			name: "Resolve attendee names from your Workspace directory",
+			desc: "Looks up a real display name for attendees your calendar invite doesn't already label (e.g. a bare email address). Uses the People API's directory scope (`directory.readonly`) — some Workspace domains disable this for third-party apps regardless of this setting. Off: those attendees show a name guessed from their email address instead.",
+		},
+		scopeOtherContacts: {
+			name: "Resolve attendee names from Google \"Other contacts\"",
+			desc: "A second, independent source for attendee display names — your own auto-populated Gmail correspondence history, not your organization's directory — useful when the directory lookup above is blocked by a Workspace admin. Uses the People API's other-contacts scope (`contacts.other.readonly`). Off: those attendees show a name guessed from their email address instead.",
+		},
+		scopeReauthNeeded: "Re-authenticate above to grant this — your current sign-in predates it.",
 		calendarAutoRecord: {
 			name: "Calendar meeting notifications",
 			desc: "Notify you around each event's start with Join / Record options. Turn on 'Auto-start recording' below for hands-free recording.",

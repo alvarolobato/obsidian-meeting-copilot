@@ -309,17 +309,22 @@ export async function mapAttendeesExpanded(
 /**
  * Live Cloud Identity Groups client backed by the plugin's Google OAuth token.
  * When a {@link DirectoryCache} is provided, lookups/memberships are persisted
- * for {@link import("./directoryCache").GROUP_TTL_MS}.
+ * for {@link import("./directoryCache").GROUP_TTL_MS}. `enabled` is the
+ * `cloud-identity.groups.readonly` scope toggle in Settings — false skips the
+ * *network* calls (a cache hit above still resolves), same shape as
+ * `personDirectory.ts`'s `directory.readonly` toggle.
  */
 export function createCloudIdentityDirectory(
 	oauth: GoogleOAuth,
-	directoryCache?: DirectoryCache
+	directoryCache?: DirectoryCache,
+	enabled = true
 ): GroupDirectory {
 	return {
 		async lookup(email: string): Promise<string | null | undefined> {
 			const key = email.trim().toLowerCase();
 			const cached = directoryCache?.getGroup(key);
 			if (cached !== undefined) return cached.resource;
+			if (!enabled) return undefined;
 
 			const token = await oauth.getAccessToken();
 			const url = `${CI_API}/groups:lookup?groupKey.id=${encodeURIComponent(email)}`;
@@ -374,6 +379,7 @@ export function createCloudIdentityDirectory(
 					? cached.members.slice(0, limit)
 					: cached.members;
 			}
+			if (!enabled) return [];
 
 			const token = await oauth.getAccessToken();
 			const limit = opts.limit;

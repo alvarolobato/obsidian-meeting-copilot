@@ -226,4 +226,41 @@ describe("createPeopleDirectory", () => {
 		).resolves.toBeUndefined();
 		expect(networkCalls).toBe(0);
 	});
+
+	it("skips the network call when enabled:false (the directory.readonly scope toggled off in settings)", async () => {
+		let networkCalls = 0;
+		__setRequestUrl(() => {
+			networkCalls++;
+			return { status: 200, json: { people: [] }, text: "" };
+		});
+		const cache = new DirectoryCache(null, () => 1_000, 0);
+		const people = createPeopleDirectory(fakeOauth(), {
+			directoryCache: cache,
+			enabled: false,
+		});
+
+		await expect(
+			people.resolveDisplayName("nobody@elastic.co")
+		).resolves.toBeUndefined();
+		expect(networkCalls).toBe(0);
+	});
+
+	it("still resolves a directoryCache hit even when enabled:false", async () => {
+		let networkCalls = 0;
+		__setRequestUrl(() => {
+			networkCalls++;
+			return { status: 200, json: { people: [] }, text: "" };
+		});
+		const cache = new DirectoryCache(null, () => 1_000, 0);
+		cache.setPerson("ruflin@elastic.co", "Nicolas Ruflin");
+		const people = createPeopleDirectory(fakeOauth(), {
+			directoryCache: cache,
+			enabled: false,
+		});
+
+		await expect(
+			people.resolveDisplayName("ruflin@elastic.co")
+		).resolves.toBe("Nicolas Ruflin");
+		expect(networkCalls).toBe(0);
+	});
 });

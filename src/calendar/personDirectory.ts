@@ -130,6 +130,13 @@ export interface PeopleDirectoryOptions {
 	 * session.
 	 */
 	nameCache?: PersonNameCache;
+	/**
+	 * The `directory.readonly` scope toggle in Settings — false skips the
+	 * *network* searchDirectoryPeople call (same split as `disabled`/
+	 * `permanentlyBlocked` above: a `directoryCache` hit, e.g. from
+	 * `otherContactsSync`, still resolves). Defaults to true.
+	 */
+	enabled?: boolean;
 }
 
 export interface RawDirectoryPerson {
@@ -145,7 +152,7 @@ export function createPeopleDirectory(
 	oauth: GoogleOAuth,
 	opts: PeopleDirectoryOptions = {}
 ): PersonDirectory {
-	const { directoryCache, rateLimiter, debugLogging, nameCache } = opts;
+	const { directoryCache, rateLimiter, debugLogging, nameCache, enabled = true } = opts;
 
 	async function lookup(email: string): Promise<{ name: string | null } | undefined> {
 		const key = normEmail(email);
@@ -153,11 +160,12 @@ export function createPeopleDirectory(
 		if (cached !== undefined) {
 			return { name: cached.name };
 		}
-		// Directory blocked this pass (`disabled`) or permanently confirmed
+		// Directory blocked this pass (`disabled`), permanently confirmed
 		// blocked (`permanentlyBlocked`, e.g. Workspace policy — not reset
-		// per-poll like `disabled` is): the cache check above already ran, so
-		// this only skips the network call — not otherContacts-sourced hits.
-		if (nameCache?.disabled || nameCache?.permanentlyBlocked) {
+		// per-poll like `disabled` is), or the user turned this scope off in
+		// Settings (`enabled`): the cache check above already ran, so this
+		// only skips the network call — not otherContacts-sourced hits.
+		if (!enabled || nameCache?.disabled || nameCache?.permanentlyBlocked) {
 			return undefined;
 		}
 
