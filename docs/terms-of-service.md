@@ -25,6 +25,23 @@ do in the plugin is visible to, or recoverable by, the developer. See the
 [privacy policy](./privacy-policy.md) for exactly what data the plugin touches and
 where it stays.
 
+## Recording meetings is your responsibility
+
+**Meeting Copilot records audio of your meetings.** Laws about recording
+conversations vary widely by country and, in the US, by state — some jurisdictions
+require **all** participants to consent to being recorded ("two-party" or "all-party"
+consent), while others require only one party (which can be you). These rules can
+also depend on where each participant is located, not just where you are, and
+separate rules may apply to workplace monitoring or recording public officials.
+
+The developer does not provide legal advice and makes no representation that using
+Meeting Copilot in any particular way is lawful in your situation. **You are solely
+responsible** for knowing and complying with the recording-consent, wiretapping, and
+privacy laws that apply to you and to every participant in a recorded meeting,
+including obtaining any required consent (e.g. by notifying attendees at the start
+of a call) before you start recording. The developer accepts no liability for your
+use of the recording feature.
+
 ## License and source
 
 Meeting Copilot is open-source software, released under the license in the
@@ -47,10 +64,8 @@ You are solely responsible for:
 - **Your own data.** Your calendar data, notes, recordings, and transcripts are
   stored only in your local Obsidian vault. You are responsible for backing them up
   and for the security of the device they're stored on.
-- **Recording consent.** Meeting Copilot records audio. You are responsible for
-  complying with the wiretapping, recording-consent, and privacy laws that apply in
-  your jurisdiction and the jurisdictions of the people you record, including
-  obtaining any consent required before you start recording.
+- **Recording consent.** See **Recording meetings is your responsibility** above —
+  compliance with recording-consent and wiretapping laws is entirely on you.
 - **Third-party services you configure.** If you choose to connect Google Calendar,
   or configure a remote transcription/AI-enrichment endpoint, you are responsible for
   your own accounts, API keys, and compliance with those third parties' own terms.
