@@ -180,6 +180,12 @@ header.site {
 	font-size: clamp(1.05rem, 2.2vw, 1.28rem);
 	color: var(--text-dim);
 	max-width: 60ch;
+	margin: 0 auto 18px;
+}
+.hero p.about {
+	font-size: 1rem;
+	color: var(--text-dim);
+	max-width: 64ch;
 	margin: 0 auto 34px;
 }
 .hero .cta {
