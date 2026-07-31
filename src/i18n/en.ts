@@ -3,6 +3,7 @@ export const en = {
 	ribbon: {
 		toggleRecording: "Start/Stop on-demand meeting",
 		openAgenda: "Open meeting agenda",
+		openDashboard: "Open meetings dashboard",
 		recordForMeeting: (title: string) => `Record for “${title}”`,
 		newAdhoc: "New ad-hoc meeting",
 	},
@@ -12,10 +13,10 @@ export const en = {
 		authenticateCalendar: "Authenticate calendar",
 		toggleCalendarAutoRecording: "Toggle calendar auto-recording",
 		openAgenda: "Open meeting agenda",
+		openDashboard: "Open meetings dashboard",
 		enrichNote: "Enrich meeting note (AI)",
 		toggleAiNotes: "Toggle AI notes visibility",
 		cleanupRecordings: "Clean up old recordings",
-		createDashboard: "Create/update meetings dashboard",
 		cancelTranscription: "Cancel transcription",
 	},
 	adhoc: {
@@ -93,7 +94,6 @@ export const en = {
 		retentionCleaned: (n: number) =>
 			`Trashed ${n} old recording${n === 1 ? "" : "s"}`,
 		retentionNothing: "No recordings past the retention window.",
-		dashboardCreated: "Meetings dashboard updated",
 		transcribeError: (msg: string) => `Transcription failed: ${msg}`,
 		transcribeEmpty: "Transcription produced no text.",
 		transcribePartial:
@@ -236,6 +236,15 @@ export const en = {
 		menuTitle: "Meeting Copilot",
 	},
 	dashboard: {
+		/** View tab title and the ribbon icon's tooltip. */
+		title: "Meetings dashboard",
+		sections: {
+			attention: "Needs attention",
+			upcoming: "Upcoming meetings",
+			past: "Past meetings",
+			actions: "Open action items",
+			followups: "Meeting follow-ups",
+		},
 		attention: {
 			allClear: "All meetings are complete. 🎉",
 			count: (n: number) =>
@@ -300,13 +309,6 @@ export const en = {
 			taskError: (msg: string) =>
 				`Couldn't complete the follow-up: ${msg}`,
 		},
-	},
-	dashboardPrompt: {
-		heading: "Create your meetings dashboard?",
-		desc: "A dashboard note gives you one place to see upcoming/past meetings, open action items, and follow-ups — updated live as you record and enrich meetings. You can also create it anytime from the command palette.",
-		create: "Create",
-		later: "Later",
-		dontAskAgain: "Don't ask again",
 	},
 	settings: {
 		// Version line at the top of the settings tab. Release builds show just

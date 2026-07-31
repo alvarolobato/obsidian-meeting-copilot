@@ -141,13 +141,6 @@ export interface SystemRecordingSettings {
 	 * notification fires so we never nag again.
 	 */
 	notificationStyleHintShown: boolean;
-	/**
-	 * True once the user has dismissed the first-run "create your meetings
-	 * dashboard?" prompt with "Don't ask again". Bookkeeping (not a user
-	 * preference the settings tab exposes); "Later" leaves this false so the
-	 * prompt can offer again next launch.
-	 */
-	dashboardPromptDismissed: boolean;
 	// Meeting detection (Tier 1, macOS).
 	detectMeetings: boolean;
 	detectZoom: boolean;
@@ -306,7 +299,6 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	excludeWithoutMeetingLink: false,
 	openMeetAutomatically: false,
 	notificationStyleHintShown: false,
-	dashboardPromptDismissed: false,
 	detectMeetings: true,
 	detectZoom: true,
 	detectGoogleMeet: false,

@@ -98,16 +98,6 @@ import {
 	isFallbackEndpointConfigured,
 } from "./util/endpointFallback";
 import { isServiceFailure } from "./util/serviceFailure";
-import {
-    ACTIONS_BLOCK_LANG,
-    ATTENTION_BLOCK_LANG,
-    buildDashboardBlock,
-    DASHBOARD_CSS_CLASS,
-    FOLLOWUPS_BLOCK_LANG,
-    PAST_BLOCK_LANG,
-    UPCOMING_BLOCK_LANG,
-    withDashboardBlock,
-} from "./notes/dashboard";
 import { computeAttention, type AttentionInput } from "./notes/attention";
 import {
     meetingRows,
@@ -194,7 +184,6 @@ import {
     shouldSuggestAdhocTitle,
 } from "./enrich/adhocTitle";
 import { RenameModal } from "./ui/renameModal";
-import { DashboardPromptModal } from "./ui/dashboardPromptModal";
 import { t } from "./i18n";
 import { TypedEventBus } from "./util/eventBus";
 import {
@@ -210,6 +199,12 @@ import {
     VIEW_TYPE_AGENDA,
     AGENDA_ICON,
 } from "./ui/agenda/MeetingAgendaView";
+import {
+    DashboardViewHost,
+    MeetingDashboardView,
+    VIEW_TYPE_DASHBOARD,
+    DASHBOARD_ICON,
+} from "./ui/dashboard/MeetingDashboardView";
 import {
     populateMeetingMenu,
     RowHandlers,
@@ -342,8 +337,6 @@ export default class SystemRecordingPlugin extends Plugin {
 	private authAbort: AbortController | null = null;
 	/** The in-flight `authenticateCalendar()` promise, if any — see {@link getAuthPromise}. */
 	private authPromise: Promise<void> | null = null;
-	/** True when this vault had no `data.json` at all before this load — see {@link loadSettings}. */
-	private isCleanInstall = false;
 	/** Tier 1 meeting detector + its poll interval id (macOS only). */
 	private detector: MeetingDetector | null = null;
 	private detectorIntervalId: number | null = null;
@@ -477,6 +470,20 @@ export default class SystemRecordingPlugin extends Plugin {
             callback: () => void this.openAgenda(),
         });
 
+        // Meetings dashboard — a plain tab, no vault file backing it.
+        this.registerView(
+            VIEW_TYPE_DASHBOARD,
+            (leaf) => new MeetingDashboardView(leaf, this.dashboardHost())
+        );
+        this.addRibbonIcon(DASHBOARD_ICON, t().ribbon.openDashboard, () =>
+            void this.openDashboard()
+        );
+        this.addCommand({
+            id: "open-dashboard",
+            name: t().commands.openDashboard,
+            callback: () => void this.openDashboard(),
+        });
+
         // Expose the same actions as the agenda list (record, transcribe,
         // enrich, links, …) from the note's editor and file context menus.
         this.registerEvent(
@@ -495,74 +502,9 @@ export default class SystemRecordingPlugin extends Plugin {
             })
         );
 
-        // "Needs attention" dashboard section: meetings that haven't finished
-        // the pipeline, rendered with per-row action buttons.
-        this.registerMarkdownCodeBlockProcessor(
-            ATTENTION_BLOCK_LANG,
-            (_src, el) => {
-                this.trackDashboardBlock(el, () => this.renderAttention(el));
-                this.renderAttention(el);
-            }
-        );
-
-        // "Upcoming"/"Past meetings" dashboard sections: paginated tables that
-        // merge the vault's meeting notes with the calendar events the agenda
-        // already loads (Dataview can't do that, nor interactive pagination).
-        this.registerMarkdownCodeBlockProcessor(
-            UPCOMING_BLOCK_LANG,
-            (_src, el) => {
-                this.trackDashboardBlock(el, () =>
-                    void this.renderMeetingsSection(
-                        el,
-                        "upcoming",
-                        this.blockPage(el)
-                    )
-                );
-                void this.renderMeetingsSection(el, "upcoming");
-            }
-        );
-        this.registerMarkdownCodeBlockProcessor(
-            PAST_BLOCK_LANG,
-            (_src, el) => {
-                this.trackDashboardBlock(el, () =>
-                    void this.renderMeetingsSection(
-                        el,
-                        "past",
-                        this.blockPage(el)
-                    )
-                );
-                void this.renderMeetingsSection(el, "past");
-            }
-        );
-
-        // "Open action items" dashboard section: personal open tasks from
-        // ## Action items, grouped by note (newest first), dense and paginated.
-        this.registerMarkdownCodeBlockProcessor(
-            ACTIONS_BLOCK_LANG,
-            (_src, el) => {
-                this.trackDashboardBlock(el, () =>
-                    void this.renderActionItems(el, this.blockPage(el), true)
-                );
-                void this.renderActionItems(el);
-            }
-        );
-
-        // "Meeting follow-ups" dashboard section: shared commitments from
-        // ## Follow-ups, horizon-filtered so the list stays bounded.
-        this.registerMarkdownCodeBlockProcessor(
-            FOLLOWUPS_BLOCK_LANG,
-            (_src, el) => {
-                this.trackDashboardBlock(el, () =>
-                    void this.renderFollowUps(el, this.blockPage(el), true)
-                );
-                void this.renderFollowUps(el);
-            }
-        );
-
-        // Keep the plugin-rendered dashboard sections live: when the vault or
-        // pipeline changes (recording, transcription, enrichment, note
-        // creation) re-render the tracked blocks in place — restoring the
-        // auto-updating the old Dataview tables had. Debounced; each block
+        // Keep the dashboard view's sections live: when the vault or pipeline
+        // changes (recording, transcription, enrichment, note creation)
+        // re-render the tracked blocks in place. Debounced; each block
         // keeps the page the user was on (see blockPage), disconnected ones
         // are pruned on the next pass.
         this.agendaEvents.on("changed", () => this.scheduleDashboardRefresh());
@@ -631,12 +573,6 @@ export default class SystemRecordingPlugin extends Plugin {
 			id: "cleanup-old-recordings",
 			name: t().commands.cleanupRecordings,
 			callback: () => void this.cleanupOldRecordings(true),
-		});
-
-		this.addCommand({
-			id: "create-meetings-dashboard",
-			name: t().commands.createDashboard,
-			callback: () => void this.createDashboard(),
 		});
 
 		this.addCommand({
@@ -740,35 +676,7 @@ export default class SystemRecordingPlugin extends Plugin {
 			if (document.visibilityState === "visible") this.onPromptWindowFocused();
 		});
 
-		this.app.workspace.onLayoutReady(() => this.maybeOfferDashboardCreation());
     }
-
-	/**
-	 * Offers to create the meetings dashboard note once, on a genuine clean
-	 * install (no prior `data.json` — see {@link loadSettings}) that doesn't
-	 * already have one (an upgrade where the user made one, or made one
-	 * before dismissing, shouldn't be asked again). Deferred to
-	 * `onLayoutReady` so it never competes with Obsidian's own startup
-	 * rendering.
-	 */
-	private maybeOfferDashboardCreation(): void {
-		if (!this.isCleanInstall) return;
-		if (this.settings.dashboardPromptDismissed) return;
-		if (this.dashboardNoteExists()) return;
-		const s = t().dashboardPrompt;
-		new DashboardPromptModal(this.app, {
-			heading: s.heading,
-			desc: s.desc,
-			createLabel: s.create,
-			laterLabel: s.later,
-			dontAskAgainLabel: s.dontAskAgain,
-			onCreate: () => void this.createDashboard(),
-			onDontAskAgain: () => {
-				this.settings.dashboardPromptDismissed = true;
-				void this.saveSettings();
-			},
-		}).open();
-	}
 
 	/** One-shot startup dump so "no notifications" reports have concrete context. */
 	private logNotificationEnvironment(): void {
@@ -843,11 +751,6 @@ export default class SystemRecordingPlugin extends Plugin {
                   sttModelId?: string;
               })
             | null;
-        // No `data.json` at all is Obsidian's own signal for "this plugin has
-        // never been configured on this vault before" — used to gate the
-        // one-time dashboard-creation prompt (see onload()) so it only offers
-        // on an actual clean install, not every upgrade.
-        this.isCleanInstall = raw === null;
         this.settings = Object.assign(
             {},
             DEFAULT_SETTINGS,
@@ -2772,6 +2675,33 @@ export default class SystemRecordingPlugin extends Plugin {
     /** Tells any open agenda view to reload (e.g. after a settings change). */
     refreshAgenda(): void {
         this.agendaEvents.emit("changed", undefined);
+    }
+
+    /** Opens (or reveals) the meetings dashboard. Always a tab — unlike the
+     * agenda, there's no sidebar placement option for it. */
+    async openDashboard(): Promise<void> {
+        const { workspace } = this.app;
+        let leaf = workspace.getLeavesOfType(VIEW_TYPE_DASHBOARD)[0] ?? null;
+        if (!leaf) {
+            leaf = workspace.getLeaf("tab");
+            await leaf.setViewState({ type: VIEW_TYPE_DASHBOARD, active: true });
+        }
+        if (leaf) void workspace.revealLeaf(leaf);
+    }
+
+    private dashboardHost(): DashboardViewHost {
+        return {
+            renderAttention: (el) => this.renderAttention(el),
+            renderMeetingsSection: (el, direction, page, force) =>
+                this.renderMeetingsSection(el, direction, page, force),
+            renderActionItems: (el, page, force) =>
+                this.renderActionItems(el, page, force),
+            renderFollowUps: (el, page, force) =>
+                this.renderFollowUps(el, page, force),
+            trackDashboardBlock: (el, rerender) =>
+                this.trackDashboardBlock(el, rerender),
+            openSettings: () => this.openPluginSettings(),
+        };
     }
 
     private agendaHost(): AgendaViewHost {
@@ -6567,77 +6497,6 @@ export default class SystemRecordingPlugin extends Plugin {
     private noteHasPendingRecording(note: TFile): boolean {
         const fm = this.app.metadataCache.getFileCache(note)?.frontmatter;
         return fm?.status === "recorded";
-    }
-
-    /** Where the dashboard note lives (or would be created), given the current
-     * one-off folder template. Doesn't check existence — see {@link dashboardNoteExists}. */
-    private dashboardNotePath(): string {
-        const folder = templateStaticRoot(this.settings.oneOffFolderTemplate) || "Meetings";
-        return normalizePath(`${folder}/Meetings Dashboard.md`);
-    }
-
-    /** True when the dashboard note already exists at its conventional path. */
-    private dashboardNoteExists(): boolean {
-        return this.app.vault.getAbstractFileByPath(this.dashboardNotePath()) instanceof TFile;
-    }
-
-    /**
-     * Creates or refreshes the plugin-rendered meetings dashboard note. Only the
-     * plugin-managed block between markers is rewritten, so user edits around it
-     * survive re-runs.
-     */
-    private async createDashboard(): Promise<void> {
-        // Only decides where the dashboard *note* lives; the rendered block
-        // itself is vault-wide (see buildDashboardBlock).
-        const folder = templateStaticRoot(this.settings.oneOffFolderTemplate) || "Meetings";
-        if (!(await this.app.vault.adapter.exists(folder))) {
-            await this.app.vault
-                .createFolder(folder)
-                .catch(() => {
-                    /* created concurrently */
-                });
-        }
-        const path = this.dashboardNotePath();
-        const block = buildDashboardBlock();
-        const existing = this.app.vault.getAbstractFileByPath(path);
-        let file: TFile;
-        if (existing instanceof TFile) {
-            const vault = this.app.vault as typeof this.app.vault & {
-                process?: (
-                    f: TFile,
-                    fn: (data: string) => string
-                ) => Promise<string>;
-            };
-            if (typeof vault.process === "function") {
-                await vault.process(existing, (content) =>
-                    withDashboardBlock(content, block)
-                );
-            } else {
-                const content = await this.app.vault.read(existing);
-                await this.app.vault.modify(
-                    existing,
-                    withDashboardBlock(content, block)
-                );
-            }
-            file = existing;
-        } else {
-            file = await this.app.vault.create(path, `${block}\n`);
-        }
-        // Tag the note so it can use the full editor width (readable line length
-        // off) and render its tables densely — see styles.css. Merges into any
-        // existing `cssclasses` rather than clobbering the user's.
-        await this.app.fileManager.processFrontMatter(file, (fm) => {
-            const raw = (fm as Record<string, unknown>).cssclasses;
-            const list = Array.isArray(raw)
-                ? raw.filter((c): c is string => typeof c === "string")
-                : typeof raw === "string" && raw
-                  ? [raw]
-                  : [];
-            if (!list.includes(DASHBOARD_CSS_CLASS)) list.push(DASHBOARD_CSS_CLASS);
-            (fm as Record<string, unknown>).cssclasses = list;
-        });
-        await this.app.workspace.getLeaf(false).openFile(file);
-        new Notice(t().notices.dashboardCreated);
     }
 
     /** Flips the vault-wide "hide AI notes" toggle and persists it. */
