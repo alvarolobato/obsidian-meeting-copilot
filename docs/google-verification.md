@@ -101,7 +101,11 @@ event read that still lists attendees.
   subdomain. Verify the `lobato.vip` **domain property** in Search Console (DNS `TXT`)
   with the same Google account that owns the Cloud project; the
   `meetingcopilot.lobato.vip` home page is then covered.
-- [ ] Scopes: `calendar.readonly` (only).
+- [ ] Scopes: `calendar.readonly` (only). Remove `openid`, `.../auth/userinfo.email`,
+  and `.../auth/userinfo.profile` if present — Cloud Console adds these to new
+  consent screens by default, but the plugin's OAuth request
+  (`src/auth/googleOAuth.ts`) never asks for them, so they're just unused scope
+  creep that complicates review.
 
 ### DNS + hosting for `meetingcopilot.lobato.vip`
 
