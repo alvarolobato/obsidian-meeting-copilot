@@ -34,34 +34,6 @@ export interface EventRowOptions {
 	 * only the open-link trailing button (the rest stay in the context menu).
 	 */
 	compact?: boolean;
-	/**
-	 * `undefined` — the "show attendee photos" setting is off; no avatar
-	 * element is rendered at all. `null` — the setting is on but no photo is
-	 * available (yet, or ever) for this row; shows an initials fallback.
-	 * Otherwise the resolved photo URL.
-	 */
-	avatarUrl?: string | null;
-	/**
-	 * Fallback (initials) avatar background color, persisted per-person so
-	 * it's stable across renders — see `DirectoryCache.getOrAssignAvatarColor`.
-	 * `undefined` when there's no person to attribute one to (e.g. a
-	 * self-organized group meeting): the CSS default (this row's per-type
-	 * accent color) applies instead.
-	 */
-	avatarColor?: string;
-}
-
-/** Best single label to initial from: the 1:1 partner, else the organizer,
- * else the meeting title. */
-export function avatarLabel(meeting: AgendaMeeting): string {
-	return meeting.oneOnOnePartner || meeting.organizer || meeting.title;
-}
-
-/** First letter of {@link avatarLabel}, uppercased; "?" for an empty/blank
- * label (shouldn't happen — every meeting has at least a title). */
-export function avatarInitial(meeting: AgendaMeeting): string {
-	const label = avatarLabel(meeting).trim();
-	return label ? label[0]!.toUpperCase() : "?";
 }
 
 /** Renders one event row inside a day card. */
@@ -78,19 +50,6 @@ export function renderEventRow(opts: EventRowOptions): void {
 	if (meeting.note) row.addClass("has-note");
 
 	row.createDiv({ cls: "mc-cal-event-bar" });
-
-	if (opts.avatarUrl !== undefined) {
-		const avatar = row.createDiv({ cls: "mc-cal-event-avatar" });
-		if (opts.avatarUrl) {
-			avatar.createEl("img", {
-				attr: { src: opts.avatarUrl, alt: "" },
-			});
-		} else {
-			avatar.addClass("is-fallback");
-			avatar.setText(avatarInitial(meeting));
-			if (opts.avatarColor) avatar.style.background = opts.avatarColor;
-		}
-	}
 
 	const body = row.createDiv({ cls: "mc-cal-event-body" });
 	body.createDiv({ cls: "mc-cal-event-title", text: meeting.title });

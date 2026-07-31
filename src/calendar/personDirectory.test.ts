@@ -5,7 +5,6 @@ import { DirectoryCache } from "./directoryCache";
 import {
 	PersonNameCache,
 	createPeopleDirectory,
-	pickRealPhotoUrl,
 	resolveAttendeeLabel,
 	type PersonDirectory,
 } from "./personDirectory";
@@ -14,16 +13,10 @@ function fakeOauth(): GoogleOAuth {
 	return { getAccessToken: async () => "tok" } as unknown as GoogleOAuth;
 }
 
-/** `resolveAttendeeLabel` only exercises `resolveDisplayName`; every mock
- * still has to satisfy the full interface. */
-function noPhoto(): Pick<PersonDirectory, "resolvePhotoUrl"> {
-	return { resolvePhotoUrl: async () => null };
-}
-
 describe("resolveAttendeeLabel", () => {
 	it("prefers Calendar displayName over directory", async () => {
 		const resolveDisplayName = vi.fn(async () => "Directory Name");
-		const people: PersonDirectory = { resolveDisplayName, ...noPhoto() };
+		const people: PersonDirectory = { resolveDisplayName };
 		await expect(
 			resolveAttendeeLabel("ruflin@elastic.co", "Nicolas Ruflin", people)
 		).resolves.toBe("Nicolas Ruflin");
@@ -33,7 +26,6 @@ describe("resolveAttendeeLabel", () => {
 	it("uses People directory when Calendar has no displayName", async () => {
 		const people: PersonDirectory = {
 			resolveDisplayName: async () => "Nicolas Ruflin",
-			...noPhoto(),
 		};
 		await expect(
 			resolveAttendeeLabel("ruflin@elastic.co", undefined, people)
@@ -43,7 +35,6 @@ describe("resolveAttendeeLabel", () => {
 	it("falls back to humanized local-part when directory misses", async () => {
 		const people: PersonDirectory = {
 			resolveDisplayName: async () => null,
-			...noPhoto(),
 		};
 		await expect(
 			resolveAttendeeLabel("ruflin@elastic.co", "", people)
@@ -54,7 +45,7 @@ describe("resolveAttendeeLabel", () => {
 		const resolveDisplayName = vi
 			.fn()
 			.mockResolvedValueOnce("Nicolas Ruflin");
-		const people: PersonDirectory = { resolveDisplayName, ...noPhoto() };
+		const people: PersonDirectory = { resolveDisplayName };
 		const cache = new PersonNameCache();
 		await expect(
 			resolveAttendeeLabel("ruflin@elastic.co", undefined, people, cache)
@@ -70,7 +61,6 @@ describe("resolveAttendeeLabel", () => {
 			resolveDisplayName: async () => {
 				throw new Error("People API disabled");
 			},
-			...noPhoto(),
 		};
 		const cache = new PersonNameCache();
 		await expect(
@@ -89,7 +79,7 @@ describe("resolveAttendeeLabel", () => {
 		// otherContactsSync-covered person would never be looked up again
 		// this session once the directory API had failed once for anyone.
 		const resolveDisplayName = vi.fn(async () => "Should Still Be Called");
-		const people: PersonDirectory = { resolveDisplayName, ...noPhoto() };
+		const people: PersonDirectory = { resolveDisplayName };
 		const cache = new PersonNameCache();
 		cache.disabled = true;
 		await expect(
@@ -103,7 +93,7 @@ describe("resolveAttendeeLabel", () => {
 			.fn()
 			.mockResolvedValueOnce(undefined)
 			.mockResolvedValueOnce("Nicolas Ruflin");
-		const people: PersonDirectory = { resolveDisplayName, ...noPhoto() };
+		const people: PersonDirectory = { resolveDisplayName };
 		const cache = new PersonNameCache();
 		await expect(
 			resolveAttendeeLabel("ruflin@elastic.co", undefined, people, cache)
@@ -124,7 +114,7 @@ describe("createPeopleDirectory", () => {
 		__setRequestUrl(() => ({ status: 200, json: {}, text: "" }));
 	});
 
-	it("requests photos in the readMask alongside names/emails", async () => {
+	it("requests only names/emails in the readMask", async () => {
 		let requestedUrl = "";
 		__setRequestUrl((req: { url: string }) => {
 			requestedUrl = req.url;
@@ -134,81 +124,24 @@ describe("createPeopleDirectory", () => {
 		const people = createPeopleDirectory(fakeOauth(), {
 			directoryCache: cache,
 		});
-		await people.resolvePhotoUrl("ruflin@elastic.co");
+		await people.resolveDisplayName("ruflin@elastic.co");
 		expect(requestedUrl).toContain(
-			encodeURIComponent("names,emailAddresses,photos")
+			encodeURIComponent("names,emailAddresses")
 		);
+		expect(requestedUrl).not.toContain("photos");
 	});
 
-	it("resolves a real photo, skipping Google's default silhouette", async () => {
-		__setRequestUrl(() => ({
-			status: 200,
-			json: {
-				people: [
-					{
-						names: [{ displayName: "Nicolas Ruflin" }],
-						emailAddresses: [{ value: "ruflin@elastic.co" }],
-						photos: [
-							{ url: "https://example.com/default.png", default: true },
-							{ url: "https://example.com/real.png", default: false },
-						],
-					},
-				],
-			},
-			text: "",
-		}));
-		const cache = new DirectoryCache(null, () => 1_000, 0);
-		const people = createPeopleDirectory(fakeOauth(), {
-			directoryCache: cache,
-		});
-		await expect(
-			people.resolvePhotoUrl("ruflin@elastic.co")
-		).resolves.toBe("https://example.com/real.png");
-	});
-
-	it("shares one lookup/cache entry between name and photo resolution", async () => {
-		let calls = 0;
-		__setRequestUrl(() => {
-			calls++;
-			return {
-				status: 200,
-				json: {
-					people: [
-						{
-							names: [{ displayName: "Nicolas Ruflin" }],
-							emailAddresses: [{ value: "ruflin@elastic.co" }],
-							photos: [{ url: "https://example.com/real.png" }],
-						},
-					],
-				},
-				text: "",
-			};
-		});
-		const cache = new DirectoryCache(null, () => 1_000, 0);
-		const people = createPeopleDirectory(fakeOauth(), {
-			directoryCache: cache,
-		});
-		await expect(
-			people.resolveDisplayName("ruflin@elastic.co")
-		).resolves.toBe("Nicolas Ruflin");
-		await expect(
-			people.resolvePhotoUrl("ruflin@elastic.co")
-		).resolves.toBe("https://example.com/real.png");
-		expect(calls).toBe(1);
-	});
-
-	it("caches a confirmed miss (404) as no name and no photo", async () => {
+	it("caches a confirmed miss (404) as no name", async () => {
 		__setRequestUrl(() => ({ status: 404, json: {}, text: "not found" }));
 		const cache = new DirectoryCache(null, () => 1_000, 0);
 		const people = createPeopleDirectory(fakeOauth(), {
 			directoryCache: cache,
 		});
 		await expect(
-			people.resolvePhotoUrl("ghost@elastic.co")
+			people.resolveDisplayName("ghost@elastic.co")
 		).resolves.toBeNull();
 		expect(cache.getPerson("ghost@elastic.co")).toEqual({
 			name: null,
-			photoUrl: null,
 			at: 1_000,
 		});
 	});
@@ -219,14 +152,14 @@ describe("createPeopleDirectory", () => {
 		cache.markPeopleRateLimited(60_000);
 
 		const quiet = createPeopleDirectory(fakeOauth(), { directoryCache: cache });
-		await quiet.resolvePhotoUrl("ruflin@elastic.co");
+		await quiet.resolveDisplayName("ruflin@elastic.co");
 		expect(warnSpy).not.toHaveBeenCalled();
 
 		const verbose = createPeopleDirectory(fakeOauth(), {
 			directoryCache: cache,
 			debugLogging: true,
 		});
-		await verbose.resolvePhotoUrl("ruflin@elastic.co");
+		await verbose.resolveDisplayName("ruflin@elastic.co");
 		expect(warnSpy).toHaveBeenCalledWith(
 			expect.stringContaining("people lookup skipped (cooldown active)")
 		);
@@ -242,11 +175,7 @@ describe("createPeopleDirectory", () => {
 		const cache = new DirectoryCache(null, () => 1_000, 0);
 		// Simulate otherContactsSync having already found this person via a
 		// completely different (unblocked) API.
-		cache.setPerson(
-			"ruflin@elastic.co",
-			"Nicolas Ruflin",
-			"https://example.com/ruflin.png"
-		);
+		cache.setPerson("ruflin@elastic.co", "Nicolas Ruflin");
 		const nameCache = new PersonNameCache();
 		nameCache.disabled = true; // e.g. Workspace policy blocked the directory earlier this session
 		const people = createPeopleDirectory(fakeOauth(), {
@@ -254,9 +183,6 @@ describe("createPeopleDirectory", () => {
 			nameCache,
 		});
 
-		await expect(people.resolvePhotoUrl("ruflin@elastic.co")).resolves.toBe(
-			"https://example.com/ruflin.png"
-		);
 		await expect(
 			people.resolveDisplayName("ruflin@elastic.co")
 		).resolves.toBe("Nicolas Ruflin");
@@ -278,32 +204,8 @@ describe("createPeopleDirectory", () => {
 		});
 
 		await expect(
-			people.resolvePhotoUrl("nobody@elastic.co")
+			people.resolveDisplayName("nobody@elastic.co")
 		).resolves.toBeUndefined();
 		expect(networkCalls).toBe(0);
-	});
-});
-
-describe("pickRealPhotoUrl", () => {
-	it("excludes default:true — Google's auto-generated colored-initial avatar", () => {
-		expect(
-			pickRealPhotoUrl([
-				{ url: "https://example.com/default.png", default: true },
-				{ url: "https://example.com/real.png", default: false },
-			])
-		).toBe("https://example.com/real.png");
-	});
-
-	it("returns null when every photo is default:true (no real photo available)", () => {
-		expect(
-			pickRealPhotoUrl([
-				{ url: "https://example.com/generated.png", default: true },
-			])
-		).toBeNull();
-	});
-
-	it("returns null when there's no url at all", () => {
-		expect(pickRealPhotoUrl([{ default: false }])).toBeNull();
-		expect(pickRealPhotoUrl(undefined)).toBeNull();
 	});
 });

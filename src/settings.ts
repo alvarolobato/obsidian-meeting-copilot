@@ -120,13 +120,6 @@ export interface SystemRecordingSettings {
 	 * (conference data, location, or description — same detection as auto-open).
 	 */
 	excludeWithoutMeetingLink: boolean;
-	/**
-	 * Show a small photo (or initials, when none resolves) next to each agenda
-	 * event: the 1:1 partner's, else the organizer's. Only resolves for people
-	 * in the signed-in user's Google Workspace directory — external attendees
-	 * fall back to initials.
-	 */
-	showAttendeePhotos: boolean;
 	openMeetAutomatically: boolean;
 	/**
 	 * Whether the one-time "set macOS to Alerts so notifications persist" tip has
@@ -134,6 +127,13 @@ export interface SystemRecordingSettings {
 	 * notification fires so we never nag again.
 	 */
 	notificationStyleHintShown: boolean;
+	/**
+	 * True once the user has dismissed the first-run "create your meetings
+	 * dashboard?" prompt with "Don't ask again". Bookkeeping (not a user
+	 * preference the settings tab exposes); "Later" leaves this false so the
+	 * prompt can offer again next launch.
+	 */
+	dashboardPromptDismissed: boolean;
 	// Meeting detection (Tier 1, macOS).
 	detectMeetings: boolean;
 	detectZoom: boolean;
@@ -226,6 +226,10 @@ export { STT_MODELS, inferSttApiType, type SttApiType };
 /** Shared row count so every settings text area is the same (comfortable) height. */
 const TEXTAREA_ROWS = 18;
 
+/** `data-mc-details` keys that default to *open* (unlike the plain fallback
+ * `<details>` elsewhere, which default closed). */
+const DEFAULT_OPEN_DETAILS_KEYS: readonly string[] = ["google-credentials"];
+
 /** Settings panes shown as horizontal tabs inside the plugin settings view. */
 type SettingsTabId =
 	| "general"
@@ -275,9 +279,9 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	calendarId: "primary",
 	exclusionKeywords: "",
 	excludeWithoutMeetingLink: false,
-	showAttendeePhotos: true,
 	openMeetAutomatically: false,
 	notificationStyleHintShown: false,
+	dashboardPromptDismissed: false,
 	detectMeetings: true,
 	detectZoom: true,
 	detectGoogleMeet: false,
@@ -440,6 +444,11 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
     private localFallbackModelsEl: HTMLElement | null = null;
     /** Which fallback `<details>` were open before the last full `display()` (keyed by data-mc-details). */
     private openDetailsKeys = new Set<string>();
+    /** Which `<details>` the user explicitly closed before the last `display()` —
+     * only tracked for ones that default to *open* (see {@link DEFAULT_OPEN_DETAILS_KEYS}),
+     * so re-rendering for an unrelated reason doesn't silently reopen one the
+     * user just collapsed. */
+    private closedDetailsKeys = new Set<string>();
     /** Input devices last enumerated from the helper, for the Microphone picker. Empty until listed. */
     private inputDevices: InputDevice[] = [];
     /** True while a device enumeration is in flight, so the button can show progress and re-entry is blocked. */
@@ -511,14 +520,20 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         containerEl.scrollTop = scrollTop;
     }
 
-    /** Remember which fallback `<details>` are open before a full re-render. */
+    /** Remember which fallback `<details>` are open (and which default-open
+     * ones the user closed) before a full re-render. */
     private captureOpenDetails(): void {
         this.openDetailsKeys.clear();
+        this.closedDetailsKeys.clear();
         this.containerEl
             .querySelectorAll<HTMLDetailsElement>("details[data-mc-details]")
             .forEach((el) => {
                 const key = el.getAttribute("data-mc-details");
-                if (key && el.open) this.openDetailsKeys.add(key);
+                if (!key) return;
+                if (el.open) this.openDetailsKeys.add(key);
+                else if (DEFAULT_OPEN_DETAILS_KEYS.includes(key)) {
+                    this.closedDetailsKeys.add(key);
+                }
             });
     }
 
@@ -527,7 +542,9 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
             .querySelectorAll<HTMLDetailsElement>("details[data-mc-details]")
             .forEach((el) => {
                 const key = el.getAttribute("data-mc-details");
-                if (key && this.openDetailsKeys.has(key)) el.open = true;
+                if (!key) return;
+                if (this.openDetailsKeys.has(key)) el.open = true;
+                else if (this.closedDetailsKeys.has(key)) el.open = false;
             });
     }
 
@@ -554,6 +571,10 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
      */
     private renderGeneralTab(containerEl: HTMLElement): void {
         const s = t();
+        // Assigned below when the Client ID field is created; referenced by
+        // the Authenticate button's onClick (declared first, but only reads
+        // this once actually clicked — well after the whole tab has rendered).
+        let clientIdInputEl: HTMLInputElement | undefined;
 
         new Setting(containerEl).setName(s.settings.googleHeading).setHeading();
 
@@ -592,15 +613,32 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                 )
                     .setCta()
                     .onClick(() => {
+                        if (!this.plugin.hasGoogleCredentials()) {
+                            // Fails deterministically without ever opening a
+                            // browser tab — short-circuit locally and point
+                            // straight at the field instead of round-tripping
+                            // through authenticateCalendar()'s generic notice.
+                            new Notice(s.oauth.setCredentialsFirst);
+                            advancedDetails.open = true;
+                            clientIdInputEl?.scrollIntoView({
+                                block: "center",
+                                behavior: "smooth",
+                            });
+                            clientIdInputEl?.focus();
+                            return;
+                        }
                         void this.plugin.authenticateCalendar().then(() => this.display());
                         this.display();
                     });
             });
 
-        // Advanced: credential overrides — collapsed by default so the common
-        // path (use bundled credentials) requires zero configuration.
+        // Advanced: credential overrides — expanded by default so a build
+        // with no bundled credentials (or a user who needs their own Google
+        // Cloud project) can find the Client ID/Secret fields immediately,
+        // without knowing to click an easy-to-miss collapsed section first.
         const advancedDetails = containerEl.createEl("details", {
             cls: "mc-advanced-credentials",
+            attr: { "data-mc-details": "google-credentials", open: "" },
         });
         advancedDetails.createEl("summary", {
             text: s.settings.advancedCredentials.summary,
@@ -614,14 +652,15 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         new Setting(advancedDetails)
             .setName(s.settings.clientId.name)
             .setDesc(s.settings.clientId.desc)
-            .addText((text) =>
+            .addText((text) => {
+                clientIdInputEl = text.inputEl;
                 text
                     .setValue(this.plugin.settings.googleClientId)
                     .onChange(async (value) => {
                         this.plugin.settings.googleClientId = value.trim();
                         await this.plugin.saveSettings();
-                    })
-            );
+                    });
+            });
 
         new Setting(advancedDetails)
             .setName(s.settings.clientSecret.name)
@@ -1113,19 +1152,6 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 						this.plugin.refreshAgenda();
 					});
 			});
-
-		new Setting(containerEl)
-			.setName(s.settings.showAttendeePhotos.name)
-			.setDesc(s.settings.showAttendeePhotos.desc)
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.showAttendeePhotos)
-					.onChange(async (value) => {
-						this.plugin.settings.showAttendeePhotos = value;
-						await this.plugin.saveSettings();
-						this.plugin.refreshAgenda();
-					})
-			);
 
 		new Setting(containerEl)
 			.setName(s.settings.agendaPlacement.name)

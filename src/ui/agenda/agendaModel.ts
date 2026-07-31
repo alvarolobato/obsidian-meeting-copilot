@@ -123,25 +123,3 @@ export function toMeetingInfo(m: AgendaMeeting): MeetingEventInfo {
 		oneOnOnePartnerEmail: m.oneOnOnePartnerEmail,
 	};
 }
-
-/**
- * Email to resolve a single per-event avatar photo for: the 1:1 partner (so a
- * self-organized 1:1 shows the other person, not the viewer), else the
- * organizer — unless the viewer organized the (group) event themselves, in
- * which case there's no one else to attribute a photo to (showing your own
- * face on your own row isn't useful, so this falls back to the initials
- * placeholder instead). Null when nothing resolves to an email — an
- * external/foreign calendar's organizer, a truncated attendee list, or a
- * self-organized group meeting. Structural on purpose (`Pick`) so it works on
- * both {@link GCalEvent} and {@link AgendaMeeting} without forcing a
- * conversion first.
- */
-export function avatarEmailFor(
-	m: Pick<
-		AgendaMeeting,
-		"oneOnOnePartnerEmail" | "organizerEmail" | "organizerIsSelf"
-	>
-): string | null {
-	if (m.oneOnOnePartnerEmail) return m.oneOnOnePartnerEmail;
-	return m.organizerIsSelf ? null : m.organizerEmail;
-}

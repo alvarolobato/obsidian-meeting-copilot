@@ -11,8 +11,8 @@ import { mcLog } from "../util/logLine";
 const PEOPLE_API = "https://people.googleapis.com/v1";
 
 /**
- * Workspace directory lookups for display names and photos. Non-admin People
- * API (`directory.readonly`) — not Admin SDK Directory.
+ * Workspace directory lookups for display names. Non-admin People API
+ * (`directory.readonly`) — not Admin SDK Directory.
  */
 export interface PersonDirectory {
 	/**
@@ -22,13 +22,6 @@ export interface PersonDirectory {
 	 * - `undefined` — inconclusive (e.g. 403); do not session-cache as a miss
 	 */
 	resolveDisplayName(email: string): Promise<string | null | undefined>;
-	/**
-	 * Resolve a workspace user's directory photo URL from their email. Same
-	 * hit/miss/inconclusive shape as {@link resolveDisplayName}, and backed by
-	 * the same directory lookup/cache entry — resolving one after the other
-	 * for the same email costs a single network call, not two.
-	 */
-	resolvePhotoUrl(email: string): Promise<string | null | undefined>;
 }
 
 /** Session cache shared across attendee-name resolutions. */
@@ -117,7 +110,7 @@ export interface PeopleDirectoryOptions {
 	 * Gates the per-lookup rate-limit-wait/cooldown-skip logs (one per
 	 * attendee/organizer per poll — the same "verbose, off by default"
 	 * category as the transcription pipeline's `debugLogging`). The 429 event
-	 * itself and the higher-level avatar-resolve summary logs stay always-on.
+	 * itself stays always-on.
 	 */
 	debugLogging?: boolean;
 	/**
@@ -137,39 +130,11 @@ export interface PeopleDirectoryOptions {
 export interface RawDirectoryPerson {
 	names?: Array<{ displayName?: string; unstructuredName?: string }>;
 	emailAddresses?: Array<{ value?: string }>;
-	/** Present when `photos` is in the readMask; `default` marks Google's
-	 * generic silhouette placeholder rather than a real uploaded photo. */
-	photos?: Array<{ url?: string; default?: boolean }>;
-}
-
-/** A resolved (or confirmed-miss) directory entry: name and photo together,
- * since one `searchDirectoryPeople` call returns both. */
-interface DirectoryLookup {
-	name: string | null;
-	photoUrl: string | null;
-}
-
-/**
- * Shared with `otherContactsSync.ts`: both parse the same People API
- * `Person` resource shape (`names`/`emailAddresses`/`photos`). `default: true`
- * marks Google's auto-generated colored-initial avatar rather than a real
- * uploaded photo — confirmed by downloading and visually inspecting several
- * live-synced `otherContacts` photo URLs (each was a solid-color circle with
- * a single letter), not just assumed from `searchDirectoryPeople`'s
- * documented behavior — so this exclusion applies to both sources.
- */
-export function pickRealPhotoUrl(
-	photos: RawDirectoryPerson["photos"]
-): string | null {
-	const real = (photos ?? []).find((p) => !p.default && p.url);
-	return real?.url ?? null;
 }
 
 /**
  * Live People API client (searchDirectoryPeople) backed by the plugin's OAuth.
  * Honors {@link DirectoryCache} + {@link PeopleApiRateLimiter} when provided.
- * Name and photo share one lookup/cache entry per email, so resolving both
- * for the same person costs a single network call.
  */
 export function createPeopleDirectory(
 	oauth: GoogleOAuth,
@@ -177,11 +142,11 @@ export function createPeopleDirectory(
 ): PersonDirectory {
 	const { directoryCache, rateLimiter, debugLogging, nameCache } = opts;
 
-	async function lookup(email: string): Promise<DirectoryLookup | undefined> {
+	async function lookup(email: string): Promise<{ name: string | null } | undefined> {
 		const key = normEmail(email);
 		const cached = directoryCache?.getPerson(key);
 		if (cached !== undefined) {
-			return { name: cached.name, photoUrl: cached.photoUrl };
+			return { name: cached.name };
 		}
 		// Directory blocked this pass (`disabled`) or permanently confirmed
 		// blocked (`permanentlyBlocked`, e.g. Workspace policy — not reset
@@ -218,7 +183,7 @@ export function createPeopleDirectory(
 		const url =
 			`${PEOPLE_API}/people:searchDirectoryPeople` +
 			`?query=${encodeURIComponent(email)}` +
-			`&readMask=${encodeURIComponent("names,emailAddresses,photos")}` +
+			`&readMask=${encodeURIComponent("names,emailAddresses")}` +
 			`&pageSize=10` +
 			`&sources=DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE` +
 			`&sources=DIRECTORY_SOURCE_TYPE_DOMAIN_CONTACT`;
@@ -287,7 +252,7 @@ export function createPeopleDirectory(
 		}
 		if (res.status === 404) {
 			directoryCache?.setPerson(key, null);
-			return { name: null, photoUrl: null };
+			return { name: null };
 		}
 		if (res.status >= 400) {
 			throw new Error(
@@ -300,21 +265,20 @@ export function createPeopleDirectory(
 				.map((e) => normEmail(e.value ?? ""))
 				.filter(Boolean);
 			// searchDirectoryPeople is prefix-based — only accept an exact
-			// email match so a neighboring hit can't steal the label/photo.
+			// email match so a neighboring hit can't steal the label.
 			if (!emails.includes(key)) continue;
 			const name = (
 				person.names?.[0]?.displayName ||
 				person.names?.[0]?.unstructuredName ||
 				""
 			).trim();
-			const photoUrl = pickRealPhotoUrl(person.photos);
-			if (name || photoUrl) {
-				directoryCache?.setPerson(key, name || null, photoUrl);
-				return { name: name || null, photoUrl };
+			if (name) {
+				directoryCache?.setPerson(key, name);
+				return { name };
 			}
 		}
 		directoryCache?.setPerson(key, null);
-		return { name: null, photoUrl: null };
+		return { name: null };
 	}
 
 	return {
@@ -323,12 +287,6 @@ export function createPeopleDirectory(
 		): Promise<string | null | undefined> {
 			const result = await lookup(email);
 			return result === undefined ? undefined : result.name;
-		},
-		async resolvePhotoUrl(
-			email: string
-		): Promise<string | null | undefined> {
-			const result = await lookup(email);
-			return result === undefined ? undefined : result.photoUrl;
 		},
 	};
 }

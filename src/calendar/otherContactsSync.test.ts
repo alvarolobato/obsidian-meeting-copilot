@@ -16,7 +16,7 @@ describe("syncOtherContacts", () => {
 		__setRequestUrl(() => ({ status: 200, json: {}, text: "" }));
 	});
 
-	it("writes name (never photo) for each of a contact's emails, and persists the sync token", async () => {
+	it("writes name for each of a contact's emails, and persists the sync token", async () => {
 		__setRequestUrl(() => ({
 			status: 200,
 			json: {
@@ -27,7 +27,6 @@ describe("syncOtherContacts", () => {
 							{ value: "Ruflin@Elastic.co" },
 							{ value: "nick@elastic.co" },
 						],
-						photos: [{ url: "https://example.com/ruflin.png" }],
 					},
 				],
 				nextSyncToken: "token-1",
@@ -40,52 +39,11 @@ describe("syncOtherContacts", () => {
 		expect(result).toEqual({ updated: 2, full: true });
 		expect(cache.getPerson("ruflin@elastic.co")).toEqual({
 			name: "Nicolas Ruflin",
-			photoUrl: null,
 			at: 1_000,
 		});
-		expect(cache.getPerson("nick@elastic.co")?.photoUrl).toBeNull();
+		expect(cache.getPerson("nick@elastic.co")?.name).toBe("Nicolas Ruflin");
 		expect(cache.otherContactsSyncToken).toBe("token-1");
 		expect(cache.otherContactsSyncedAt).toBe(1_000);
-	});
-
-	it("ignores a photo marked default:false too — otherContacts' `default` flag isn't a reliable real-photo signal", async () => {
-		// Confirmed by downloading and visually inspecting ~15 live-synced
-		// photo URLs across several real accounts: every one was Google's
-		// auto-generated colored-initial avatar (a solid-color circle with a
-		// single letter), never a real uploaded photo — including several
-		// marked `default: false`, which reliably means "real photo" on the
-		// directory-search path. The same generated image even recurred
-		// across unrelated people. So unlike directory search, otherContacts
-		// photos are never trusted here regardless of the `default` flag.
-		__setRequestUrl(() => ({
-			status: 200,
-			json: {
-				otherContacts: [
-					{
-						names: [{ displayName: "Nicolas Ruflin" }],
-						emailAddresses: [{ value: "ruflin@elastic.co" }],
-						photos: [
-							{
-								metadata: { primary: true },
-								url: "https://lh3.googleusercontent.com/cm/AGPWSu8...=s100",
-								default: false,
-							},
-						],
-					},
-				],
-			},
-			text: "",
-		}));
-		const cache = new DirectoryCache(null, () => 1_000, 0);
-		const result = await syncOtherContacts(fakeOauth(), cache);
-
-		// The name still resolves — photos are simply never read from this path.
-		expect(result.updated).toBe(1);
-		expect(cache.getPerson("ruflin@elastic.co")).toEqual({
-			name: "Nicolas Ruflin",
-			photoUrl: null,
-			at: 1_000,
-		});
 	});
 
 	it("pages through nextPageToken and merges every page's entries", async () => {

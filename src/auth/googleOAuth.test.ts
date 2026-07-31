@@ -5,6 +5,7 @@ import { __setRequestUrl } from "../../test/obsidian-mock";
 import {
 	GoogleOAuth,
 	AuthInvalidatedError,
+	CredentialsMissingError,
 	type StoredTokens,
 	type OAuthStorage,
 } from "./googleOAuth";
@@ -120,6 +121,36 @@ describe("GoogleOAuth.getAccessToken", () => {
 		const oauth = new GoogleOAuth(storage);
 		await expect(oauth.getAccessToken()).resolves.toBe("valid");
 		expect(calls).not.toHaveBeenCalled();
+	});
+});
+
+describe("GoogleOAuth.hasCredentials / authenticate credential guard", () => {
+	it("is true when the storage has bundled or user credentials", () => {
+		const { storage } = makeStorage(null);
+		const oauth = new GoogleOAuth(storage);
+		expect(oauth.hasCredentials()).toBe(true);
+	});
+
+	it("is false when getCredentials() returns null (e.g. a community build with no bundled secret and no override)", () => {
+		const storage: OAuthStorage = {
+			getCredentials: () => null,
+			getTokens: () => null,
+			setTokens: async () => {},
+		};
+		const oauth = new GoogleOAuth(storage);
+		expect(oauth.hasCredentials()).toBe(false);
+	});
+
+	it("authenticate() throws CredentialsMissingError (not a generic Error) when credentials are missing", async () => {
+		const storage: OAuthStorage = {
+			getCredentials: () => null,
+			getTokens: () => null,
+			setTokens: async () => {},
+		};
+		const oauth = new GoogleOAuth(storage);
+		await expect(oauth.authenticate()).rejects.toBeInstanceOf(
+			CredentialsMissingError
+		);
 	});
 });
 

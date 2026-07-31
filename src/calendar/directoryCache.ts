@@ -13,49 +13,23 @@ export const PEOPLE_MAX_REQUESTS_PER_MINUTE = 60;
  * and the persisted timestamps below so both prune on the same boundary. */
 export const PEOPLE_RATE_WINDOW_MS = 60_000;
 /** Minimum gap between otherContacts syncs — this data (who you've emailed,
- * their name/photo) changes rarely, so a session/day boundary is plenty. */
+ * their name) changes rarely, so a session/day boundary is plenty. */
 export const OTHER_CONTACTS_RESYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
-/**
- * Fallback-avatar background colors (initials, no real photo available).
- * Same lightness/chroma family as the event accent tokens in `styles.css` (so
- * white/`--mc-cal-card` text stays readable on all of them), spread across
- * hues so distinct people are visually distinguishable at a glance. One is
- * assigned per person the first time their avatar renders and persisted —
- * see {@link DirectoryCache.getOrAssignAvatarColor} — so it's always the
- * same color for that person afterward, not re-randomized every render.
- */
-export const AVATAR_COLOR_PALETTE = [
-	"oklch(0.68 0.16 15)",
-	"oklch(0.70 0.15 50)",
-	"oklch(0.73 0.14 90)",
-	"oklch(0.68 0.13 130)",
-	"oklch(0.68 0.13 170)",
-	"oklch(0.68 0.13 205)",
-	"oklch(0.65 0.14 240)",
-	"oklch(0.65 0.15 275)",
-	"oklch(0.68 0.16 310)",
-	"oklch(0.68 0.17 345)",
-] as const;
 /** Debounce disk writes after a burst of cache fills. */
 export const DIRECTORY_CACHE_SAVE_DEBOUNCE_MS = 1500;
 export const DIRECTORY_CACHE_FILENAME = "directory-cache.json";
 /**
- * Only bump this for a breaking shape change. `photoUrl` was added as an
- * *additive* field (`load()` defaults a missing one to `null`) specifically
- * so it did not need a bump: a version bump discards every cached entry on
- * next load, and since names are cached ~365 days, that forces every
- * still-cached person to be looked up again in one burst — which is exactly
- * what blew through the People API's 90/min quota (429s) when this was first
- * tried as `2`. Backfilling `photoUrl` lazily, one real lookup at a time, is
- * the whole point of an additive field.
+ * Only bump this for a breaking shape change — a version bump discards every
+ * cached entry on next load, and since names are cached ~365 days, that
+ * forces every still-cached person to be looked up again in one burst, which
+ * has blown through the People API's 90/min quota (429s) before. Prefer an
+ * additive field over a bump when possible.
  */
 export const DIRECTORY_CACHE_VERSION = 1;
 
 export interface CachedPerson {
 	/** Directory display name, or `null` when looked up and not found. */
 	name: string | null;
-	/** Directory photo URL, or `null` when looked up and none is available. */
-	photoUrl: string | null;
 	/** Epoch ms when cached. */
 	at: number;
 }
@@ -94,9 +68,6 @@ export interface DirectoryCacheFile {
 	/** Epoch ms of the last successful (full or incremental) otherContacts
 	 * sync; caps resync frequency since this data changes rarely. */
 	otherContactsSyncedAt?: number;
-	/** Persisted fallback-avatar color per person, keyed by lowercased email —
-	 * see {@link DirectoryCache.getOrAssignAvatarColor}. */
-	avatarColors?: Record<string, string>;
 }
 
 export interface DirectoryCacheStore {
@@ -128,10 +99,6 @@ export class DirectoryCache {
 	peopleRateLimitTimestamps: number[] = [];
 	otherContactsSyncToken: string | null = null;
 	otherContactsSyncedAt = 0;
-	/** Persisted fallback-avatar color per person (by email) — see
-	 * {@link getOrAssignAvatarColor}. Never expires: a person's color, once
-	 * assigned, should stay stable indefinitely rather than shift over time. */
-	avatarColors = new Map<string, string>();
 
 	constructor(
 		private readonly store: DirectoryCacheStore | null,
@@ -155,7 +122,6 @@ export class DirectoryCache {
 				) {
 					this.people.set(normEmail(email), {
 						name: entry.name,
-						photoUrl: entry.photoUrl ?? null,
 						at: entry.at,
 					});
 				}
@@ -178,11 +144,6 @@ export class DirectoryCache {
 			);
 			this.otherContactsSyncToken = parsed.otherContactsSyncToken ?? null;
 			this.otherContactsSyncedAt = parsed.otherContactsSyncedAt ?? 0;
-			for (const [email, color] of Object.entries(parsed.avatarColors ?? {})) {
-				if (typeof color === "string" && color) {
-					this.avatarColors.set(normEmail(email), color);
-				}
-			}
 		} catch (err) {
 			console.warn(
 				"[Meeting Copilot] Failed to load directory cache; starting empty.",
@@ -203,12 +164,8 @@ export class DirectoryCache {
 		return entry;
 	}
 
-	setPerson(
-		email: string,
-		name: string | null,
-		photoUrl: string | null = null
-	): void {
-		this.people.set(normEmail(email), { name, photoUrl, at: this.now() });
+	setPerson(email: string, name: string | null): void {
+		this.people.set(normEmail(email), { name, at: this.now() });
 		this.markDirty();
 	}
 
@@ -274,13 +231,11 @@ export class DirectoryCache {
 		this.markDirty();
 	}
 
-	/** Drop negative (miss) entries so a re-auth can retry lookups. A `null`
-	 * name with a real `photoUrl` (a directory hit with a photo but no name
-	 * field) is a hit, not a miss — only drop when *both* are null. */
+	/** Drop negative (miss) entries so a re-auth can retry lookups. */
 	clearNegativeEntries(): void {
 		let changed = false;
 		for (const [email, entry] of this.people) {
-			if (entry.name === null && entry.photoUrl === null) {
+			if (entry.name === null) {
 				this.people.delete(email);
 				changed = true;
 			}
@@ -318,26 +273,6 @@ export class DirectoryCache {
 		this.markDirty();
 	}
 
-	/**
-	 * This person's persisted fallback-avatar color, assigning + persisting a
-	 * random one from `palette` on first use so every render after that finds
-	 * the same one — without this, re-rendering (a poll, a scroll, switching
-	 * days) would reroll the color every time.
-	 */
-	getOrAssignAvatarColor(
-		email: string,
-		palette: readonly string[] = AVATAR_COLOR_PALETTE,
-		random: () => number = Math.random
-	): string {
-		const key = normEmail(email);
-		const existing = this.avatarColors.get(key);
-		if (existing) return existing;
-		const color = palette[Math.floor(random() * palette.length)]!;
-		this.avatarColors.set(key, color);
-		this.markDirty();
-		return color;
-	}
-
 	toJSON(): DirectoryCacheFile {
 		const now = this.now();
 		const people: Record<string, CachedPerson> = {};
@@ -358,7 +293,6 @@ export class DirectoryCache {
 			rateLimitTimestamps,
 			otherContactsSyncToken: this.otherContactsSyncToken,
 			otherContactsSyncedAt: this.otherContactsSyncedAt,
-			avatarColors: Object.fromEntries(this.avatarColors),
 		};
 	}
 

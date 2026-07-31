@@ -215,7 +215,6 @@ describe("mapAttendeesExpanded", () => {
 		const people = {
 			resolveDisplayName: async (email: string) =>
 				email === "ruflin@elastic.co" ? "Nicolas Ruflin" : null,
-			resolvePhotoUrl: async () => null,
 		};
 		const labels = await mapAttendeesExpanded(
 			[

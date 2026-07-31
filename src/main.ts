@@ -46,6 +46,7 @@ import * as path from "path";
 import * as fs from "fs";
 import {
 	CONTACTS_OTHER_READONLY_SCOPE,
+	CredentialsMissingError,
 	GoogleOAuth,
 	type StoredTokens,
 } from "./auth/googleOAuth";
@@ -191,11 +192,11 @@ import {
     shouldSuggestAdhocTitle,
 } from "./enrich/adhocTitle";
 import { RenameModal } from "./ui/renameModal";
+import { DashboardPromptModal } from "./ui/dashboardPromptModal";
 import { t } from "./i18n";
 import { TypedEventBus } from "./util/eventBus";
 import {
     AgendaMeeting,
-    avatarEmailFor,
     buildNoteIndex,
     toAgendaMeeting,
     toMeetingInfo as agendaToMeetingInfo,
@@ -330,6 +331,8 @@ export default class SystemRecordingPlugin extends Plugin {
 	private authAbort: AbortController | null = null;
 	/** The in-flight `authenticateCalendar()` promise, if any — see {@link getAuthPromise}. */
 	private authPromise: Promise<void> | null = null;
+	/** True when this vault had no `data.json` at all before this load — see {@link loadSettings}. */
+	private isCleanInstall = false;
 	/** Tier 1 meeting detector + its poll interval id (macOS only). */
 	private detector: MeetingDetector | null = null;
 	private detectorIntervalId: number | null = null;
@@ -424,14 +427,6 @@ export default class SystemRecordingPlugin extends Plugin {
 	>();
 	/** Bumped to cancel an in-flight background expansion when a newer fetch wins. */
 	private groupExpandGeneration = 0;
-	/**
-	 * Session cache of resolved avatar photo URLs (agenda event → 1:1 partner
-	 * or organizer), keyed by lowercased email. `null` = looked up, no photo;
-	 * absent = not yet resolved this session.
-	 */
-	private avatarUrlByEmail = new Map<string, string | null>();
-	/** Emails currently being resolved, so a second poll can't double-fetch. */
-	private avatarResolveInFlight = new Set<string>();
 	/** Guards against overlapping otherContacts syncs (see scheduleOtherContactsSync). */
 	private otherContactsSyncInFlight = false;
 	private agendaEvents = new TypedEventBus<AgendaViewEvents>();
@@ -733,7 +728,36 @@ export default class SystemRecordingPlugin extends Plugin {
 		this.registerDomEvent(document, "visibilitychange", () => {
 			if (document.visibilityState === "visible") this.onPromptWindowFocused();
 		});
+
+		this.app.workspace.onLayoutReady(() => this.maybeOfferDashboardCreation());
     }
+
+	/**
+	 * Offers to create the meetings dashboard note once, on a genuine clean
+	 * install (no prior `data.json` — see {@link loadSettings}) that doesn't
+	 * already have one (an upgrade where the user made one, or made one
+	 * before dismissing, shouldn't be asked again). Deferred to
+	 * `onLayoutReady` so it never competes with Obsidian's own startup
+	 * rendering.
+	 */
+	private maybeOfferDashboardCreation(): void {
+		if (!this.isCleanInstall) return;
+		if (this.settings.dashboardPromptDismissed) return;
+		if (this.dashboardNoteExists()) return;
+		const s = t().dashboardPrompt;
+		new DashboardPromptModal(this.app, {
+			heading: s.heading,
+			desc: s.desc,
+			createLabel: s.create,
+			laterLabel: s.later,
+			dontAskAgainLabel: s.dontAskAgain,
+			onCreate: () => void this.createDashboard(),
+			onDontAskAgain: () => {
+				this.settings.dashboardPromptDismissed = true;
+				void this.saveSettings();
+			},
+		}).open();
+	}
 
 	/** One-shot startup dump so "no notifications" reports have concrete context. */
 	private logNotificationEnvironment(): void {
@@ -808,6 +832,11 @@ export default class SystemRecordingPlugin extends Plugin {
                   sttModelId?: string;
               })
             | null;
+        // No `data.json` at all is Obsidian's own signal for "this plugin has
+        // never been configured on this vault before" — used to gate the
+        // one-time dashboard-creation prompt (see onload()) so it only offers
+        // on an actual clean install, not every upgrade.
+        this.isCleanInstall = raw === null;
         this.settings = Object.assign(
             {},
             DEFAULT_SETTINGS,
@@ -1332,6 +1361,12 @@ export default class SystemRecordingPlugin extends Plugin {
 		} catch (e) {
 			if (e instanceof Error && e.name === "AbortError") {
 				new Notice(t().oauth.cancelled);
+			} else if (e instanceof CredentialsMissingError) {
+				// Not just an inert error notice: take the user straight to
+				// where they can fix it (the now always-expanded Advanced
+				// Credentials section) instead of leaving them to hunt for it.
+				new Notice(e.message);
+				this.openPluginSettings();
 			} else {
 				new Notice(e instanceof Error ? e.message : String(e));
 			}
@@ -1348,6 +1383,13 @@ export default class SystemRecordingPlugin extends Plugin {
 	/** True while {@link authenticateCalendar} is waiting on the browser consent flow. */
 	isAuthenticating(): boolean {
 		return this.authAbort !== null;
+	}
+
+	/** True when a usable client id/secret pair (bundled or user-provided) is
+	 * available — false for a community build with no bundled credentials
+	 * until the user enters their own in the Advanced Credentials section. */
+	hasGoogleCredentials(): boolean {
+		return this.oauth.hasCredentials();
 	}
 
 	/** The in-flight {@link authenticateCalendar} call, if any — see that
@@ -2210,107 +2252,13 @@ export default class SystemRecordingPlugin extends Plugin {
 	}
 
 	/**
-	 * Resolve avatar photo URLs for events' 1:1 partner / organizer in the
-	 * background, same pattern as {@link scheduleGroupAttendeeExpand}:
-	 * soft-fails, session-caches results, and triggers an agenda refresh once
-	 * anything new resolves. No-ops when the setting is off.
-	 */
-	private scheduleAvatarResolve(
-		events: Array<
-			Pick<
-				AgendaMeeting,
-				"oneOnOnePartnerEmail" | "organizerEmail" | "organizerIsSelf"
-			>
-		>
-	): void {
-		if (!this.settings.showAttendeePhotos) return;
-		// No blanket "directory disabled, don't even try" gate here: the
-		// person directory's own lookup() already skips the network call
-		// once personNameCache.disabled is set, but only after checking the
-		// persistent cache — so an otherContacts-sourced hit (a separate,
-		// unblocked API, kept fresh on its own schedule) still resolves for
-		// emails not yet in avatarUrlByEmail even after the directory gave up.
-		const emails = new Set<string>();
-		for (const ev of events) {
-			const email = avatarEmailFor(ev);
-			if (!email) continue;
-			if (this.avatarUrlByEmail.has(email)) continue;
-			if (this.avatarResolveInFlight.has(email)) continue;
-			emails.add(email);
-		}
-		if (emails.size === 0) return;
-		mcLog("avatar", "resolve scheduled", { count: emails.size });
-		void this.runAvatarResolve(emails);
-	}
-
-	private async runAvatarResolve(emails: Set<string>): Promise<void> {
-		for (const email of emails) this.avatarResolveInFlight.add(email);
-		let resolved = 0;
-		let misses = 0;
-		let inconclusive = 0;
-		try {
-			const people = this.createPersonDirectory();
-			let changed = false;
-			for (const email of emails) {
-				try {
-					const url = await people.resolvePhotoUrl(email);
-					// undefined = inconclusive (e.g. missing scope, or the shared
-					// rate limiter is mid-cooldown after a 429): don't cache, so a
-					// later pass (after re-auth, or once the cooldown clears) can
-					// retry instead of sticking with a stale "no photo".
-					if (url === undefined) {
-						inconclusive++;
-						continue;
-					}
-					this.avatarUrlByEmail.set(email, url);
-					if (url) {
-						resolved++;
-						changed = true;
-					} else {
-						misses++;
-					}
-				} catch (err) {
-					// A thrown lookup error means the Directory network call is
-					// permanently blocked this session (Workspace policy, or the
-					// API disabled) — stop this batch rather than repeating a
-					// doomed request for the rest of it. Future polls still try
-					// (personDirectory's lookup() skips straight to a cache check
-					// once this flag is set, so otherContacts-sourced hits for
-					// emails not reached this batch still resolve). Shared flag
-					// with resolveAttendeeLabel.
-					this.personNameCache.disabled = true;
-					mcLog("avatar", "resolve failed", {
-						email,
-						resolved,
-						misses,
-						inconclusive,
-						remaining: emails.size - resolved - misses - inconclusive,
-						error: err instanceof Error ? err.message : String(err),
-					});
-					return;
-				}
-			}
-			mcLog("avatar", "resolve done", {
-				requested: emails.size,
-				resolved,
-				misses,
-				inconclusive,
-			});
-			if (changed) this.agendaEvents.emit("changed", undefined);
-		} finally {
-			for (const email of emails) this.avatarResolveInFlight.delete(email);
-		}
-	}
-
-	/**
-	 * Kicks off a background otherContacts sync (name + photo for people
+	 * Kicks off a background otherContacts sync (display names for people
 	 * you've corresponded with over Gmail — see `otherContactsSync.ts`) at
 	 * most once per {@link OTHER_CONTACTS_RESYNC_INTERVAL_MS}. No-ops when
-	 * photos are off, not authenticated, already mid-sync, or the user
-	 * hasn't re-consented to the new scope yet (an old install predates it).
+	 * not authenticated, already mid-sync, or the user hasn't re-consented to
+	 * the scope yet (an old install predates it).
 	 */
 	private scheduleOtherContactsSync(): void {
-		if (!this.settings.showAttendeePhotos) return;
 		if (!this.isCalendarAuthenticated()) return;
 		if (this.otherContactsSyncInFlight) return;
 		if (!this.oauth.hasScope(CONTACTS_OTHER_READONLY_SCOPE)) return;
@@ -2782,9 +2730,6 @@ export default class SystemRecordingPlugin extends Plugin {
             isAuthenticating: () => this.isAuthenticating(),
             cancelAuthenticate: () => this.cancelAuthenticate(),
             fetchMeetings: (fromMs, toMs) => this.fetchAgendaMeetings(fromMs, toMs),
-            showAttendeePhotos: () => this.settings.showAttendeePhotos,
-            getAvatarUrl: (email) => this.avatarUrlByEmail.get(email),
-            getAvatarColor: (email) => this.directoryCache.getOrAssignAvatarColor(email),
             isRecordingThis: (m) => this.isRecordingMeeting(m),
             onOpenOrCreate: (m) => void this.openOrCreateNote(m),
             onCreateAndRecord: (m) => this.startRecordingForMeeting(m),
@@ -3967,8 +3912,7 @@ export default class SystemRecordingPlugin extends Plugin {
             invitees: [],
             organizer: str("organizer") || null,
             // Frontmatter doesn't carry the organizer's email (only a display
-            // label, if that); no avatar email to fall back to for this
-            // note-derived, non-calendar meeting.
+            // label, if that) for this note-derived, non-calendar meeting.
             organizerEmail: null,
             organizerIsSelf: false,
             iCalUID: str("ical_uid") || null,
@@ -4019,7 +3963,6 @@ export default class SystemRecordingPlugin extends Plugin {
         );
         this.applyCachedExpandedAttendees(events);
         this.scheduleGroupAttendeeExpand(events);
-        this.scheduleAvatarResolve(events);
         this.scheduleOtherContactsSync();
         const index = buildNoteIndex(this.app);
         return events
@@ -6567,6 +6510,18 @@ export default class SystemRecordingPlugin extends Plugin {
         return fm?.status === "recorded";
     }
 
+    /** Where the dashboard note lives (or would be created), given the current
+     * one-off folder template. Doesn't check existence — see {@link dashboardNoteExists}. */
+    private dashboardNotePath(): string {
+        const folder = templateStaticRoot(this.settings.oneOffFolderTemplate) || "Meetings";
+        return normalizePath(`${folder}/Meetings Dashboard.md`);
+    }
+
+    /** True when the dashboard note already exists at its conventional path. */
+    private dashboardNoteExists(): boolean {
+        return this.app.vault.getAbstractFileByPath(this.dashboardNotePath()) instanceof TFile;
+    }
+
     /**
      * Creates or refreshes the plugin-rendered meetings dashboard note. Only the
      * plugin-managed block between markers is rewritten, so user edits around it
@@ -6583,7 +6538,7 @@ export default class SystemRecordingPlugin extends Plugin {
                     /* created concurrently */
                 });
         }
-        const path = normalizePath(`${folder}/Meetings Dashboard.md`);
+        const path = this.dashboardNotePath();
         const block = buildDashboardBlock();
         const existing = this.app.vault.getAbstractFileByPath(path);
         let file: TFile;

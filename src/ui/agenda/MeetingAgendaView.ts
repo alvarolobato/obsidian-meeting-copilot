@@ -1,7 +1,7 @@
 import { ItemView, WorkspaceLeaf, moment, setIcon } from "obsidian";
 import { t } from "../../i18n";
 import type { TypedEventBus } from "../../util/eventBus";
-import { avatarEmailFor, type AgendaMeeting } from "./agendaModel";
+import type { AgendaMeeting } from "./agendaModel";
 import { renderAgendaHeader } from "./components/agendaHeader";
 import { renderNowCard } from "./components/nowCard";
 import { renderEventRow, RowHandlers } from "./components/eventRow";
@@ -32,14 +32,6 @@ export interface AgendaViewHost {
 	cancelAuthenticate(): void;
 	/** Fetch meetings within [fromMs, toMs], enriched with note/recording state. */
 	fetchMeetings(fromMs: number, toMs: number): Promise<AgendaMeeting[]>;
-	showAttendeePhotos(): boolean;
-	/** Session-cached avatar lookup: a resolved URL, `null` for a confirmed
-	 * no-photo, or `undefined` when not resolved yet (falls back to initials;
-	 * a later "changed" event re-renders once the background resolve lands). */
-	getAvatarUrl(email: string): string | null | undefined;
-	/** This person's persisted fallback-avatar (initials) color — stable
-	 * across renders/sessions, assigned once on first use. */
-	getAvatarColor(email: string): string;
 	isRecordingThis(meeting: AgendaMeeting): boolean;
 	onOpenOrCreate(meeting: AgendaMeeting): void;
 	onCreateAndRecord(meeting: AgendaMeeting): void;
@@ -385,8 +377,6 @@ export class MeetingAgendaView extends ItemView {
 				now: o.now,
 				handlers: this.rowHandlers(),
 				compact: o.compact,
-				avatarUrl: this.avatarUrlFor(meeting),
-				avatarColor: this.avatarColorFor(meeting),
 			});
 		}
 
@@ -424,32 +414,8 @@ export class MeetingAgendaView extends ItemView {
 				now,
 				handlers: this.rowHandlers(),
 				compact,
-				avatarUrl: this.avatarUrlFor(meeting),
-				avatarColor: this.avatarColorFor(meeting),
 			});
 		}
-	}
-
-	/**
-	 * `undefined` when the setting is off (no avatar element at all); `null`
-	 * when it's on but no email/photo resolves yet (initials fallback);
-	 * otherwise the resolved photo URL.
-	 */
-	private avatarUrlFor(meeting: AgendaMeeting): string | null | undefined {
-		if (!this.host.showAttendeePhotos()) return undefined;
-		const email = avatarEmailFor(meeting);
-		if (!email) return null;
-		return this.host.getAvatarUrl(email) ?? null;
-	}
-
-	/** The initials-fallback background color for this meeting's avatar
-	 * person, or `undefined` when there's no email to attribute one to (e.g.
-	 * a self-organized group meeting) — eventRow falls back to the existing
-	 * per-meeting-type accent color in that case. */
-	private avatarColorFor(meeting: AgendaMeeting): string | undefined {
-		const email = avatarEmailFor(meeting);
-		if (!email) return undefined;
-		return this.host.getAvatarColor(email);
 	}
 
 	private renderGap(parent: HTMLElement, count: number): void {

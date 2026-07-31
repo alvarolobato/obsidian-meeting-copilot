@@ -300,6 +300,13 @@ export const en = {
 				`Couldn't complete the follow-up: ${msg}`,
 		},
 	},
+	dashboardPrompt: {
+		heading: "Create your meetings dashboard?",
+		desc: "A dashboard note gives you one place to see upcoming/past meetings, open action items, and follow-ups — updated live as you record and enrich meetings. You can also create it anytime from the command palette.",
+		create: "Create",
+		later: "Later",
+		dontAskAgain: "Don't ask again",
+	},
 	settings: {
 		// Version line at the top of the settings tab. Release builds show just
 		// the version; custom/local builds append this marker with provenance.
@@ -440,10 +447,6 @@ export const en = {
 		groupExpandMaxMembers: {
 			name: "Max group members to expand",
 			desc: "When a calendar invite lists a Google Group, expand it into at most this many people (via Cloud Identity). Runs in the background after the agenda loads. Larger groups are represented by the first N members only (the group label is replaced). Default 50; max 500.",
-		},
-		showAttendeePhotos: {
-			name: "Show attendee photos",
-			desc: "Show a small photo next to each agenda event — the 1:1 partner's, else the organizer's — falling back to initials when none is available. Resolves from your Google Workspace directory and from your Google \"Other contacts\" (people you've corresponded with over Gmail); the latter needs a one-time re-authentication to grant. Always falls back to initials for people neither source can resolve.",
 		},
 		excludeWithoutMeetingLink: {
 			name: "Exclude meetings without a conference link",

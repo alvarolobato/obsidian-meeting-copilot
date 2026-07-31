@@ -31,8 +31,7 @@ function normEmail(email: string): string {
 
 /**
  * Syncs the user's Google "Other contacts" — people auto-added from Gmail
- * correspondence — into the shared {@link DirectoryCache} (name only; see
- * below on photos).
+ * correspondence — into the shared {@link DirectoryCache} (display name only).
  *
  * This is a second, independent path to the same kind of data that
  * `personDirectory.ts`'s `searchDirectoryPeople` resolves, for a specific
@@ -41,14 +40,6 @@ function normEmail(email: string): string {
  * lookup for *every* attendee, permanently, for that domain. "Other
  * contacts" is the user's own private data, not the org Directory, so it
  * isn't subject to that admin setting.
- *
- * Photos are intentionally never taken from this endpoint — verified by
- * downloading and inspecting real cached photo URLs across several accounts,
- * every one was Google's generated colored-initial circle, including entries
- * marked `default: false` (which reliably means "real photo" on the
- * directory-search path). The same generated image routinely recurs across
- * unrelated people here too, so there is no reliable signal at all on this
- * endpoint for "this is a real uploaded photo." Name resolution is unaffected.
  */
 export async function syncOtherContacts(
 	oauth: GoogleOAuth,
@@ -127,23 +118,11 @@ export async function syncOtherContacts(
 				person.names?.[0]?.unstructuredName ||
 				""
 			).trim();
-			// otherContacts photos are never trusted, even when `default: false`.
-			// Confirmed by downloading and visually inspecting ~15 cached URLs
-			// across several real accounts/domains: every one was a generated
-			// colored-initial circle, never a real uploaded photo — including
-			// ones marked `default: false`, which elsewhere reliably means "real
-			// photo". Worse, the same generated image recurred across unrelated
-			// people (2,103 cached emails collapsed to 626 distinct images, 401
-			// of them shared by 2+ people), so `default` simply isn't a valid
-			// real-vs-generated signal on this endpoint. Name resolution from
-			// otherContacts is still useful and unaffected; only photos are
-			// unusable here. See `pickRealPhotoUrl` for the directory-search
-			// path, where `default` does still apply.
 			if (!name) continue;
 			for (const e of person.emailAddresses ?? []) {
 				const email = normEmail(e.value ?? "");
 				if (!email) continue;
-				directoryCache.setPerson(email, name, null);
+				directoryCache.setPerson(email, name);
 				updated++;
 			}
 		}

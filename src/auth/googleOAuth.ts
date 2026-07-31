@@ -35,20 +35,34 @@ export class AuthInvalidatedError extends Error {
 	}
 }
 
+/**
+ * Thrown when neither a bundled nor a user-provided OAuth client id/secret is
+ * available (e.g. a community build compiled without bundled credentials, and
+ * the user hasn't entered their own yet). Distinct from a generic `Error` so
+ * callers can react by guiding the user to where credentials are entered,
+ * rather than just showing an inert error message.
+ */
+export class CredentialsMissingError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "CredentialsMissingError";
+	}
+}
+
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 /**
  * Calendar events, Cloud Identity Groups (read-only), People directory
  * (read-only), and the user's own "Other contacts" (read-only). Groups
  * expands group invitees into people; the directory scope resolves display
- * names/photos from the org directory when Calendar omits them — subject to
- * the Workspace admin's directory-sharing setting, which some domains
- * disable entirely for third-party apps. `contacts.other.readonly` is a
- * second, independent path to the same kind of data (name + photo) via the
- * user's own personal "Other contacts" (auto-populated from Gmail
- * correspondence) — that data is private to the user, not the org Directory,
- * so it isn't subject to that admin setting. Admin Directory scopes are
- * intentionally not requested.
+ * names from the org directory when Calendar omits them — subject to the
+ * Workspace admin's directory-sharing setting, which some domains disable
+ * entirely for third-party apps. `contacts.other.readonly` is a second,
+ * independent path to the same kind of data (display names) via the user's
+ * own personal "Other contacts" (auto-populated from Gmail correspondence) —
+ * that data is private to the user, not the org Directory, so it isn't
+ * subject to that admin setting. Admin Directory scopes are intentionally
+ * not requested.
  */
 const SCOPE = [
 	"https://www.googleapis.com/auth/calendar.readonly",
@@ -57,7 +71,7 @@ const SCOPE = [
 	"https://www.googleapis.com/auth/contacts.other.readonly",
 ].join(" ");
 
-/** Scope string for the personal "Other contacts" read (name + photo), used
+/** Scope string for the personal "Other contacts" read (display names), used
  * by {@link GoogleOAuth.hasScope} to check whether a re-auth is still needed
  * (existing tokens predate this scope until the user reconnects). */
 export const CONTACTS_OTHER_READONLY_SCOPE =
@@ -79,6 +93,13 @@ export class GoogleOAuth {
 
 	isAuthenticated(): boolean {
 		return this.storage.getTokens() !== null;
+	}
+
+	/** Whether a usable client id/secret pair (bundled or user-provided) is
+	 * currently available — false for a community build with no bundled
+	 * credentials until the user enters their own. */
+	hasCredentials(): boolean {
+		return this.storage.getCredentials() !== null;
 	}
 
 	/** Whether the currently-stored tokens were granted the given scope.
@@ -162,7 +183,7 @@ export class GoogleOAuth {
 		}
 		const creds = this.storage.getCredentials();
 		if (!creds) {
-			throw new Error(t().oauth.setCredentialsFirst);
+			throw new CredentialsMissingError(t().oauth.setCredentialsFirst);
 		}
 		if (signal?.aborted) {
 			throw new DOMException("Aborted", "AbortError");

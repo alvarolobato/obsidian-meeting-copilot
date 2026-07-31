@@ -62,7 +62,7 @@ describe("directory clients HTTP 403", () => {
 		const people = createPeopleDirectory(fakeOauth(), {
 			directoryCache: cache,
 		});
-		await people.resolvePhotoUrl("ruflin@x.com");
+		await people.resolveDisplayName("ruflin@x.com");
 		expect(warnSpy).toHaveBeenCalledWith(
 			expect.stringContaining(
 				"people lookup 403 (non-SERVICE_DISABLED)"
@@ -93,7 +93,7 @@ describe("directory clients HTTP 403", () => {
 			directoryCache: cache,
 		});
 		await expect(
-			people.resolvePhotoUrl("ruflin@x.com")
+			people.resolveDisplayName("ruflin@x.com")
 		).rejects.toThrow(/Workspace admin policy/);
 		expect(warnSpy).toHaveBeenCalledWith(
 			expect.stringContaining(
@@ -132,7 +132,7 @@ describe("directory clients HTTP 403", () => {
 		});
 
 		await expect(
-			people.resolvePhotoUrl("ruflin@x.com")
+			people.resolveDisplayName("ruflin@x.com")
 		).rejects.toThrow(/Workspace admin policy/);
 		expect(networkCalls).toBe(1);
 		expect(nameCache.permanentlyBlocked).toBe(true);
@@ -141,7 +141,7 @@ describe("directory clients HTTP 403", () => {
 		nameCache.disabled = false;
 
 		await expect(
-			people.resolvePhotoUrl("someone-else@x.com")
+			people.resolveDisplayName("someone-else@x.com")
 		).resolves.toBeUndefined();
 		expect(networkCalls).toBe(1); // no second network call
 	});
