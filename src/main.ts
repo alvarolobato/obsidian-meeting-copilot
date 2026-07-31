@@ -208,6 +208,7 @@ import {
     populateMeetingMenu,
     RowHandlers,
 } from "./ui/agenda/components/eventRow";
+import { accentClass, accentFor } from "./ui/agenda/components/accent";
 import { registerIcons, RECORD_ICON } from "./ui/icons";
 import {
 	notifyOs,
@@ -3581,18 +3582,22 @@ export default class SystemRecordingPlugin extends Plugin {
         },
         today: Date
     ): void {
-        // Same accent-bar language as the meetings list above: coloured by
-        // pipeline status, falling back to the neutral "scheduled" tone for a
-        // foreign note that carries none.
-        const hasStatus = !!group.status && group.status !== "—";
-        const accentCls = hasStatus
-            ? `mc-cal-accent-status-${group.status}`
-            : "mc-cal-accent-status-scheduled";
+        const file = this.app.vault.getAbstractFileByPath(group.path);
+        // Every note reaching this list has already been enriched (that's
+        // what creates the "## Action items"/"## Follow-ups" section in the
+        // first place), so a status-coloured bar would be the same colour on
+        // every row. Colour by meeting type instead — the same 1:1/recurring/
+        // meeting classification the agenda itself uses, which doesn't move
+        // with pipeline status and actually varies note to note.
+        const accentCls = accentClass(
+            file instanceof TFile
+                ? accentFor(this.agendaMeetingFromNote(file))
+                : "meeting"
+        );
         const note = parent.createDiv({ cls: `mc-action-note ${accentCls}` });
         note.createDiv({ cls: "mc-action-note-bar" });
         const body = note.createDiv({ cls: "mc-action-note-body" });
         const header = body.createDiv({ cls: "mc-action-note-header" });
-        const file = this.app.vault.getAbstractFileByPath(group.path);
         const title = header.createEl("a", {
             cls: "mc-action-note-title internal-link",
             text: group.title,
@@ -3718,12 +3723,10 @@ export default class SystemRecordingPlugin extends Plugin {
                 typeof titleRaw === "string" && titleRaw
                     ? titleRaw
                     : file.basename;
-            const statusRaw = fm?.["status"];
             groups.push({
                 path: file.path,
                 title,
                 date: this.resolveNoteDate(file, fm),
-                status: typeof statusRaw === "string" ? statusRaw : "",
                 tasks,
             });
         }
