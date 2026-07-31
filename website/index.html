@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>Meeting Copilot — Meeting notes & transcription for Obsidian</title>
+	<meta name="description" content="Meeting Copilot is an Obsidian plugin for macOS: Google Calendar sync, dual-channel recording, on-device or remote transcription, and AI meeting summaries — all on your own machine." />
+	<link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
+	<link rel="stylesheet" href="styles.css" />
+	<meta property="og:title" content="Meeting Copilot for Obsidian" />
+	<meta property="og:description" content="Record, transcribe, and summarize your meetings — privately, on your own Mac, inside Obsidian." />
+	<meta property="og:type" content="website" />
+</head>
+<body>
+	<header class="site">
+		<div class="wrap nav">
+			<a class="brand" href="/">
+				<img class="logo" src="assets/logo.svg" alt="" />
+				Meeting Copilot
+			</a>
+			<nav class="nav-links">
+				<a href="#features">Features</a>
+				<a href="#how">How it works</a>
+				<a href="#privacy">Privacy</a>
+				<a href="https://github.com/alvarolobato/obsidian-meeting-copilot">GitHub</a>
+			</nav>
+			<a class="btn" href="https://github.com/alvarolobato/obsidian-meeting-copilot#installation">Install</a>
+		</div>
+	</header>
+
+	<main>
+		<section class="hero">
+			<div class="wrap">
+				<span class="eyebrow">Obsidian plugin · macOS</span>
+				<h1>Your meetings, captured in <span class="accent">Obsidian</span>.</h1>
+				<p class="lede">
+					Meeting Copilot turns your calendar into notes: it syncs Google Calendar,
+					records both sides of the conversation, transcribes on-device or via your
+					own endpoint, and drafts AI summaries — entirely on your Mac.
+				</p>
+				<div class="cta">
+					<a class="btn" href="https://github.com/alvarolobato/obsidian-meeting-copilot#installation">Get started</a>
+					<a class="btn ghost" href="https://github.com/alvarolobato/obsidian-meeting-copilot">View on GitHub</a>
+				</div>
+				<p class="fineprint">Free &amp; open source · Runs locally · No account, no server</p>
+			</div>
+		</section>
+
+		<section id="features">
+			<div class="wrap">
+				<div class="section-head">
+					<h2>Everything a meeting note needs</h2>
+					<p>From the moment an event lands on your calendar to a searchable, summarized note in your vault.</p>
+				</div>
+				<div class="grid">
+					<div class="card">
+						<div class="icon" aria-hidden="true">
+							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+						</div>
+						<h3>Google Calendar sync</h3>
+						<p>Your agenda appears in a sidebar. Each event becomes a meeting note, and you're prompted around start and end times. Read-only — the plugin never edits your calendar.</p>
+					</div>
+					<div class="card">
+						<div class="icon" aria-hidden="true">
+							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8"/></svg>
+						</div>
+						<h3>Dual-channel recording</h3>
+						<p>Captures system audio and your microphone on separate tracks, so you and the other side stay cleanly labeled in the transcript.</p>
+					</div>
+					<div class="card">
+						<div class="icon" aria-hidden="true">
+							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h3l2 6 4-16 2 10 2-4h3"/></svg>
+						</div>
+						<h3>On-device or remote transcription</h3>
+						<p>Run Whisper locally so audio never leaves your Mac, or point at any OpenAI-compatible endpoint you control. Your choice, your keys.</p>
+					</div>
+					<div class="card">
+						<div class="icon" aria-hidden="true">
+							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.5 5.5L20 11l-5.5 2.5L12 19l-2.5-5.5L4 11l5.5-2.5z"/></svg>
+						</div>
+						<h3>AI summaries</h3>
+						<p>Optional enrichment drafts a summary, decisions, and action items from the transcript — which can flow into your task manager.</p>
+					</div>
+					<div class="card">
+						<div class="icon" aria-hidden="true">
+							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6"/><rect x="12" y="8" width="3" height="10"/><rect x="17" y="5" width="3" height="13"/></svg>
+						</div>
+						<h3>Meetings dashboard</h3>
+						<p>A generated dashboard rolls up your meeting notes, with recording retention that tidies up audio once a transcript is saved.</p>
+					</div>
+					<div class="card">
+						<div class="icon" aria-hidden="true">
+							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+						</div>
+						<h3>Local &amp; private</h3>
+						<p>No Meeting Copilot server exists. Everything lives in your Obsidian vault on your device — nothing is sent to the developer.</p>
+					</div>
+				</div>
+			</div>
+		</section>
+
+		<section id="how" style="background:var(--bg-2);border-block:1px solid var(--border)">
+			<div class="wrap">
+				<div class="section-head">
+					<h2>How it works</h2>
+					<p>Four steps from calendar invite to a finished note.</p>
+				</div>
+				<div class="steps">
+					<div class="step">
+						<h3>Connect your calendar</h3>
+						<p>Authenticate with Google once. Meeting Copilot reads your upcoming events, read-only.</p>
+					</div>
+					<div class="step">
+						<h3>Record the meeting</h3>
+						<p>Start recording from the agenda or the ribbon. Both audio channels are captured locally.</p>
+					</div>
+					<div class="step">
+						<h3>Transcribe</h3>
+						<p>Whisper runs on your Mac, or your configured endpoint transcribes — with speaker labels.</p>
+					</div>
+					<div class="step">
+						<h3>Summarize &amp; file</h3>
+						<p>AI enrichment drafts a summary and action items straight into your Obsidian note.</p>
+					</div>
+				</div>
+			</div>
+		</section>
+
+		<section id="privacy">
+			<div class="wrap">
+				<div class="privacy-banner">
+					<svg class="shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
+					<div class="body">
+						<h2>Privacy by design</h2>
+						<p>
+							Meeting Copilot has no backend. It talks only to Google's official APIs
+							from your own machine, reads your calendar read-only, and keeps your
+							notes, recordings, and login tokens on your device. Read the full
+							<a href="privacy.html">Privacy Policy</a>.
+						</p>
+					</div>
+				</div>
+			</div>
+		</section>
+	</main>
+
+	<footer class="site">
+		<div class="wrap foot">
+			<div>© <span id="yr">2026</span> Meeting Copilot · Built for <a href="https://obsidian.md">Obsidian</a></div>
+			<nav class="foot-links">
+				<a href="privacy.html">Privacy Policy</a>
+				<a href="https://github.com/alvarolobato/obsidian-meeting-copilot">GitHub</a>
+				<a href="https://github.com/alvarolobato/obsidian-meeting-copilot/issues">Support</a>
+			</nav>
+		</div>
+	</footer>
+	<script>document.getElementById("yr").textContent = new Date().getFullYear();</script>
+</body>
+</html>
