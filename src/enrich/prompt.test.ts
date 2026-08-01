@@ -138,6 +138,23 @@ describe("effectiveEnrichPrompt", () => {
 			"this trimming never applies to the participant's own notes"
 		);
 	});
+
+	it("asks for Obsidian highlight syntax on carried-over notes/action items/follow-ups only", () => {
+		expect(DEFAULT_ENRICH_PROMPT).toContain("`==like this==`");
+		expect(DEFAULT_ENRICH_PROMPT).toContain(
+			"Never highlight a bullet you wrote yourself from the transcript alone"
+		);
+		// Hand-written action items/follow-ups are highlighted...
+		expect(DEFAULT_ENRICH_PROMPT).toContain('"- ==**Concise task**=="');
+		expect(DEFAULT_ENRICH_PROMPT).toContain('"- ==**Owner:** concise task=="');
+		// ...additional (AI-derived) ones explicitly are not.
+		expect(DEFAULT_ENRICH_PROMPT).toContain(
+			'"- **Concise task**" (not highlighted — these are yours, not theirs)'
+		);
+		expect(DEFAULT_ENRICH_PROMPT).toContain(
+			"(not highlighted — these are yours, not theirs). Use a short given name"
+		);
+	});
 });
 
 describe("extractEmbeddedTitle", () => {
