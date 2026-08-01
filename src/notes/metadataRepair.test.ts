@@ -12,8 +12,10 @@ function sibling(over: Partial<SiblingIdentity>): SiblingIdentity {
 }
 
 describe("inferIdentityFromSiblings", () => {
-	it("returns null with no signal at all", () => {
-		expect(inferIdentityFromSiblings([sibling({}), sibling({})])).toBeNull();
+	it("returns none with no signal at all", () => {
+		expect(inferIdentityFromSiblings([sibling({}), sibling({})])).toEqual({
+			kind: "none",
+		});
 	});
 
 	it("infers a 1:1 partner matched by email", () => {
@@ -22,9 +24,12 @@ describe("inferIdentityFromSiblings", () => {
 			sibling({ oneOnOneWith: "Andres R.", oneOnOneEmail: "andres@example.com" }),
 		]);
 		expect(result).toEqual({
-			kind: "one-on-one",
-			name: "Andres",
-			email: "andres@example.com",
+			kind: "resolved",
+			identity: {
+				kind: "one-on-one",
+				name: "Andres",
+				email: "andres@example.com",
+			},
 		});
 	});
 
@@ -33,7 +38,10 @@ describe("inferIdentityFromSiblings", () => {
 			sibling({ oneOnOneWith: "Andres" }),
 			sibling({ oneOnOneWith: "Andres" }),
 		]);
-		expect(result).toEqual({ kind: "one-on-one", name: "Andres", email: null });
+		expect(result).toEqual({
+			kind: "resolved",
+			identity: { kind: "one-on-one", name: "Andres", email: null },
+		});
 	});
 
 	it("infers a recurring series, using the first sibling's title", () => {
@@ -42,34 +50,72 @@ describe("inferIdentityFromSiblings", () => {
 			sibling({ recurringEventId: "abc123", title: "NS-LT (renamed instance)" }),
 		]);
 		expect(result).toEqual({
-			kind: "recurring",
-			recurringEventId: "abc123",
-			title: "NS-LT",
+			kind: "resolved",
+			identity: {
+				kind: "recurring",
+				recurringEventId: "abc123",
+				title: "NS-LT",
+			},
 		});
 	});
 
-	it("returns null when siblings mix two different 1:1 partners", () => {
+	it("reports both candidates when siblings mix two different 1:1 partners", () => {
 		const result = inferIdentityFromSiblings([
-			sibling({ oneOnOneWith: "Andres" }),
-			sibling({ oneOnOneWith: "Baha" }),
+			sibling({ oneOnOneWith: "Andres", oneOnOneEmail: "andres@example.com" }),
+			sibling({ oneOnOneWith: "Baha", oneOnOneEmail: "baha@example.com" }),
 		]);
-		expect(result).toBeNull();
+		expect(result).toEqual({
+			kind: "ambiguous",
+			oneOnOnes: [
+				{ name: "Andres", email: "andres@example.com", count: 1 },
+				{ name: "Baha", email: "baha@example.com", count: 1 },
+			],
+			recurring: [],
+		});
 	});
 
-	it("returns null when siblings mix two different recurring series", () => {
+	it("reports both candidates when siblings mix two different recurring series", () => {
 		const result = inferIdentityFromSiblings([
-			sibling({ recurringEventId: "abc" }),
-			sibling({ recurringEventId: "def" }),
+			sibling({ recurringEventId: "abc", title: "Weekly Sync" }),
+			sibling({ recurringEventId: "def", title: "Monthly Review" }),
 		]);
-		expect(result).toBeNull();
+		expect(result).toEqual({
+			kind: "ambiguous",
+			oneOnOnes: [],
+			recurring: [
+				{ recurringEventId: "abc", title: "Weekly Sync", count: 1 },
+				{ recurringEventId: "def", title: "Monthly Review", count: 1 },
+			],
+		});
 	});
 
-	it("returns null when siblings mix a 1:1 and a recurring series", () => {
+	it("reports both candidates when siblings mix a 1:1 and a recurring series", () => {
 		const result = inferIdentityFromSiblings([
-			sibling({ oneOnOneWith: "Andres" }),
-			sibling({ recurringEventId: "abc" }),
+			sibling({ oneOnOneWith: "Andres", oneOnOneEmail: "andres@example.com" }),
+			sibling({ recurringEventId: "abc", title: "Weekly Sync" }),
 		]);
-		expect(result).toBeNull();
+		expect(result).toEqual({
+			kind: "ambiguous",
+			oneOnOnes: [{ name: "Andres", email: "andres@example.com", count: 1 }],
+			recurring: [{ recurringEventId: "abc", title: "Weekly Sync", count: 1 }],
+		});
+	});
+
+	it("counts siblings per candidate, so two series sharing a title (e.g. Calendar recreated the recurring event under a new ID) can still be told apart", () => {
+		const result = inferIdentityFromSiblings([
+			sibling({ recurringEventId: "old-id", title: "Weekly Sync" }),
+			sibling({ recurringEventId: "old-id", title: "Weekly Sync" }),
+			sibling({ recurringEventId: "old-id", title: "Weekly Sync" }),
+			sibling({ recurringEventId: "new-id", title: "Weekly Sync" }),
+		]);
+		expect(result).toEqual({
+			kind: "ambiguous",
+			oneOnOnes: [],
+			recurring: [
+				{ recurringEventId: "old-id", title: "Weekly Sync", count: 3 },
+				{ recurringEventId: "new-id", title: "Weekly Sync", count: 1 },
+			],
+		});
 	});
 
 	it("prefers 1:1 identity for a sibling that is both recurring and a 1:1", () => {
@@ -83,9 +129,8 @@ describe("inferIdentityFromSiblings", () => {
 			}),
 		]);
 		expect(result).toEqual({
-			kind: "one-on-one",
-			name: "Sophie",
-			email: "sophie@example.com",
+			kind: "resolved",
+			identity: { kind: "one-on-one", name: "Sophie", email: "sophie@example.com" },
 		});
 	});
 
@@ -94,6 +139,13 @@ describe("inferIdentityFromSiblings", () => {
 			sibling({ oneOnOneWith: "Andres", oneOnOneEmail: "andres@a.com" }),
 			sibling({ oneOnOneWith: "Andres", oneOnOneEmail: "andres@b.com" }),
 		]);
-		expect(result).toBeNull();
+		expect(result).toEqual({
+			kind: "ambiguous",
+			oneOnOnes: [
+				{ name: "Andres", email: "andres@a.com", count: 1 },
+				{ name: "Andres", email: "andres@b.com", count: 1 },
+			],
+			recurring: [],
+		});
 	});
 });

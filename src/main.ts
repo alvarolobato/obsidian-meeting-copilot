@@ -120,6 +120,7 @@ import {
 } from "./notes/dashboardActions";
 import {
     inferIdentityFromSiblings,
+    type IdentityInference,
     type InferredIdentity,
     type SiblingIdentity,
 } from "./notes/metadataRepair";
@@ -2848,12 +2849,16 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /**
-     * A folder's direct markdown children split into `tagged` (already carry
-     * `recurring_event_id` or `one_on_one_with` — the signal {@link
-     * inferIdentityFromSiblings} learns from) and `untagged` (meeting notes,
-     * including a Granola-style import, with neither — the candidates a fix
-     * would apply to). Notes that don't look like meeting notes at all are
-     * ignored on both sides.
+     * A folder's direct markdown children — never a subfolder's — split into
+     * `tagged` (already carry `recurring_event_id` or `one_on_one_with` — the
+     * signal {@link inferIdentityFromSiblings} learns from) and `untagged`
+     * (meeting notes, including a Granola-style import, with neither — the
+     * candidates a fix would apply to). Notes that don't look like meeting
+     * notes at all are ignored on both sides. Deliberately non-recursive:
+     * `folderOf(entry.file) !== folderPath` only matches a file whose
+     * *immediate* parent is this exact folder, so fixing a high-level folder
+     * (e.g. "Meetings/1-1s") can never reach into "Meetings/1-1s/Andres" and
+     * mistag its notes with a sibling from a different person's subfolder.
      */
     private scanFolderForIdentity(folderPath: string): {
         tagged: SiblingIdentity[];
@@ -2885,18 +2890,24 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /**
-     * Infers a folder's identity from its already-tagged notes, honouring the
-     * `oneOnOneSeparately` gate the dashboard's own 1:1 grouping uses (with it
-     * off, a folder full of 1:1 notes has nothing meaningful to offer — 1:1
-     * metadata wouldn't be read anywhere).
+     * Infers a folder's identity from its *direct* children's already-tagged
+     * notes — never a subfolder's, so a folder with its own siblings two
+     * levels down can never steer (or be steered by) an unrelated ancestor
+     * folder's fix. Honours the `oneOnOneSeparately` gate the dashboard's own
+     * 1:1 grouping uses (with it off, a folder full of 1:1 notes has nothing
+     * meaningful to offer — 1:1 metadata wouldn't be read anywhere).
      */
-    private inferFolderIdentity(folderPath: string): InferredIdentity | null {
+    private inferFolderIdentity(folderPath: string): IdentityInference {
         const { tagged } = this.scanFolderForIdentity(folderPath);
-        const identity = inferIdentityFromSiblings(tagged);
-        if (identity?.kind === "one-on-one" && !this.settings.oneOnOneSeparately) {
-            return null;
+        const result = inferIdentityFromSiblings(tagged);
+        if (
+            result.kind === "resolved" &&
+            result.identity.kind === "one-on-one" &&
+            !this.settings.oneOnOneSeparately
+        ) {
+            return { kind: "none" };
         }
-        return identity;
+        return result;
     }
 
     /**
@@ -2922,6 +2933,27 @@ export default class SystemRecordingPlugin extends Plugin {
             },
             { label: n.metadataFixDismiss, onClick: () => {} },
         ]);
+    }
+
+    /**
+     * Reports exactly what disagrees when a folder's siblings don't resolve
+     * to one identity — a persistent Notice (no auto-timeout) since it can
+     * list several candidates and the user needs to actually go clean the
+     * folder up, not just glance at a toast.
+     */
+    private reportAmbiguousMetadata(
+        result: Extract<IdentityInference, { kind: "ambiguous" }>
+    ): void {
+        const n = t().notices;
+        const labels = [
+            ...result.oneOnOnes.map((o) =>
+                n.metadataFixAmbiguousOneOnOne(o.name, o.count)
+            ),
+            ...result.recurring.map((r) =>
+                n.metadataFixAmbiguousRecurring(r.title, r.count)
+            ),
+        ];
+        new Notice(n.metadataFixAmbiguous(labels.join(", ")), 0);
     }
 
     /** Writes the inferred identity's frontmatter to every target note. */
@@ -2951,7 +2983,10 @@ export default class SystemRecordingPlugin extends Plugin {
      * identity is moved into a different folder, and that folder's other
      * notes consistently agree on one identity, offer to tag it — never
      * silently. A same-folder rename (title edit) is ignored; only an actual
-     * folder change is worth checking.
+     * folder change is worth checking. Stays quiet (no report) when the
+     * folder is ambiguous — an automatic trigger shouldn't scold the user
+     * for an unrelated folder that merely happens to mix identities; the
+     * manual fix commands report that explicitly instead.
      */
     private maybeSuggestMetadataFixOnMove(file: TFile, oldPath: string): void {
         if (file.extension !== "md") return;
@@ -2962,8 +2997,10 @@ export default class SystemRecordingPlugin extends Plugin {
         if (oldFolder === newFolder) return;
         if (!this.looksLikeMeetingNote(file) || this.hasMeetingIdentity(file)) return;
 
-        const identity = this.inferFolderIdentity(newFolder);
-        if (identity) this.confirmMetadataFix([file], identity);
+        const result = this.inferFolderIdentity(newFolder);
+        if (result.kind === "resolved") {
+            this.confirmMetadataFix([file], result.identity);
+        }
     }
 
     /**
@@ -2977,19 +3014,24 @@ export default class SystemRecordingPlugin extends Plugin {
             new Notice(t().notices.metadataFixAlreadyTagged);
             return;
         }
-        const identity = this.inferFolderIdentity(file.parent?.path ?? "");
-        if (!identity) {
+        const result = this.inferFolderIdentity(file.parent?.path ?? "");
+        if (result.kind === "resolved") {
+            this.confirmMetadataFix([file], result.identity);
+        } else if (result.kind === "ambiguous") {
+            this.reportAmbiguousMetadata(result);
+        } else {
             new Notice(t().notices.metadataFixNoSignal);
-            return;
         }
-        this.confirmMetadataFix([file], identity);
     }
 
     /**
      * Manual fix (option C), whole folder: infers one identity from the
-     * folder's already-tagged notes and offers to apply it to every note
-     * still missing it — e.g. run once on "Andres" after moving several
-     * ad-hoc 1:1 notes in there over time.
+     * folder's already-tagged *direct* children (subfolders are never
+     * scanned — see {@link scanFolderForIdentity}) and offers to apply it to
+     * every note still missing it — e.g. run once on "Andres" after moving
+     * several ad-hoc 1:1 notes in there over time. If the folder's notes
+     * don't agree on one identity, reports exactly what disagrees instead of
+     * guessing.
      */
     private fixMetadataForFolder(folder: TFolder): void {
         const { tagged, untagged } = this.scanFolderForIdentity(folder.path);
@@ -2997,12 +3039,21 @@ export default class SystemRecordingPlugin extends Plugin {
             new Notice(t().notices.metadataFixNothingToFix);
             return;
         }
-        const identity = inferIdentityFromSiblings(tagged);
-        if (!identity || (identity.kind === "one-on-one" && !this.settings.oneOnOneSeparately)) {
-            new Notice(t().notices.metadataFixNoSignal);
-            return;
+        let result = inferIdentityFromSiblings(tagged);
+        if (
+            result.kind === "resolved" &&
+            result.identity.kind === "one-on-one" &&
+            !this.settings.oneOnOneSeparately
+        ) {
+            result = { kind: "none" };
         }
-        this.confirmMetadataFix(untagged, identity);
+        if (result.kind === "resolved") {
+            this.confirmMetadataFix(untagged, result.identity);
+        } else if (result.kind === "ambiguous") {
+            this.reportAmbiguousMetadata(result);
+        } else {
+            new Notice(t().notices.metadataFixNoSignal);
+        }
     }
 
     /**

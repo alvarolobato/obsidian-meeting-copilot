@@ -134,6 +134,12 @@ export const en = {
 		metadataFixAlreadyTagged: "This note already has 1:1/series metadata.",
 		metadataFixNothingToFix:
 			"Every note in this folder already has 1:1/series metadata.",
+		metadataFixAmbiguousOneOnOne: (name: string, count: number) =>
+			`1:1 with ${name} (${count} note${count === 1 ? "" : "s"})`,
+		metadataFixAmbiguousRecurring: (title: string, count: number) =>
+			`the "${title}" series (${count} note${count === 1 ? "" : "s"})`,
+		metadataFixAmbiguous: (labels: string) =>
+			`This folder's notes don't agree on one identity — found: ${labels}. Clean it up manually, then try again.`,
 	},
 	transcript: {
 		// Prepended to a speaker-separated transcript. Tells the enrichment model
