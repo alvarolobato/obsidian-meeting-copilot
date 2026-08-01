@@ -140,6 +140,16 @@ export const en = {
 			`the "${title}" series (${count} note${count === 1 ? "" : "s"})`,
 		metadataFixAmbiguous: (labels: string) =>
 			`This folder's notes don't agree on one identity — found: ${labels}. Clean it up manually, then try again.`,
+		transcriptImportCleaning: "Cleaning up imported transcript…",
+		transcriptImportInProgress:
+			"A transcript import for this note is already in progress…",
+		transcriptImportEmpty: "That file doesn't contain a readable transcript.",
+		transcriptImportError: (msg: string) =>
+			`Transcript import failed: ${msg}`,
+		transcriptImportNoEndpoint:
+			"Set the AI endpoint (base URL + API key) and an enrichment model in settings before importing a non-Zoom transcript.",
+		transcriptImportNotApplied:
+			"Transcript imported, but not written to the note or enriched — check the \"Insert transcript\" and enrichment settings.",
 	},
 	transcript: {
 		// Prepended to a speaker-separated transcript. Tells the enrichment model
@@ -171,6 +181,7 @@ export const en = {
 		/** Verbs shown per task kind in the queue popover rows. */
 		queueKindTranscribe: "Transcribing",
 		queueKindEnrich: "Enriching",
+		queueKindImport: "Importing",
 		/** Accessible label / tooltip for a popover row's cancel (x) control. */
 		queueCancel: "Cancel",
 		transcriptAdded: "Transcript added",
@@ -252,6 +263,7 @@ export const en = {
 			transcribe: "Transcribe recording",
 			transcribeDiarized: "Transcribe with speaker separation",
 			transcribeMixed: "Transcribe without speaker separation",
+			importTranscript: "Import transcript",
 			enrich: "Enrich with AI",
 			skipToday: "Hide for today",
 		},

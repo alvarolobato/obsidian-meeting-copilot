@@ -88,6 +88,60 @@ describe("normalizeManualNotes", () => {
 		expect(out).toBe(content);
 	});
 
+	it("folds ## Summary bullets into the LLM notes without touching the file", () => {
+		const content = [
+			"# Title",
+			"",
+			"- **When:** today",
+			"",
+			"## Notes",
+			"",
+			"## Summary",
+			"",
+			"- Discussed Q3 roadmap",
+			"- Agreed on launch date",
+			"",
+		].join("\n");
+		const { notes, content: out } = normalizeManualNotes(content);
+		expect(notes).toBe(
+			"- Discussed Q3 roadmap\n- Agreed on launch date"
+		);
+		// No loose preamble notes, so the file is left completely untouched —
+		// the Summary bullets stay under "## Summary", not duplicated into "## Notes".
+		expect(out).toBe(content);
+	});
+
+	it("merges ## Summary with ## Notes and loose notes for the LLM, deduped", () => {
+		const content = [
+			"# Title",
+			"",
+			"- new loose note",
+			"",
+			"## Notes",
+			"",
+			"- existing note",
+			"",
+			"## Summary",
+			"",
+			"- Discussed Q3 roadmap",
+			"- existing note",
+			"",
+		].join("\n");
+		const { notes, content: out } = normalizeManualNotes(content);
+		expect(notes).toBe(
+			"- existing note\n- Discussed Q3 roadmap\n- new loose note"
+		);
+		// A rebuild does happen here (there's a loose preamble note), but it
+		// must never pull the Summary body into ## Notes — only the loose note.
+		const notesBody = out.slice(
+			out.indexOf("## Notes"),
+			out.indexOf("## Summary")
+		);
+		expect(notesBody).not.toContain("Discussed Q3 roadmap");
+		expect(out).toContain("## Summary");
+		expect(out).toContain("- Discussed Q3 roadmap");
+	});
+
 	it("creates a ## Notes section when it is missing", () => {
 		const content = ["# Title", "", "- orphan note", ""].join("\n");
 		const { notes, content: out } = normalizeManualNotes(content);
