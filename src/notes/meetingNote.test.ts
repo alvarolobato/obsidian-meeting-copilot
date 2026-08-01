@@ -453,6 +453,15 @@ describe("transcriptAtBottom (append)", () => {
 	});
 });
 
+describe("DEFAULT_NOTE_TEMPLATE", () => {
+	it("has no '## Summary' heading (dead scaffolding the app never read or wrote)", () => {
+		expect(DEFAULT_NOTE_TEMPLATE).not.toContain("## Summary");
+		expect(DEFAULT_NOTE_TEMPLATE).toContain("## Notes");
+		expect(DEFAULT_NOTE_TEMPLATE).toContain("## Action items");
+		expect(DEFAULT_NOTE_TEMPLATE).toContain("## Follow-ups");
+	});
+});
+
 describe("effectiveTitlePattern / effectiveNoteTemplate", () => {
 	it("use the built-in defaults when not customizing", () => {
 		expect(effectiveTitlePattern(false, "custom pattern")).toBe(

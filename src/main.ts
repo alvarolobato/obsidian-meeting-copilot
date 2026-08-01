@@ -92,6 +92,7 @@ import {
 } from "./notes/actionItems";
 import { normalizeManualNotes } from "./notes/manualNotes";
 import { applyEnrichToContent } from "./notes/applyEnrich";
+import { looksLikeZoomVtt, parseZoomTranscript } from "./notes/zoomTranscript";
 import { mcLog } from "./util/logLine";
 import {
 	fallbackEndpoint,
@@ -188,11 +189,16 @@ import {
     ENRICH_SYSTEM_PROMPT,
     extractEmbeddedTitle,
     fillPrompt,
+    truncateTranscriptForBudget,
 } from "./enrich/prompt";
 import {
     cleanSuggestedTitle,
     shouldSuggestAdhocTitle,
 } from "./enrich/adhocTitle";
+import {
+    buildTranscriptCleanupPrompt,
+    TRANSCRIPT_CLEANUP_SYSTEM_PROMPT,
+} from "./enrich/transcriptCleanup";
 import { RenameModal } from "./ui/renameModal";
 import { DashboardPromptModal } from "./ui/dashboardPromptModal";
 import { t } from "./i18n";
@@ -2795,6 +2801,9 @@ export default class SystemRecordingPlugin extends Plugin {
             onStop: () => this.stopRecording(),
             onOpenRecording: (m) => void this.openRecording(m),
             onTranscribe: (m, mode) => void this.transcribeRecording(m, mode),
+            onImportTranscript: (m) => {
+                if (m.note) void this.importTranscript(m.note);
+            },
             onEnrich: (m) => {
                 if (m.note) void this.enqueueEnrich(m.note);
             },
@@ -3992,6 +4001,9 @@ export default class SystemRecordingPlugin extends Plugin {
             onStop: () => this.stopRecording(),
             onOpenRecording: (m) => void this.openRecording(m),
             onTranscribe: (m, mode) => void this.transcribeRecording(m, mode),
+            onImportTranscript: (m) => {
+                if (m.note) void this.importTranscript(m.note);
+            },
             onEnrich: (m) => {
                 if (m.note) void this.enqueueEnrich(m.note);
             },
@@ -5060,6 +5072,189 @@ export default class SystemRecordingPlugin extends Plugin {
         return note.basename;
     }
 
+    /** The task-queue id for importing a transcript into a note; namespaced so it can't collide with a recording path or an enrich task. */
+    private importTaskId(notePath: string): string {
+        return `import:${notePath}`;
+    }
+
+    /**
+     * Opens a native file picker and resolves to the chosen file (its content
+     * is read via the standard File API, so this needs no Node `fs` access),
+     * or `null` if the user dismissed the dialog without picking one.
+     */
+    private pickTranscriptFile(): Promise<File | null> {
+        return new Promise((resolve) => {
+            const input = document.createElement("input");
+            input.type = "file";
+            input.accept = ".vtt,.txt,.srt,.md,text/plain,text/vtt";
+            input.onchange = () => resolve(input.files?.[0] ?? null);
+            // Fires when the dialog is dismissed with no selection — without
+            // this the promise would never settle in that case.
+            input.oncancel = () => resolve(null);
+            input.click();
+        });
+    }
+
+    /**
+     * Cleans up an arbitrary transcript export into the plugin's own
+     * "Speaker: text" per-line convention (the same shape `mergeDiarized`
+     * produces for a local recording), so an imported transcript reads
+     * identically to enrichment and to a human skimming the note.
+     *
+     * A Zoom `.vtt` export is detected and parsed deterministically — no LLM
+     * call, so it's instant and can't hallucinate. Anything else (plain text,
+     * SRT, a chat export, a non-standard VTT) goes through the configured
+     * enrichment LLM instead, since a one-off parser can't cover every export
+     * shape. Returns "" (with a Notice already shown) when cleanup can't
+     * proceed, so the caller can bail without writing anything.
+     */
+    private async cleanImportedTranscript(
+        raw: string,
+        signal: AbortSignal
+    ): Promise<string> {
+        if (looksLikeZoomVtt(raw)) {
+            const parsed = parseZoomTranscript(raw);
+            if (parsed) return parsed.transcript;
+            // Looked like a Zoom VTT header, but the cues didn't parse cleanly
+            // enough to trust (see parseZoomTranscript's escape hatch) — fall
+            // through to the LLM, which can still make sense of a
+            // non-standard export.
+        }
+        // Cleanup is itself an LLM call on the same endpoint/model as
+        // enrichment, so it respects the same master toggle: a user who
+        // turned AI features off shouldn't have one fire anyway just because
+        // they imported a non-Zoom file.
+        if (!this.settings.enableEnrichment) {
+            new Notice(t().notices.enrichDisabled);
+            return "";
+        }
+        const { apiBaseUrl, apiKey, enrichModel } = this.settings;
+        if (!apiBaseUrl || !apiKey || !enrichModel) {
+            new Notice(t().notices.transcriptImportNoEndpoint);
+            return "";
+        }
+        new Notice(t().notices.transcriptImportCleaning);
+        // Same transcript token budget and timeout enrichment itself uses, so
+        // a long import can't silently overrun the endpoint's context window
+        // (the model would otherwise have to guess where to cut, which reads
+        // as an unflagged truncation) or hang past what the user configured.
+        const budgeted = truncateTranscriptForBudget(
+            raw,
+            this.settings.enrichMaxTranscriptTokens
+        ).text;
+        const timeoutMs = Math.min(
+            600_000,
+            Math.max(60_000, (this.settings.enrichTimeoutSeconds || 120) * 1000)
+        );
+        try {
+            return await chatComplete({
+                baseUrl: apiBaseUrl,
+                apiKey,
+                model: enrichModel,
+                system: TRANSCRIPT_CLEANUP_SYSTEM_PROMPT,
+                user: buildTranscriptCleanupPrompt(budgeted),
+                signal,
+                timeoutMs,
+            });
+        } catch (e) {
+            if (e instanceof ChatAbortError) return "";
+            new Notice(
+                t().notices.transcriptImportError(
+                    e instanceof Error ? e.message : String(e)
+                )
+            );
+            return "";
+        }
+    }
+
+    /**
+     * "Import transcript" — lets a user who recorded locally but later got
+     * hold of a more accurate transcript (e.g. the official Zoom transcript)
+     * replace the note's transcript with a cleaned-up version of it, then
+     * re-enriches from it. Runs as a "transcribe"-kind queue task (it *is*
+     * producing a transcript, just from a file instead of audio) so it's
+     * visible/cancellable like any other background job, and so cancelling
+     * it (or "Cancel transcription") behaves exactly like cancelling a real
+     * transcription.
+     */
+    private async importTranscript(note: TFile): Promise<void> {
+        const id = this.importTaskId(note.path);
+        if (this.taskQueue.has(id)) {
+            new Notice(t().notices.transcriptImportInProgress);
+            return;
+        }
+        const file = await this.pickTranscriptFile();
+        if (!file) return;
+        const raw = await file.text();
+        if (!raw.trim()) {
+            new Notice(t().notices.transcriptImportEmpty);
+            return;
+        }
+
+        // Not awaited by design (mirrors enqueueEnrichTask): the caller is a
+        // fire-and-forget menu handler (`void this.importTranscript(...)`),
+        // so a cancellation rejecting this promise must be caught here or it
+        // surfaces as an unhandled rejection in the renderer.
+        this.taskQueue
+            .enqueue({
+                id,
+                label: this.meetingNoteLabel(note),
+                kind: "transcribe",
+                run: async (signal) => {
+                    const cleaned = await this.cleanImportedTranscript(
+                        raw,
+                        signal
+                    );
+                    if (signal.aborted || !cleaned.trim()) return;
+                    // Mirrors the re-transcribe flow: `insertTranscript`
+                    // writes the callout and stamps `transcript_saved`, which
+                    // is what makes the note's audio eligible for retention
+                    // pruning — so, same as re-transcribing, that only
+                    // happens when the user actually wants transcripts
+                    // written into notes. Enrichment still runs from the
+                    // cleaned transcript either way.
+                    let applied = false;
+                    if (this.settings.insertTranscript) {
+                        await insertTranscript(this.app, note, cleaned, {
+                            append: false,
+                        });
+                        new Notice(t().notices.transcriptAdded(note.basename));
+                        this.setActionStatus(
+                            t().statusBar.transcriptAdded,
+                            "success"
+                        );
+                        this.agendaEvents.emit("changed", undefined);
+                        applied = true;
+                    }
+                    if (
+                        this.settings.enableEnrichment &&
+                        this.settings.enrichOnTranscribe
+                    ) {
+                        void this.enqueueEnrichTask(note, {
+                            transcriptOverride: cleaned,
+                            quiet: true,
+                        });
+                        applied = true;
+                    }
+                    // Both gates matching the re-transcribe flow's settings
+                    // can leave nothing visibly happening for an explicit,
+                    // deliberate user action — say so rather than going
+                    // silent.
+                    if (!applied) {
+                        new Notice(t().notices.transcriptImportNotApplied);
+                    }
+                },
+            })
+            .catch((e) => {
+                if (!(e instanceof TaskCancelledError)) {
+                    mcLog("import", "queue fail", {
+                        note: note.path,
+                        error: e instanceof Error ? e.message : String(e),
+                    });
+                }
+            });
+    }
+
     /** Reflects the queue's running/waiting state in the status bar (single-owner). */
     private renderQueueStatus(snapshot: QueueSnapshot): void {
         // Keep the hover popover live as the queue changes (or drop it when the
@@ -5231,10 +5426,17 @@ export default class SystemRecordingPlugin extends Plugin {
             row.createSpan({ cls: "mc-queue-popover-icon" }),
             running ? "loader-2" : this.queueKindIcon(item.kind)
         );
+        // A transcript import runs as a "transcribe"-kind task (so cancelling
+        // it, and "Cancel transcription", behave the same as for a real
+        // transcription — see importTaskId/importTranscript), but it should
+        // still read as "Importing" rather than "Transcribing" in the queue
+        // UI; the id prefix is the only thing distinguishing the two.
         const verb =
-            item.kind === "transcribe"
-                ? t().statusBar.queueKindTranscribe
-                : t().statusBar.queueKindEnrich;
+            item.kind === "enrich"
+                ? t().statusBar.queueKindEnrich
+                : item.id.startsWith("import:")
+                ? t().statusBar.queueKindImport
+                : t().statusBar.queueKindTranscribe;
         row.createSpan({
             cls: "mc-queue-popover-label",
             text: `${verb} · ${item.label}`,

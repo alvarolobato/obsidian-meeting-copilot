@@ -178,9 +178,6 @@ export const DEFAULT_NOTE_TEMPLATE = `# {{title}}
 ## Notes
 
 
-## Summary
-
-
 ## Action items
 
 ## Follow-ups
