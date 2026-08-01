@@ -331,6 +331,22 @@ export const en = {
 			taskError: (msg: string) =>
 				`Couldn't complete the follow-up: ${msg}`,
 		},
+		// The vault-wide metadata sanity check — collapsed by default, low
+		// priority (see main.ts's renderNoteIssues doc comment).
+		issues: {
+			title: "Notes with issues",
+			empty: "No issues found.",
+			loading: "Scanning…",
+			refresh: "Refresh",
+			reasonMissing: "Missing tag",
+			reasonOutlier: "Mismatched tag",
+			reasonAmbiguous: "Ambiguous folder",
+			detailMissing: (label: string) => `Folder suggests ${label}`,
+			detailOutlier: (actual: string, expected: string) =>
+				`Tagged as ${actual}, but folder suggests ${expected}`,
+			detailAmbiguous: (labels: string) =>
+				`Folder has conflicting tags: ${labels}`,
+		},
 	},
 	settings: {
 		// Version line at the top of the settings tab. Release builds show just
@@ -370,6 +386,10 @@ export const en = {
 		recordingSubfolder: {
 			name: "Recordings subfolder",
 			desc: "Subfolder, relative to each note's own folder, where that meeting's recordings are stored (e.g. 'Recordings' → notes in 'Meetings/' record into 'Meetings/Recordings/'). Leave empty to keep audio beside the note.",
+		},
+		excludedFolders: {
+			name: "Excluded folders",
+			desc: "Folders (one per line, or comma-separated) the plugin never scans for anything — the dashboard, action items, the metadata-fix tool, everything. A plain folder path excludes that folder and everything under it; wildcards are supported (* within one folder level, ** across levels, e.g. \"**/archived\" matches an \"archived\" folder anywhere). Use this for archived notes, another plugin's data folder, or anything else you don't want touched.",
 		},
 		noteTitlePatternCustomize: {
 			name: "Customize note title pattern",

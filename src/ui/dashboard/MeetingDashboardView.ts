@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf, setIcon } from "obsidian";
+import { ItemView, WorkspaceLeaf } from "obsidian";
 import { t } from "../../i18n";
 
 export const VIEW_TYPE_DASHBOARD = "meeting-copilot-dashboard";
@@ -16,6 +16,12 @@ export interface DashboardViewHost {
 	renderPastMeetings(el: HTMLElement, page?: number, force?: boolean): Promise<void>;
 	renderActionItems(el: HTMLElement, page?: number, force?: boolean): Promise<void>;
 	renderFollowUps(el: HTMLElement, page?: number, force?: boolean): Promise<void>;
+	/**
+	 * The "Notes with issues" sanity check — deliberately not tracked by
+	 * {@link trackDashboardBlock}: it scans once per dashboard open and
+	 * otherwise only on its own explicit Refresh click.
+	 */
+	renderNoteIssues(el: HTMLElement, force?: boolean): Promise<void>;
 	trackDashboardBlock(el: HTMLElement, rerender: () => void): void;
 	openSettings(): void;
 }
@@ -28,6 +34,9 @@ export interface DashboardViewHost {
  * dashboard" note).
  */
 export class MeetingDashboardView extends ItemView {
+	/** The native header's settings button, torn down on close so a re-open never doubles it up. */
+	private settingsAction: HTMLElement | null = null;
+
 	constructor(
 		leaf: WorkspaceLeaf,
 		private host: DashboardViewHost
@@ -52,19 +61,19 @@ export class MeetingDashboardView extends ItemView {
 		const { contentEl } = this;
 		contentEl.empty();
 
+		// The tab title and the pane's own header already show the view's
+		// name (getDisplayText()) — no need for a third, in-content title.
+		// The settings button lives in that same native header instead of a
+		// custom title row.
+		this.settingsAction?.remove();
+		this.settingsAction = this.addAction(
+			"settings-2",
+			t().agenda.openSettings,
+			() => this.host.openSettings()
+		);
+
 		const outer = contentEl.createDiv({ cls: "mc-cal" });
 		const root = outer.createDiv({ cls: "mc-cal-inner mc-dash" });
-
-		const header = root.createDiv({ cls: "mc-cal-head" });
-		const top = header.createDiv({ cls: "mc-cal-head-top" });
-		top.createDiv({ cls: "mc-cal-head-title", text: d.title });
-		const controls = top.createDiv({ cls: "mc-cal-head-controls" });
-		const settingsBtn = controls.createEl("button", {
-			cls: "mc-cal-icon-btn",
-			attr: { "aria-label": t().agenda.openSettings },
-		});
-		setIcon(settingsBtn, "settings-2");
-		settingsBtn.addEventListener("click", () => this.host.openSettings());
 
 		this.renderSection(root, d.sections.past, (body) => {
 			void this.host.renderPastMeetings(body);
@@ -86,9 +95,16 @@ export class MeetingDashboardView extends ItemView {
 				void this.host.renderFollowUps(body, this.blockPage(body), true)
 			);
 		});
+
+		// Its own card, not `renderSection` — it builds its own collapsible
+		// header (title + count + refresh) rather than a static title, and
+		// deliberately isn't tracked for auto-refresh (see the host interface).
+		void this.host.renderNoteIssues(root.createDiv({ cls: "mc-dash-section" }));
 	}
 
 	async onClose(): Promise<void> {
+		this.settingsAction?.remove();
+		this.settingsAction = null;
 		this.contentEl.empty();
 	}
 

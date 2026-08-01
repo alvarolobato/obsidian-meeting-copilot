@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { inferIdentityFromSiblings, type SiblingIdentity } from "./metadataRepair";
+import {
+	findNoteIssues,
+	inferIdentityFromSiblings,
+	type NoteIdentityRow,
+	type SiblingIdentity,
+} from "./metadataRepair";
 
 function sibling(over: Partial<SiblingIdentity>): SiblingIdentity {
 	return {
@@ -7,6 +12,18 @@ function sibling(over: Partial<SiblingIdentity>): SiblingIdentity {
 		oneOnOneEmail: null,
 		recurringEventId: null,
 		title: "x",
+		...over,
+	};
+}
+
+function row(over: Partial<NoteIdentityRow> & Pick<NoteIdentityRow, "path">): NoteIdentityRow {
+	return {
+		title: over.path,
+		folder: "Meetings/Andres",
+		looksLikeMeetingNote: true,
+		oneOnOneWith: null,
+		oneOnOneEmail: null,
+		recurringEventId: null,
 		...over,
 	};
 }
@@ -147,5 +164,120 @@ describe("inferIdentityFromSiblings", () => {
 			],
 			recurring: [],
 		});
+	});
+});
+
+describe("findNoteIssues", () => {
+	it("flags an untagged note whose folder siblings agree on one identity", () => {
+		const rows = [
+			row({
+				path: "a.md",
+				oneOnOneWith: "Andres",
+				oneOnOneEmail: "andres@x.com",
+			}),
+			row({ path: "b.md" }),
+		];
+		const issues = findNoteIssues(rows, true);
+		expect(issues).toEqual([
+			{
+				path: "b.md",
+				title: "b.md",
+				folder: "Meetings/Andres",
+				reason: {
+					kind: "missing",
+					identity: { kind: "one-on-one", name: "Andres", email: "andres@x.com" },
+				},
+			},
+		]);
+	});
+
+	it("does not flag a folder with no signal at all (genuinely ad-hoc)", () => {
+		const rows = [row({ path: "a.md" }), row({ path: "b.md" })];
+		expect(findNoteIssues(rows, true)).toEqual([]);
+	});
+
+	it("flags every note in an ambiguous folder", () => {
+		const rows = [
+			row({ path: "a.md", oneOnOneWith: "Andres", oneOnOneEmail: "andres@x.com" }),
+			row({ path: "b.md", oneOnOneWith: "Baha", oneOnOneEmail: "baha@x.com" }),
+			row({ path: "c.md" }),
+		];
+		const issues = findNoteIssues(rows, true);
+		expect(issues.map((i) => i.path).sort()).toEqual(["a.md", "b.md", "c.md"]);
+		expect(issues.every((i) => i.reason.kind === "ambiguous")).toBe(true);
+	});
+
+	it("flags a tagged note that disagrees with its folder's majority identity", () => {
+		const rows = [
+			row({ path: "a.md", oneOnOneWith: "Andres", oneOnOneEmail: "andres@x.com" }),
+			row({ path: "b.md", oneOnOneWith: "Andres", oneOnOneEmail: "andres@x.com" }),
+			row({ path: "c.md", oneOnOneWith: "Baha", oneOnOneEmail: "baha@x.com" }),
+		];
+		const issues = findNoteIssues(rows, true);
+		expect(issues).toEqual([
+			{
+				path: "c.md",
+				title: "c.md",
+				folder: "Meetings/Andres",
+				reason: {
+					kind: "outlier",
+					actual: { kind: "one-on-one", name: "Baha", email: "baha@x.com" },
+					expected: { kind: "one-on-one", name: "Andres", email: "andres@x.com" },
+				},
+			},
+		]);
+	});
+
+	it("ignores rows that don't look like meeting notes at all", () => {
+		const rows = [
+			row({
+				path: "a.md",
+				oneOnOneWith: "Andres",
+				oneOnOneEmail: "andres@x.com",
+			}),
+			row({ path: "b.md", looksLikeMeetingNote: false }),
+		];
+		expect(findNoteIssues(rows, true)).toEqual([]);
+	});
+
+	it("doesn't flag missing 1:1 identity when oneOnOneSeparately is off", () => {
+		const rows = [
+			row({
+				path: "a.md",
+				oneOnOneWith: "Andres",
+				oneOnOneEmail: "andres@x.com",
+			}),
+			row({ path: "b.md" }),
+		];
+		expect(findNoteIssues(rows, false)).toEqual([]);
+	});
+
+	it("still flags a recurring-series gap even when oneOnOneSeparately is off", () => {
+		const rows = [
+			row({ path: "a.md", recurringEventId: "abc", title: "Weekly", folder: "Meetings/Weekly" }),
+			row({ path: "b.md", folder: "Meetings/Weekly" }),
+		];
+		const issues = findNoteIssues(rows, false);
+		expect(issues).toEqual([
+			{
+				path: "b.md",
+				title: "b.md",
+				folder: "Meetings/Weekly",
+				reason: {
+					kind: "missing",
+					identity: { kind: "recurring", recurringEventId: "abc", title: "Weekly" },
+				},
+			},
+		]);
+	});
+
+	it("keeps different folders independent", () => {
+		const rows = [
+			row({ path: "a.md", oneOnOneWith: "Andres", oneOnOneEmail: "andres@x.com", folder: "F1" }),
+			row({ path: "b.md", folder: "F1" }),
+			row({ path: "c.md", folder: "F2" }),
+		];
+		const issues = findNoteIssues(rows, true);
+		expect(issues.map((i) => i.path)).toEqual(["b.md"]);
 	});
 });

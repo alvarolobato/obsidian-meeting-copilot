@@ -114,16 +114,21 @@ import {
     sortActionNoteGroups,
     splitByHorizon,
     taskAgeDays,
+    tasksOutsideHeadings,
     type ActionGroupCategory,
     type ActionNoteGroup,
     type GroupedTask,
 } from "./notes/dashboardActions";
 import {
+    findNoteIssues,
     inferIdentityFromSiblings,
     type IdentityInference,
     type InferredIdentity,
+    type NoteIdentityRow,
+    type NoteIssue,
     type SiblingIdentity,
 } from "./notes/metadataRepair";
+import { isPathExcluded, parseFolderPatterns } from "./notes/folderExclusion";
 import { listEvents, type GCalEvent } from "./calendar/googleCalendar";
 import {
 	createCloudIdentityDirectory,
@@ -2415,7 +2420,11 @@ export default class SystemRecordingPlugin extends Plugin {
 	 */
 	private async openOrCreateEventNote(info: MeetingEventInfo): Promise<void> {
 		try {
-			const existing = buildNoteIndex(this.app).get(info.id)?.file ?? null;
+			const existing =
+				buildNoteIndex(
+					this.app,
+					scanMeetingNotes(this.app, this.excludedFolderPatterns())
+				).get(info.id)?.file ?? null;
 			const file =
 				existing ??
 				(await createMeetingNote(this.app, info, this.noteConfig())).file;
@@ -2568,7 +2577,13 @@ export default class SystemRecordingPlugin extends Plugin {
 				this.settings.noteTemplateCustomize,
 				this.settings.noteTemplate
 			),
+			excludeFolders: this.excludedFolderPatterns(),
 		};
+	}
+
+	/** Parsed, ready-to-use form of the "Excluded folders" setting. */
+	private excludedFolderPatterns(): string[] {
+		return parseFolderPatterns(this.settings.excludedFolders);
 	}
 
 	/**
@@ -2718,6 +2733,7 @@ export default class SystemRecordingPlugin extends Plugin {
                 this.renderActionItems(el, page, force),
             renderFollowUps: (el, page, force) =>
                 this.renderFollowUps(el, page, force),
+            renderNoteIssues: (el, force) => this.renderNoteIssues(el, force),
             trackDashboardBlock: (el, rerender) =>
                 this.trackDashboardBlock(el, rerender),
             openSettings: () => this.openPluginSettings(),
@@ -2866,7 +2882,10 @@ export default class SystemRecordingPlugin extends Plugin {
     } {
         const tagged: SiblingIdentity[] = [];
         const untagged: TFile[] = [];
-        for (const entry of scanMeetingNotes(this.app)) {
+        for (const entry of scanMeetingNotes(
+            this.app,
+            this.excludedFolderPatterns()
+        )) {
             if (folderOf(entry.file) !== folderPath) continue;
             if (entry.recurringEventId || entry.oneOnOneWith) {
                 const fm = this.app.metadataCache.getFileCache(entry.file)
@@ -3197,7 +3216,7 @@ export default class SystemRecordingPlugin extends Plugin {
         // requires a recording, and — for a foreign note — that it lives
         // under one of our configured folders, so we don't offer to rewrite a
         // note we don't own).
-        const scanned = scanMeetingNotes(this.app);
+        const scanned = scanMeetingNotes(this.app, this.excludedFolderPatterns());
         for (const entry of scanned) {
             const recLink = recordingLinkTarget(entry.recording);
             const hasRecording = recLink !== "";
@@ -3641,7 +3660,7 @@ export default class SystemRecordingPlugin extends Plugin {
     /**
      * Short-lived cache of the (whole-vault, disk-read) action-items scan so
      * paging/page-size changes reuse it instead of re-reading every task note.
-     * A tick or Refresh forces a fresh scan (`force`). Keyed by section heading.
+     * A tick or Refresh forces a fresh scan (`force`). Keyed by section mode.
      */
     private actionScanCache: Map<
         string,
@@ -3650,18 +3669,18 @@ export default class SystemRecordingPlugin extends Plugin {
 
     /** Runs (or reuses, within a short TTL) a section-scoped task scan. */
     private async scanActionGroups(
-        sectionHeading: string,
+        mode: "actions" | "followups",
         force: boolean
     ): Promise<ActionNoteGroup[]> {
         const TTL_MS = 15_000;
-        const cached = this.actionScanCache.get(sectionHeading);
+        const cached = this.actionScanCache.get(mode);
         if (!force && cached && Date.now() - cached.at < TTL_MS) {
             return cached.groups;
         }
         const groups = sortActionNoteGroups(
-            await this.scanOpenTaskNotes(sectionHeading)
+            await this.scanOpenTaskNotes(mode)
         );
-        this.actionScanCache.set(sectionHeading, {
+        this.actionScanCache.set(mode, {
             at: Date.now(),
             groups,
         });
@@ -3681,7 +3700,7 @@ export default class SystemRecordingPlugin extends Plugin {
         force = false
     ): Promise<void> {
         await this.renderTaskSection(el, {
-            heading: ACTION_ITEMS_HEADING,
+            mode: "actions",
             strings: {
                 ...t().dashboard.actions,
                 ageDays: t().dashboard.groups.ageDays,
@@ -3704,7 +3723,7 @@ export default class SystemRecordingPlugin extends Plugin {
         force = false
     ): Promise<void> {
         await this.renderTaskSection(el, {
-            heading: FOLLOW_UPS_HEADING,
+            mode: "followups",
             strings: {
                 ...t().dashboard.followups,
                 ageDays: t().dashboard.groups.ageDays,
@@ -3717,6 +3736,154 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /**
+     * Cached result of the last "Notes with issues" scan — unlike every other
+     * dashboard section, this one is deliberately *not* wired into the
+     * vault-change auto-refresh: it's a low-priority sanity check, not
+     * something that needs to track every edit live. It scans once when the
+     * dashboard is opened and otherwise only on an explicit Refresh click.
+     */
+    private noteIssuesCache: NoteIssue[] | null = null;
+
+    private async scanNoteIssues(force = false): Promise<NoteIssue[]> {
+        if (!force && this.noteIssuesCache) return this.noteIssuesCache;
+        const excludeFolders = this.excludedFolderPatterns();
+        const rows: NoteIdentityRow[] = scanMeetingNotes(
+            this.app,
+            excludeFolders
+        ).map((entry) => {
+            const fm = this.app.metadataCache.getFileCache(entry.file)
+                ?.frontmatter as Record<string, unknown> | undefined;
+            const titleRaw = fm?.["title"];
+            const title =
+                typeof titleRaw === "string" && titleRaw
+                    ? titleRaw
+                    : entry.file.basename;
+            return {
+                path: entry.file.path,
+                title,
+                folder: folderOf(entry.file),
+                looksLikeMeetingNote: this.looksLikeMeetingNote(entry.file),
+                oneOnOneWith: entry.oneOnOneWith,
+                oneOnOneEmail: entry.oneOnOneEmail,
+                recurringEventId: entry.recurringEventId,
+            };
+        });
+        const issues = findNoteIssues(rows, this.settings.oneOnOneSeparately);
+        this.noteIssuesCache = issues;
+        return issues;
+    }
+
+    /**
+     * Renders the dashboard's "Notes with issues" section — collapsed by
+     * default, the header itself is the toggle. Builds its own header (title
+     * + count + refresh) rather than going through the shared
+     * `renderSection` helper the other sections use, since this one needs a
+     * dynamic count and a collapse state the others don't have.
+     */
+    private async renderNoteIssues(
+        section: HTMLElement,
+        force = false
+    ): Promise<void> {
+        const d = t().dashboard.issues;
+        const n = t().notices;
+        // Persisted on `section` (survives the .empty() below across
+        // re-renders); the CSS class that actually hides the body has to
+        // live on `head`, since that's the element carrying .mc-cal-earlier.
+        const wasCollapsed = section.dataset.mcCollapsed !== "0";
+        section.empty();
+        section.dataset.mcCollapsed = wasCollapsed ? "1" : "0";
+
+        const head = section.createDiv({ cls: "mc-cal-earlier mc-issues-head" });
+        head.toggleClass("is-collapsed", wasCollapsed);
+        const headRow = head.createDiv({ cls: "mc-cal-earlier-head" });
+        const chevron = headRow.createSpan({ cls: "mc-cal-earlier-chevron" });
+        setIcon(chevron, "chevron-down");
+        headRow.createEl("h3", {
+            cls: "mc-dash-section-title mc-issues-title",
+            text: d.title,
+        });
+        const countEl = headRow.createSpan({ cls: "mc-cal-earlier-count" });
+        const refresh = headRow.createEl("button", {
+            cls: "mc-icon-btn",
+            attr: { "aria-label": d.refresh },
+        });
+        setIcon(refresh, "refresh-cw");
+        refresh.addEventListener("click", (e) => {
+            e.stopPropagation();
+            void this.renderNoteIssues(section, true);
+        });
+        headRow.addEventListener("click", () => {
+            const collapsed = section.dataset.mcCollapsed !== "0";
+            section.dataset.mcCollapsed = collapsed ? "0" : "1";
+            head.toggleClass("is-collapsed", !collapsed);
+        });
+
+        const body = head.createDiv({ cls: "mc-cal-earlier-body" });
+        body.createEl("p", { text: d.loading, cls: "mc-actions-loading" });
+
+        const issues = await this.scanNoteIssues(force);
+        countEl.setText(String(issues.length));
+        body.empty();
+
+        if (issues.length === 0) {
+            body.createEl("p", { text: d.empty, cls: "mc-actions-empty" });
+            return;
+        }
+
+        const list = body.createDiv({ cls: "mc-actions-list" });
+        for (const issue of issues) {
+            const file = this.app.vault.getAbstractFileByPath(issue.path);
+            const note = list.createDiv({ cls: "mc-action-note mc-issue-note" });
+            note.createDiv({ cls: "mc-action-note-bar" });
+            const noteBody = note.createDiv({ cls: "mc-action-note-body" });
+            const header = noteBody.createDiv({ cls: "mc-action-note-header" });
+            const title = header.createEl("a", {
+                cls: "mc-action-note-title internal-link",
+                text: issue.title,
+            });
+            title.onclick = (e): void => {
+                e.preventDefault();
+                if (file instanceof TFile) this.openFileInTab(file);
+            };
+
+            let pillText: string;
+            let detailText: string;
+            if (issue.reason.kind === "missing") {
+                const label =
+                    issue.reason.identity.kind === "one-on-one"
+                        ? n.metadataFixLabelOneOnOne(issue.reason.identity.name)
+                        : n.metadataFixLabelRecurring(issue.reason.identity.title);
+                pillText = d.reasonMissing;
+                detailText = d.detailMissing(label);
+            } else if (issue.reason.kind === "outlier") {
+                const actual =
+                    issue.reason.actual.kind === "one-on-one"
+                        ? n.metadataFixLabelOneOnOne(issue.reason.actual.name)
+                        : n.metadataFixLabelRecurring(issue.reason.actual.title);
+                const expected =
+                    issue.reason.expected.kind === "one-on-one"
+                        ? n.metadataFixLabelOneOnOne(issue.reason.expected.name)
+                        : n.metadataFixLabelRecurring(issue.reason.expected.title);
+                pillText = d.reasonOutlier;
+                detailText = d.detailOutlier(actual, expected);
+            } else {
+                const labels = [
+                    ...issue.reason.oneOnOnes.map((o) =>
+                        n.metadataFixAmbiguousOneOnOne(o.name, o.count)
+                    ),
+                    ...issue.reason.recurring.map((r) =>
+                        n.metadataFixAmbiguousRecurring(r.title, r.count)
+                    ),
+                ];
+                pillText = d.reasonAmbiguous;
+                detailText = d.detailAmbiguous(labels.join(", "));
+            }
+            header.createSpan({ cls: "mc-status-pill mc-issue-pill", text: pillText });
+            noteBody.createDiv({ cls: "mc-issue-detail", text: detailText });
+        }
+    }
+
+    /**
      * Shared renderer for the action-items and follow-ups dashboard sections —
      * same table format for both (age-on-the-right included). `strings` is the
      * i18n block (`actions` or `followups`); horizon filtering only applies
@@ -3725,7 +3892,7 @@ export default class SystemRecordingPlugin extends Plugin {
     private async renderTaskSection(
         el: HTMLElement,
         opts: {
-            heading: string;
+            mode: "actions" | "followups";
             strings: {
                 count: (n: number) => string;
                 empty: string;
@@ -3750,7 +3917,7 @@ export default class SystemRecordingPlugin extends Plugin {
             el.createEl("p", { text: a.loading, cls: "mc-actions-loading" });
         }
 
-        const allGroups = await this.scanActionGroups(opts.heading, opts.force);
+        const allGroups = await this.scanActionGroups(opts.mode, opts.force);
         if (this.renderSeq.get(el) !== seq) return;
 
         const today = new Date();
@@ -3843,7 +4010,7 @@ export default class SystemRecordingPlugin extends Plugin {
         page: number,
         renderer: Component,
         opts: {
-            heading: string;
+            mode: "actions" | "followups";
             strings: {
                 count: (n: number) => string;
                 empty: string;
@@ -3951,16 +4118,24 @@ export default class SystemRecordingPlugin extends Plugin {
 
     /**
      * Scans every note in the vault for open (`- [ ]`) tasks under
-     * `sectionHeading`, returning one group per *category* — a 1:1's tasks
-     * (when {@link SystemRecordingSettings.oneOnOneSeparately} is on) group by
-     * partner, a recurring series' tasks group by `recurring_event_id`, and
-     * anything else (an ad-hoc/one-off meeting) groups by its own note path —
-     * rather than one group per note. That way a person's 1:1 or a recurring
-     * series reads as one section no matter which instance's note the tasks
-     * were written into, or whether that instance got renamed; the note's own
-     * title only matters for the ad-hoc case. Kept whole-vault on purpose:
-     * action items live in meeting notes wherever they came from (including
-     * Granola-synced notes, which carry no `event_id`).
+     * `## Action items`/`## Follow-ups`, returning one group per *category* —
+     * a 1:1's tasks (when {@link SystemRecordingSettings.oneOnOneSeparately}
+     * is on) group by partner, a recurring series' tasks group by
+     * `recurring_event_id`, and anything else (an ad-hoc/one-off meeting)
+     * groups by its own note path — rather than one group per note. That way
+     * a person's 1:1 or a recurring series reads as one section no matter
+     * which instance's note the tasks were written into, or whether that
+     * instance got renamed; the note's own title only matters for the ad-hoc
+     * case. Kept whole-vault on purpose: action items live in meeting notes
+     * wherever they came from (including Granola-synced notes, which carry no
+     * `event_id`).
+     *
+     * `mode: "actions"` also picks up every open task *outside* both
+     * recognized headings (via {@link tasksOutsideHeadings}) — a note that
+     * doesn't use this structure at all (e.g. a Granola import's own
+     * "### Next Steps") would otherwise have its tasks silently dropped from
+     * the dashboard entirely; degrading them into Action items beats losing
+     * them. `mode: "followups"` stays strict — only genuine `## Follow-ups`.
      *
      * The metadata cache only *pre-filters* to files that (may) have an open
      * task — cheap, and avoids reading files with none — but the tasks
@@ -3971,7 +4146,7 @@ export default class SystemRecordingPlugin extends Plugin {
      * of lingering with tasks pointing at a folder that no longer exists.
      */
     private async scanOpenTaskNotes(
-        sectionHeading: string
+        mode: "actions" | "followups"
     ): Promise<ActionNoteGroup[]> {
         const today = this.todayStamp();
         const groupLabels = t().dashboard.groups;
@@ -3980,8 +4155,10 @@ export default class SystemRecordingPlugin extends Plugin {
         // from the public shape above, so the header link/title can "follow"
         // whichever note was touched last.
         const mtimeByKey = new Map<string, number>();
+        const excludeFolders = this.excludedFolderPatterns();
 
         for (const file of this.app.vault.getMarkdownFiles()) {
+            if (isPathExcluded(file.path, excludeFolders)) continue;
             const cache = this.app.metadataCache.getFileCache(file);
             const mayHaveTasks = (cache?.listItems ?? []).some(
                 (it) => it.task !== undefined
@@ -3994,7 +4171,16 @@ export default class SystemRecordingPlugin extends Plugin {
             } catch {
                 continue;
             }
-            const rawTasks = parseNoteTasks(content, today, sectionHeading);
+            const rawTasks =
+                mode === "actions"
+                    ? [
+                          ...parseNoteTasks(content, today, ACTION_ITEMS_HEADING),
+                          ...tasksOutsideHeadings(content, today, [
+                              ACTION_ITEMS_HEADING,
+                              FOLLOW_UPS_HEADING,
+                          ]),
+                      ]
+                    : parseNoteTasks(content, today, FOLLOW_UPS_HEADING);
             if (rawTasks.length === 0) continue;
 
             const fm = cache?.frontmatter as
@@ -4293,7 +4479,10 @@ export default class SystemRecordingPlugin extends Plugin {
         this.applyCachedExpandedAttendees(events);
         this.scheduleGroupAttendeeExpand(events);
         this.scheduleOtherContactsSync();
-        const index = buildNoteIndex(this.app);
+        const index = buildNoteIndex(
+            this.app,
+            scanMeetingNotes(this.app, this.excludedFolderPatterns())
+        );
         return events
             .map((e) => toAgendaMeeting(e, index))
             .sort((a, b) => a.start.getTime() - b.start.getTime());
@@ -5565,7 +5754,10 @@ export default class SystemRecordingPlugin extends Plugin {
      */
     private notifyPendingTranscriptions(): void {
         let pending = 0;
-        for (const entry of scanMeetingNotes(this.app)) {
+        for (const entry of scanMeetingNotes(
+            this.app,
+            this.excludedFolderPatterns()
+        )) {
             if (entry.status !== "recorded") continue;
             const link = recordingLinkTarget(entry.recording);
             if (!link) continue;
@@ -6685,6 +6877,12 @@ export default class SystemRecordingPlugin extends Plugin {
             // folder that moved elsewhere is still covered). Exact paths, not
             // the notes' parent folders: sweeping a moved note's folder would
             // make every old audio file in that unrelated subtree eligible.
+            // Deliberately unfiltered by "Excluded folders": a recording
+            // linked from an excluded/archived note must still count as
+            // owned here, or this destructive sweep would treat it as
+            // orphaned and trash it. The exclusion setting is for what the
+            // plugin *shows*, not a license to delete a file it can no
+            // longer see.
             const ownedRecordings = new Set<string>();
             for (const entry of scanMeetingNotes(this.app)) {
                 if (!entry.eventId) continue;

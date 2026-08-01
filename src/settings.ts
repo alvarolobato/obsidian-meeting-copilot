@@ -61,6 +61,13 @@ export interface SystemRecordingSettings {
 	 */
 	recordingSubfolder: string;
 	/**
+	 * Free-text list (newline or comma separated) of folder paths/glob
+	 * patterns the plugin never scans for anything — see
+	 * `notes/folderExclusion.ts` for the pattern syntax and every scan site
+	 * that filters through it.
+	 */
+	excludedFolders: string;
+	/**
 	 * Save recordings (and their split sidecars) as AAC `.m4a` instead of WAV.
 	 * Same mono 24 kHz audio either way; this only picks the container/codec
 	 * the helper encodes at stop.
@@ -268,6 +275,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	oneOnOneFolder: "Meetings/1-1s",
 	adhocFolder: "Meetings/Ad-hoc",
 	recordingSubfolder: "Recordings",
+	excludedFolders: "",
 	compressedRecordings: true,
 	micDeviceUid: "",
 	micDeviceLabel: "",
@@ -2044,6 +2052,20 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 				await this.plugin.saveSettings();
 			}
 		);
+
+		new Setting(containerEl)
+			.setName(s.settings.excludedFolders.name)
+			.setDesc(s.settings.excludedFolders.desc)
+			.addTextArea((ta) => {
+				ta
+					.setValue(this.plugin.settings.excludedFolders)
+					.onChange(async (value) => {
+						this.plugin.settings.excludedFolders = value;
+						await this.plugin.saveSettings();
+					});
+				ta.inputEl.rows = 4;
+				ta.inputEl.addClass("meeting-copilot-template-input");
+			});
 
 		new Setting(containerEl)
 			.setName(s.settings.recordingSubfolder.name)

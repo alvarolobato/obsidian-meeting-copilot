@@ -201,6 +201,30 @@ export function parseNoteTasks(
 	return tasks;
 }
 
+/**
+ * Open tasks anywhere in the note that fall outside every heading in
+ * `headings` — the fallback for a note that doesn't use the recognized
+ * `## Action items`/`## Follow-ups` structure at all (a Granola import's own
+ * "### Next Steps", or just an unsectioned checklist), so those tasks degrade
+ * into the dashboard's Action items list instead of being silently dropped.
+ * Pure/testable.
+ */
+export function tasksOutsideHeadings(
+	content: string,
+	todayStamp: string,
+	headings: string[]
+): ActionTask[] {
+	const claimedLines = new Set<number>();
+	for (const heading of headings) {
+		for (const task of parseNoteTasks(content, todayStamp, heading)) {
+			claimedLines.add(task.line);
+		}
+	}
+	return parseNoteTasks(content, todayStamp).filter(
+		(task) => !claimedLines.has(task.line)
+	);
+}
+
 /** Creation date from a `➕ YYYY-MM-DD` stamp on the raw line, else null. */
 function createdDateOf(raw: string): Date | null {
 	const m = raw.match(CREATED_DATE_RE);

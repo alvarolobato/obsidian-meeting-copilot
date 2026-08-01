@@ -208,6 +208,7 @@ function cfg(overrides: Partial<MeetingNoteConfig> = {}): MeetingNoteConfig {
 		adhocFolder: "Meetings/Ad-hoc",
 		titlePattern: DEFAULT_TITLE_PATTERN,
 		template: DEFAULT_NOTE_TEMPLATE,
+		excludeFolders: [],
 		...overrides,
 	};
 }

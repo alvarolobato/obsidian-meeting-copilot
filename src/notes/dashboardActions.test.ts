@@ -8,6 +8,7 @@ import {
 	sortActionNoteGroups,
 	splitByHorizon,
 	taskAgeDays,
+	tasksOutsideHeadings,
 	type ActionNoteGroup,
 	type ActionTask,
 	type GroupedTask,
@@ -245,6 +246,51 @@ describe("parseNoteTasks", () => {
 	it("returns nothing when the section heading is absent", () => {
 		expect(
 			parseNoteTasks("- [ ] orphan", today, "## Follow-ups")
+		).toEqual([]);
+	});
+});
+
+describe("tasksOutsideHeadings", () => {
+	const today = "2026-07-15";
+
+	it("returns tasks under an unrecognized heading (e.g. a Granola import's own structure)", () => {
+		const body = [
+			"### Next Steps",
+			"- [ ] check the thing",
+			"- [ ] follow up with them",
+		].join("\n");
+		const tasks = tasksOutsideHeadings(body, today, [
+			"## Action items",
+			"## Follow-ups",
+		]);
+		expect(tasks.map((t) => t.text)).toEqual([
+			"check the thing",
+			"follow up with them",
+		]);
+	});
+
+	it("excludes tasks already claimed by a recognized heading", () => {
+		const body = [
+			"## Random other section",
+			"- [ ] orphan",
+			"",
+			"## Action items",
+			"- [ ] mine",
+			"",
+			"## Follow-ups",
+			"- [ ] theirs",
+		].join("\n");
+		const tasks = tasksOutsideHeadings(body, today, [
+			"## Action items",
+			"## Follow-ups",
+		]);
+		expect(tasks.map((t) => t.text)).toEqual(["orphan"]);
+	});
+
+	it("returns nothing when every task is already under a recognized heading", () => {
+		const body = ["## Action items", "- [ ] mine"].join("\n");
+		expect(
+			tasksOutsideHeadings(body, today, ["## Action items", "## Follow-ups"])
 		).toEqual([]);
 	});
 });
