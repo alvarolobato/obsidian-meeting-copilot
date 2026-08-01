@@ -119,7 +119,7 @@ export const en = {
 		transcriptImportError: (msg: string) =>
 			`Transcript import failed: ${msg}`,
 		transcriptImportNoEndpoint:
-			"Set the AI endpoint (base URL + API key) in settings before importing a non-Zoom transcript.",
+			"Set the AI endpoint (base URL + API key) and an enrichment model in settings before importing a non-Zoom transcript.",
 	},
 	transcript: {
 		// Prepended to a speaker-separated transcript. Tells the enrichment model

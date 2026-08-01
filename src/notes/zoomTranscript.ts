@@ -39,7 +39,10 @@ function normalizeText(text: string): string {
 }
 
 function isFiller(text: string): boolean {
-	const normalized = text.toLowerCase().replace(/[.!?]+$/g, "").trim();
+	const normalized = text
+		.toLowerCase()
+		.replace(/[.,;:!?…]+$/g, "")
+		.trim();
 	return FILLERS.has(normalized);
 }
 

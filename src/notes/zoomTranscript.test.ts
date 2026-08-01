@@ -64,6 +64,28 @@ describe("parseZoomTranscript", () => {
 		expect(parseZoomTranscript(vtt)?.transcript).toBe("Alice Smith: Welcome all");
 	});
 
+	it("drops a mid-stream filler even with trailing comma/ellipsis punctuation", () => {
+		const vtt = [
+			"WEBVTT",
+			"",
+			"1",
+			"00:00:00.000 --> 00:00:02.000",
+			"Bob: Okay,",
+			"",
+			"2",
+			"00:00:02.500 --> 00:00:04.000",
+			"Bob: right…",
+			"",
+			"3",
+			"00:00:04.500 --> 00:00:06.000",
+			"Bob: Here's the real point I wanted to make",
+			"",
+		].join("\n");
+		expect(parseZoomTranscript(vtt)?.transcript).toBe(
+			"Bob: Here's the real point I wanted to make"
+		);
+	});
+
 	it("keeps a lone filler utterance when it's the only thing a speaker said", () => {
 		const vtt = [
 			"WEBVTT",
