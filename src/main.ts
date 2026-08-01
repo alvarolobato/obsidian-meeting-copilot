@@ -126,6 +126,8 @@ import {
     type InferredIdentity,
     type NoteIdentityRow,
     type NoteIssue,
+    type OneOnOneCandidate,
+    type RecurringCandidate,
     type SiblingIdentity,
 } from "./notes/metadataRepair";
 import { isPathExcluded, parseFolderPatterns } from "./notes/folderExclusion";
@@ -2964,15 +2966,62 @@ export default class SystemRecordingPlugin extends Plugin {
         result: Extract<IdentityInference, { kind: "ambiguous" }>
     ): void {
         const n = t().notices;
-        const labels = [
-            ...result.oneOnOnes.map((o) =>
-                n.metadataFixAmbiguousOneOnOne(o.name, o.count)
-            ),
-            ...result.recurring.map((r) =>
-                n.metadataFixAmbiguousRecurring(r.title, r.count)
-            ),
-        ];
+        const labels = this.formatAmbiguousLabels(
+            result.oneOnOnes,
+            result.recurring
+        );
         new Notice(n.metadataFixAmbiguous(labels.join(", ")), 0);
+    }
+
+    /**
+     * Builds one label per ambiguous candidate — shared by the Notice-based
+     * fix commands and the "Notes with issues" dashboard section. Two
+     * candidates can render the exact same label text (most commonly: a
+     * recurring series recreated under a new `recurring_event_id` keeps its
+     * old title, so both occurrences show e.g. `the "Standup" series`) —
+     * when that happens the label alone can't tell the user which is which,
+     * so this appends a short disambiguator (the series' own event ID, or a
+     * 1:1 candidate's email) only to the labels that actually collide.
+     */
+    private formatAmbiguousLabels(
+        oneOnOnes: OneOnOneCandidate[],
+        recurring: RecurringCandidate[]
+    ): string[] {
+        const n = t().notices;
+        // Google's recurring-instance IDs are `<seriesId>_R<startTimestamp>`
+        // — two genuinely different series can easily share a trailing
+        // timestamp (most meetings start on the hour), so the *front* of the
+        // ID is what's actually distinguishing; trim at the `_R` marker
+        // rather than truncating from the end.
+        const shortEventId = (id: string): string => {
+            const base = id.split("_R")[0] ?? id;
+            return base.length > 10 ? `${base.slice(0, 10)}…` : base;
+        };
+        const oneOnOneNameCounts = new Map<string, number>();
+        for (const o of oneOnOnes) {
+            oneOnOneNameCounts.set(o.name, (oneOnOneNameCounts.get(o.name) ?? 0) + 1);
+        }
+        const recurringTitleCounts = new Map<string, number>();
+        for (const r of recurring) {
+            recurringTitleCounts.set(
+                r.title,
+                (recurringTitleCounts.get(r.title) ?? 0) + 1
+            );
+        }
+        return [
+            ...oneOnOnes.map((o) => {
+                const label = n.metadataFixAmbiguousOneOnOne(o.name, o.count);
+                return (oneOnOneNameCounts.get(o.name) ?? 0) > 1 && o.email
+                    ? `${label} (${o.email})`
+                    : label;
+            }),
+            ...recurring.map((r) => {
+                const label = n.metadataFixAmbiguousRecurring(r.title, r.count);
+                return (recurringTitleCounts.get(r.title) ?? 0) > 1
+                    ? `${label} — id ${shortEventId(r.recurringEventId)}`
+                    : label;
+            }),
+        ];
     }
 
     /** Writes the inferred identity's frontmatter to every target note. */
@@ -3761,6 +3810,7 @@ export default class SystemRecordingPlugin extends Plugin {
             return {
                 path: entry.file.path,
                 title,
+                fileTitle: entry.file.basename,
                 folder: folderOf(entry.file),
                 looksLikeMeetingNote: this.looksLikeMeetingNote(entry.file),
                 oneOnOneWith: entry.oneOnOneWith,
@@ -3836,7 +3886,13 @@ export default class SystemRecordingPlugin extends Plugin {
             const note = list.createDiv({ cls: "mc-action-note mc-issue-note" });
             note.createDiv({ cls: "mc-action-note-bar" });
             const noteBody = note.createDiv({ cls: "mc-action-note-body" });
-            const header = noteBody.createDiv({ cls: "mc-action-note-header" });
+            // One condensed row (title + suggestion + pill + fix button)
+            // rather than a title row plus a separate detail line below —
+            // this section only reports one fact per note, so it doesn't
+            // need the two-line layout the task-list sections use.
+            const header = noteBody.createDiv({
+                cls: "mc-action-note-header mc-issue-row",
+            });
             const title = header.createEl("a", {
                 cls: "mc-action-note-title internal-link",
                 text: issue.title,
@@ -3848,6 +3904,12 @@ export default class SystemRecordingPlugin extends Plugin {
 
             let pillText: string;
             let detailText: string;
+            // Only "missing"/"outlier" have one specific identity to offer —
+            // an "ambiguous" folder disagrees with itself, so there's
+            // nothing safe to auto-apply; the detail text is the full
+            // action there (matches reportAmbiguousMetadata's Notice, which
+            // likewise only reports and never guesses).
+            let fixIdentity: InferredIdentity | null = null;
             if (issue.reason.kind === "missing") {
                 const label =
                     issue.reason.identity.kind === "one-on-one"
@@ -3855,6 +3917,7 @@ export default class SystemRecordingPlugin extends Plugin {
                         : n.metadataFixLabelRecurring(issue.reason.identity.title);
                 pillText = d.reasonMissing;
                 detailText = d.detailMissing(label);
+                fixIdentity = issue.reason.identity;
             } else if (issue.reason.kind === "outlier") {
                 const actual =
                     issue.reason.actual.kind === "one-on-one"
@@ -3866,20 +3929,30 @@ export default class SystemRecordingPlugin extends Plugin {
                         : n.metadataFixLabelRecurring(issue.reason.expected.title);
                 pillText = d.reasonOutlier;
                 detailText = d.detailOutlier(actual, expected);
+                fixIdentity = issue.reason.expected;
             } else {
-                const labels = [
-                    ...issue.reason.oneOnOnes.map((o) =>
-                        n.metadataFixAmbiguousOneOnOne(o.name, o.count)
-                    ),
-                    ...issue.reason.recurring.map((r) =>
-                        n.metadataFixAmbiguousRecurring(r.title, r.count)
-                    ),
-                ];
+                const labels = this.formatAmbiguousLabels(
+                    issue.reason.oneOnOnes,
+                    issue.reason.recurring
+                );
                 pillText = d.reasonAmbiguous;
                 detailText = d.detailAmbiguous(labels.join(", "));
             }
+            header.createSpan({ cls: "mc-issue-detail", text: detailText });
             header.createSpan({ cls: "mc-status-pill mc-issue-pill", text: pillText });
-            noteBody.createDiv({ cls: "mc-issue-detail", text: detailText });
+            if (fixIdentity) {
+                const identity = fixIdentity;
+                const fixBtn = header.createEl("button", {
+                    cls: "mc-cal-event-btn",
+                    attr: { "aria-label": d.fix },
+                });
+                setIcon(fixBtn, "wrench");
+                fixBtn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    if (file instanceof TFile) this.confirmMetadataFix([file], identity);
+                });
+            }
         }
     }
 

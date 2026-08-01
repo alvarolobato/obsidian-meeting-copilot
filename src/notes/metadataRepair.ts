@@ -141,7 +141,16 @@ function identityKey(identity: InferredIdentity): string {
 
 export interface NoteIdentityRow {
 	path: string;
+	/**
+	 * The candidate "series title" siblings vote on (frontmatter `title`,
+	 * falling back to the file's basename) — every occurrence of a recurring
+	 * meeting typically shares the same one, which is exactly what makes it
+	 * useless for telling two *specific* notes apart. For that, see
+	 * {@link fileTitle}.
+	 */
 	title: string;
+	/** The file's own basename — what a {@link NoteIssue} displays, since it's what the user sees in the file tree and is unique per note (unlike {@link title}). */
+	fileTitle: string;
 	folder: string;
 	/** Matches `looksLikeMeetingNote()` — a note that isn't one of ours at all is ignored entirely. */
 	looksLikeMeetingNote: boolean;
@@ -258,7 +267,7 @@ export function findNoteIssues(
 			for (const row of folderRows) {
 				issues.push({
 					path: row.path,
-					title: row.title,
+					title: row.fileTitle,
 					folder,
 					reason: {
 						kind: "ambiguous",
@@ -274,7 +283,7 @@ export function findNoteIssues(
 		for (const row of untagged) {
 			issues.push({
 				path: row.path,
-				title: row.title,
+				title: row.fileTitle,
 				folder,
 				reason: { kind: "missing", identity: result.identity },
 			});
@@ -287,7 +296,7 @@ export function findNoteIssues(
 			if (identityKey(own.identity) === expectedKey) continue;
 			issues.push({
 				path: row.path,
-				title: row.title,
+				title: row.fileTitle,
 				folder,
 				reason: {
 					kind: "outlier",

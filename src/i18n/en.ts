@@ -338,6 +338,7 @@ export const en = {
 			empty: "No issues found.",
 			loading: "Scanning…",
 			refresh: "Refresh",
+			fix: "Fix",
 			reasonMissing: "Missing tag",
 			reasonOutlier: "Mismatched tag",
 			reasonAmbiguous: "Ambiguous folder",

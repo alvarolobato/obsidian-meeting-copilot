@@ -19,6 +19,7 @@ function sibling(over: Partial<SiblingIdentity>): SiblingIdentity {
 function row(over: Partial<NoteIdentityRow> & Pick<NoteIdentityRow, "path">): NoteIdentityRow {
 	return {
 		title: over.path,
+		fileTitle: over.path,
 		folder: "Meetings/Andres",
 		looksLikeMeetingNote: true,
 		oneOnOneWith: null,
@@ -266,6 +267,35 @@ describe("findNoteIssues", () => {
 				reason: {
 					kind: "missing",
 					identity: { kind: "recurring", recurringEventId: "abc", title: "Weekly" },
+				},
+			},
+		]);
+	});
+
+	it("uses the note's own basename as the issue title, not the shared series title", () => {
+		const rows = [
+			row({
+				path: "Meetings/Weekly/2026-01-05 Weekly Sync.md",
+				fileTitle: "2026-01-05 Weekly Sync",
+				recurringEventId: "abc",
+				title: "Weekly Sync",
+				folder: "Meetings/Weekly",
+			}),
+			row({
+				path: "Meetings/Weekly/2026-01-12 Weekly Sync.md",
+				fileTitle: "2026-01-12 Weekly Sync",
+				folder: "Meetings/Weekly",
+			}),
+		];
+		const issues = findNoteIssues(rows, true);
+		expect(issues).toEqual([
+			{
+				path: "Meetings/Weekly/2026-01-12 Weekly Sync.md",
+				title: "2026-01-12 Weekly Sync",
+				folder: "Meetings/Weekly",
+				reason: {
+					kind: "missing",
+					identity: { kind: "recurring", recurringEventId: "abc", title: "Weekly Sync" },
 				},
 			},
 		]);

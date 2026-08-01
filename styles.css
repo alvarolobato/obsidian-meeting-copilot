@@ -430,13 +430,35 @@
 	--mc-cal-accent: var(--mc-cal-accent-live);
 }
 
+/* Title, suggestion, pill, and fix button all share one row (unlike the
+ * task-list sections' title-then-detail stack) — this section reports one
+ * fact per note, so a second line would only add height without adding
+ * information. */
+.mc-issue-row {
+	align-items: center;
+	flex-wrap: nowrap;
+}
+
+.mc-issue-row .mc-action-note-title {
+	flex: 0 1 auto;
+	min-width: 120px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
 .mc-issue-pill {
+	flex: none;
 	background: color-mix(in oklch, var(--mc-cal-accent-live) 30%, var(--mc-cal-chip));
 	color: var(--mc-cal-text);
 }
 
 .mc-issue-detail {
-	margin-top: 2px;
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 	font-size: 11px;
 	color: var(--mc-cal-muted);
 }
