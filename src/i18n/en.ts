@@ -122,6 +122,8 @@ export const en = {
 			`Transcript import failed: ${msg}`,
 		transcriptImportNoEndpoint:
 			"Set the AI endpoint (base URL + API key) and an enrichment model in settings before importing a non-Zoom transcript.",
+		transcriptImportNotApplied:
+			"Transcript imported, but not written to the note or enriched — check the \"Insert transcript\" and enrichment settings.",
 	},
 	transcript: {
 		// Prepended to a speaker-separated transcript. Tells the enrichment model

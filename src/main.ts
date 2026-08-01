@@ -5213,6 +5213,7 @@ export default class SystemRecordingPlugin extends Plugin {
                     // happens when the user actually wants transcripts
                     // written into notes. Enrichment still runs from the
                     // cleaned transcript either way.
+                    let applied = false;
                     if (this.settings.insertTranscript) {
                         await insertTranscript(this.app, note, cleaned, {
                             append: false,
@@ -5223,6 +5224,7 @@ export default class SystemRecordingPlugin extends Plugin {
                             "success"
                         );
                         this.agendaEvents.emit("changed", undefined);
+                        applied = true;
                     }
                     if (
                         this.settings.enableEnrichment &&
@@ -5232,6 +5234,14 @@ export default class SystemRecordingPlugin extends Plugin {
                             transcriptOverride: cleaned,
                             quiet: true,
                         });
+                        applied = true;
+                    }
+                    // Both gates matching the re-transcribe flow's settings
+                    // can leave nothing visibly happening for an explicit,
+                    // deliberate user action — say so rather than going
+                    // silent.
+                    if (!applied) {
+                        new Notice(t().notices.transcriptImportNotApplied);
                     }
                 },
             })

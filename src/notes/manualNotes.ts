@@ -50,18 +50,19 @@ function combineNotes(fragments: string[]): string {
 
 /**
  * Gathers the participant's manual notes wherever they wrote them — the
- * "## Notes" body, the "## Summary" body, and any loose preamble notes — and
- * consolidates them under "## Notes" for the file, so enrichment never
- * silently ignores or orphans notes typed above the "## Notes" heading (or
- * when that heading was deleted). Deterministic and pure so it can be
- * unit-tested.
+ * "## Notes" body, the "## Summary" body, and any loose preamble notes — into
+ * one string for enrichment, so none of it is silently ignored. Only the
+ * loose preamble is actually relocated *in the file*, consolidated under
+ * "## Notes" (created if missing) so it isn't orphaned above a heading that
+ * may have been deleted; deterministic and pure so it can be unit-tested.
  *
  * "Loose" notes are body lines in the *preamble* — after the H1 title and
  * before the first "## " section — that aren't the generated metadata bullets
  * ("- **When:** …") or the AI-notes callout. "## Summary" content is read but
  * left where it is in the file (unlike loose preamble, it's already a proper
- * section, just one the app never reads on its own). Everything else in the
- * note (frontmatter, transcript, other sections) is left untouched. When
+ * section, just one the app never reads on its own) — it's folded into the
+ * enrichment string only, never moved. Everything else in the note
+ * (frontmatter, transcript, other sections) is left untouched. When
  * there's nothing loose to relocate, the content is returned unchanged.
  */
 export function normalizeManualNotes(content: string): ManualNotes {
