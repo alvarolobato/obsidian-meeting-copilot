@@ -18,6 +18,11 @@ export const en = {
 		toggleAiNotes: "Toggle AI notes visibility",
 		cleanupRecordings: "Clean up old recordings",
 		cancelTranscription: "Cancel transcription",
+		fixMeetingMetadata: "Fix meeting metadata for this note",
+	},
+	menu: {
+		fixMetadataFile: "Fix meeting metadata",
+		fixMetadataFolder: "Fix meeting metadata for this folder",
 	},
 	adhoc: {
 		defaultTitle: "Meeting",
@@ -114,6 +119,21 @@ export const en = {
 			"Speaker separation was skipped: the endpoint returned no timestamps this time. Run 'Load models' to re-check.",
 		diarizationNoTracks:
 			"No separate speaker tracks were recorded for this meeting — transcribing the single joint track instead.",
+		metadataFixLabelOneOnOne: (name: string) => `your 1:1 with ${name}`,
+		metadataFixLabelRecurring: (title: string) => `the "${title}" series`,
+		metadataFixConfirm: (count: number, label: string) =>
+			count === 1
+				? `This note looks like it belongs to ${label} — tag it?`
+				: `${count} notes here look like they belong to ${label} — tag them?`,
+		metadataFixApply: "Tag it",
+		metadataFixDismiss: "Not now",
+		metadataFixDone: (count: number) =>
+			count === 1 ? "Tagged 1 note." : `Tagged ${count} notes.`,
+		metadataFixNoSignal:
+			"Couldn't tell what this belongs to — no consistently-tagged note nearby.",
+		metadataFixAlreadyTagged: "This note already has 1:1/series metadata.",
+		metadataFixNothingToFix:
+			"Every note in this folder already has 1:1/series metadata.",
 	},
 	transcript: {
 		// Prepended to a speaker-separated transcript. Tells the enrichment model

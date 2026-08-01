@@ -1,4 +1,4 @@
-import { Component, FileSystemAdapter, MarkdownRenderer, MarkdownView, Menu, normalizePath, Notice, Platform, Plugin, setIcon, TFile } from "obsidian";
+import { Component, FileSystemAdapter, MarkdownRenderer, MarkdownView, Menu, normalizePath, Notice, Platform, Plugin, setIcon, TFile, TFolder } from "obsidian";
 import {
     DEFAULT_SETTINGS,
     inferSttApiType,
@@ -118,6 +118,11 @@ import {
     type ActionNoteGroup,
     type GroupedTask,
 } from "./notes/dashboardActions";
+import {
+    inferIdentityFromSiblings,
+    type InferredIdentity,
+    type SiblingIdentity,
+} from "./notes/metadataRepair";
 import { listEvents, type GCalEvent } from "./calendar/googleCalendar";
 import {
 	createCloudIdentityDirectory,
@@ -499,6 +504,23 @@ export default class SystemRecordingPlugin extends Plugin {
             this.app.workspace.on("file-menu", (menu, file) => {
                 if (file instanceof TFile && this.isMeetingNote(file)) {
                     this.addNoteMeetingMenu(menu, file);
+                    const fm = this.app.metadataCache.getFileCache(file)
+                        ?.frontmatter as Record<string, unknown> | undefined;
+                    if (!fm?.["recurring_event_id"] && !fm?.["one_on_one_with"]) {
+                        menu.addItem((item) =>
+                            item
+                                .setTitle(t().menu.fixMetadataFile)
+                                .setIcon("link")
+                                .onClick(() => this.fixMetadataForNote(file))
+                        );
+                    }
+                } else if (file instanceof TFolder) {
+                    menu.addItem((item) =>
+                        item
+                            .setTitle(t().menu.fixMetadataFolder)
+                            .setIcon("link")
+                            .onClick(() => this.fixMetadataForFolder(file))
+                    );
                 }
             })
         );
@@ -565,6 +587,17 @@ export default class SystemRecordingPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: "fix-meeting-metadata",
+			name: t().commands.fixMeetingMetadata,
+			checkCallback: (checking) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file || !this.isMeetingNote(file)) return false;
+				if (!checking) this.fixMetadataForNote(file);
+				return true;
+			},
+		});
+
+		this.addCommand({
 			id: "toggle-ai-notes",
 			name: t().commands.toggleAiNotes,
 			callback: () => void this.toggleAiNotes(),
@@ -628,7 +661,10 @@ export default class SystemRecordingPlugin extends Plugin {
 		// a duplicate or trust a stale session claim.
 		this.registerEvent(
 			this.app.vault.on("rename", (file, oldPath) => {
-				if (file instanceof TFile) notePathRenamed(oldPath, file.path);
+				if (file instanceof TFile) {
+					notePathRenamed(oldPath, file.path);
+					this.maybeSuggestMetadataFixOnMove(file, oldPath);
+				}
 			})
 		);
 		this.registerEvent(
@@ -2767,6 +2803,168 @@ export default class SystemRecordingPlugin extends Plugin {
                 { includeNavigation: false }
             );
         });
+    }
+
+    /**
+     * A folder's direct markdown children split into `tagged` (already carry
+     * `recurring_event_id` or `one_on_one_with` — the signal {@link
+     * inferIdentityFromSiblings} learns from) and `untagged` (meeting notes
+     * with neither — the candidates a fix would apply to). Non-meeting notes
+     * that happen to share the folder are ignored on both sides.
+     */
+    private scanFolderForIdentity(folderPath: string): {
+        tagged: SiblingIdentity[];
+        untagged: TFile[];
+    } {
+        const tagged: SiblingIdentity[] = [];
+        const untagged: TFile[] = [];
+        for (const entry of scanMeetingNotes(this.app)) {
+            if (folderOf(entry.file) !== folderPath) continue;
+            if (entry.recurringEventId || entry.oneOnOneWith) {
+                const fm = this.app.metadataCache.getFileCache(entry.file)
+                    ?.frontmatter as Record<string, unknown> | undefined;
+                const titleRaw = fm?.["title"];
+                const title =
+                    typeof titleRaw === "string" && titleRaw
+                        ? titleRaw
+                        : entry.file.basename;
+                tagged.push({
+                    oneOnOneWith: entry.oneOnOneWith,
+                    oneOnOneEmail: entry.oneOnOneEmail,
+                    recurringEventId: entry.recurringEventId,
+                    title,
+                });
+            } else if (this.isMeetingNote(entry.file)) {
+                untagged.push(entry.file);
+            }
+        }
+        return { tagged, untagged };
+    }
+
+    /**
+     * Infers a folder's identity from its already-tagged notes, honouring the
+     * `oneOnOneSeparately` gate the dashboard's own 1:1 grouping uses (with it
+     * off, a folder full of 1:1 notes has nothing meaningful to offer — 1:1
+     * metadata wouldn't be read anywhere).
+     */
+    private inferFolderIdentity(folderPath: string): InferredIdentity | null {
+        const { tagged } = this.scanFolderForIdentity(folderPath);
+        const identity = inferIdentityFromSiblings(tagged);
+        if (identity?.kind === "one-on-one" && !this.settings.oneOnOneSeparately) {
+            return null;
+        }
+        return identity;
+    }
+
+    /**
+     * Offers to tag `targets` with `identity` — a single persistent Notice the
+     * user must click to apply; nothing is written on its own. Shared by the
+     * move-detection suggestion and the manual fix command/menu items.
+     */
+    private confirmMetadataFix(
+        targets: TFile[],
+        identity: InferredIdentity
+    ): void {
+        if (targets.length === 0) return;
+        const n = t().notices;
+        const label =
+            identity.kind === "one-on-one"
+                ? n.metadataFixLabelOneOnOne(identity.name)
+                : n.metadataFixLabelRecurring(identity.title);
+        multiActionNotice(n.metadataFixConfirm(targets.length, label), [
+            {
+                label: n.metadataFixApply,
+                cta: true,
+                onClick: () => void this.applyMetadataFix(targets, identity),
+            },
+            { label: n.metadataFixDismiss, onClick: () => {} },
+        ]);
+    }
+
+    /** Writes the inferred identity's frontmatter to every target note. */
+    private async applyMetadataFix(
+        targets: TFile[],
+        identity: InferredIdentity
+    ): Promise<void> {
+        for (const file of targets) {
+            await this.app.fileManager.processFrontMatter(file, (fm) => {
+                const f = fm as Record<string, unknown>;
+                if (identity.kind === "one-on-one") {
+                    f.one_on_one_with = identity.name;
+                    if (identity.email) f.one_on_one_email = identity.email;
+                } else {
+                    f.recurring_event_id = identity.recurringEventId;
+                }
+            });
+        }
+        new Notice(t().notices.metadataFixDone(targets.length));
+    }
+
+    /**
+     * Auto-detection (option B): when a meeting note with no 1:1/series
+     * identity is moved into a different folder, and that folder's other
+     * notes consistently agree on one identity, offer to tag it — never
+     * silently. A same-folder rename (title edit) is ignored; only an actual
+     * folder change is worth checking.
+     */
+    private maybeSuggestMetadataFixOnMove(file: TFile, oldPath: string): void {
+        if (file.extension !== "md") return;
+        const oldFolder = oldPath.includes("/")
+            ? oldPath.slice(0, oldPath.lastIndexOf("/"))
+            : "";
+        const newFolder = file.parent?.path ?? "";
+        if (oldFolder === newFolder) return;
+        if (!this.isMeetingNote(file)) return;
+
+        const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as
+            | Record<string, unknown>
+            | undefined;
+        if (fm?.["recurring_event_id"] || fm?.["one_on_one_with"]) return;
+
+        const identity = this.inferFolderIdentity(newFolder);
+        if (identity) this.confirmMetadataFix([file], identity);
+    }
+
+    /**
+     * Manual fix (option C), single note: infers from the note's current
+     * folder siblings, same as the move-detection path, but explicitly
+     * triggered — covers a note moved before this feature existed, or one
+     * whose auto-suggestion was missed/dismissed.
+     */
+    private fixMetadataForNote(file: TFile): void {
+        const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as
+            | Record<string, unknown>
+            | undefined;
+        if (fm?.["recurring_event_id"] || fm?.["one_on_one_with"]) {
+            new Notice(t().notices.metadataFixAlreadyTagged);
+            return;
+        }
+        const identity = this.inferFolderIdentity(file.parent?.path ?? "");
+        if (!identity) {
+            new Notice(t().notices.metadataFixNoSignal);
+            return;
+        }
+        this.confirmMetadataFix([file], identity);
+    }
+
+    /**
+     * Manual fix (option C), whole folder: infers one identity from the
+     * folder's already-tagged notes and offers to apply it to every note
+     * still missing it — e.g. run once on "Andres" after moving several
+     * ad-hoc 1:1 notes in there over time.
+     */
+    private fixMetadataForFolder(folder: TFolder): void {
+        const { tagged, untagged } = this.scanFolderForIdentity(folder.path);
+        if (untagged.length === 0) {
+            new Notice(t().notices.metadataFixNothingToFix);
+            return;
+        }
+        const identity = inferIdentityFromSiblings(tagged);
+        if (!identity || (identity.kind === "one-on-one" && !this.settings.oneOnOneSeparately)) {
+            new Notice(t().notices.metadataFixNoSignal);
+            return;
+        }
+        this.confirmMetadataFix(untagged, identity);
     }
 
     /**
