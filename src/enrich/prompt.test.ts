@@ -127,9 +127,12 @@ describe("effectiveEnrichPrompt", () => {
 		expect(DEFAULT_ENRICH_PROMPT).toContain("### Next steps");
 	});
 
-	it("treats the participant's own notes as authoritative, exempt from trimming", () => {
+	it("treats the participant's own notes as authoritative, carried over as their own bullets, exempt from trimming", () => {
 		expect(DEFAULT_ENRICH_PROMPT).toContain(
-			"every single one must be reflected somewhere in the output"
+			"every one must survive into the output as its own bullet"
+		);
+		expect(DEFAULT_ENRICH_PROMPT).toContain(
+			"never dissolve one into a merged, reworded sentence"
 		);
 		expect(DEFAULT_ENRICH_PROMPT).toContain(
 			"this trimming never applies to the participant's own notes"
