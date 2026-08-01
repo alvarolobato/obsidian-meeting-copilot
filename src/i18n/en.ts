@@ -115,6 +115,8 @@ export const en = {
 		diarizationNoTracks:
 			"No separate speaker tracks were recorded for this meeting — transcribing the single joint track instead.",
 		transcriptImportCleaning: "Cleaning up imported transcript…",
+		transcriptImportInProgress:
+			"A transcript import for this note is already in progress…",
 		transcriptImportEmpty: "That file doesn't contain a readable transcript.",
 		transcriptImportError: (msg: string) =>
 			`Transcript import failed: ${msg}`,
@@ -151,6 +153,7 @@ export const en = {
 		/** Verbs shown per task kind in the queue popover rows. */
 		queueKindTranscribe: "Transcribing",
 		queueKindEnrich: "Enriching",
+		queueKindImport: "Importing",
 		/** Accessible label / tooltip for a popover row's cancel (x) control. */
 		queueCancel: "Cancel",
 		transcriptAdded: "Transcript added",

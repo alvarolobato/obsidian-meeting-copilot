@@ -122,4 +122,140 @@ describe("parseZoomTranscript", () => {
 		].join("\n");
 		expect(parseZoomTranscript(vtt)).toBeNull();
 	});
+
+	it("parses cues with no numeric identifier at all (optional per the WebVTT spec)", () => {
+		const vtt = [
+			"WEBVTT",
+			"",
+			"00:00:00.000 --> 00:00:02.000",
+			"Alice: Hello there",
+			"",
+			"00:00:02.500 --> 00:00:04.000",
+			"Bob: Hi Alice",
+			"",
+		].join("\n");
+		expect(parseZoomTranscript(vtt)?.transcript).toBe(
+			"Alice: Hello there\nBob: Hi Alice"
+		);
+	});
+
+	it("parses a mix of numbered and unnumbered cues without dropping the unnumbered ones", () => {
+		// Regression: previously only cues immediately preceded by a bare-digit
+		// line were recognized at all, so an export mixing the two styles (or
+		// simply omitting identifiers past the first cue) silently lost every
+		// cue without one — and since only *parsed* cues counted toward the
+		// unknown-speaker ratio, the LLM-fallback safety net never tripped
+		// either, so a badly truncated transcript replaced a good one with no
+		// warning.
+		const vtt = [
+			"WEBVTT",
+			"",
+			"1",
+			"00:00:00.000 --> 00:00:02.000",
+			"Alice: First line",
+			"",
+			"00:00:02.500 --> 00:00:04.000",
+			"Bob: Second line",
+			"",
+			"00:00:04.500 --> 00:00:06.000",
+			"Alice: Third line",
+			"",
+		].join("\n");
+		const parsed = parseZoomTranscript(vtt);
+		expect(parsed?.transcript).toBe(
+			"Alice: First line\nBob: Second line\nAlice: Third line"
+		);
+	});
+
+	it("doesn't merge two cues into one when the blank separator line is missing", () => {
+		const vtt = [
+			"WEBVTT",
+			"",
+			"1",
+			"00:00:00.000 --> 00:00:02.000",
+			"Alice: one",
+			"2",
+			"00:00:02.500 --> 00:00:04.000",
+			"Bob: two",
+			"",
+		].join("\n");
+		const parsed = parseZoomTranscript(vtt);
+		expect(parsed?.transcript).toBe("Alice: one\nBob: two");
+	});
+
+	// The next three cases pair the ambiguous cue with clearly-labeled ones so
+	// the overall unknown-speaker ratio stays well under the 0.35 escape-hatch
+	// threshold — otherwise a single-cue file trips that unrelated safety net
+	// and the whole parse (correctly) returns null before we can see how the
+	// ambiguous cue itself was classified.
+
+	it("doesn't split a sentence containing a colon into a fake speaker", () => {
+		const vtt = [
+			"WEBVTT",
+			"",
+			"1",
+			"00:00:00.000 --> 00:00:02.000",
+			"Alice: Here's the situation",
+			"",
+			"2",
+			"00:00:02.500 --> 00:00:04.000",
+			"so the plan is: we ship on Friday",
+			"",
+			"3",
+			"00:00:04.500 --> 00:00:06.000",
+			"Alice: Sounds right to me",
+			"",
+		].join("\n");
+		const parsed = parseZoomTranscript(vtt);
+		expect(parsed?.transcript).toContain(
+			"Unknown Speaker: so the plan is: we ship on Friday"
+		);
+	});
+
+	it("doesn't split a time-of-day mention into a fake speaker", () => {
+		const vtt = [
+			"WEBVTT",
+			"",
+			"1",
+			"00:00:00.000 --> 00:00:02.000",
+			"Alice: Quick scheduling note",
+			"",
+			"2",
+			"00:00:02.500 --> 00:00:04.000",
+			"Let's meet at 10:30 tomorrow",
+			"",
+			"3",
+			"00:00:04.500 --> 00:00:06.000",
+			"Alice: Works for me",
+			"",
+		].join("\n");
+		const parsed = parseZoomTranscript(vtt);
+		expect(parsed?.transcript).toContain(
+			"Unknown Speaker: Let's meet at 10:30 tomorrow"
+		);
+	});
+
+	it("keeps a cue's content instead of dropping it when the speaker cleans away to nothing", () => {
+		// "@alice" has no name before the org/role suffix marker, so
+		// cleanSpeaker() reduces it to "" — the cue must not vanish because of
+		// that; it should fall back to Unknown Speaker with the full text.
+		const vtt = [
+			"WEBVTT",
+			"",
+			"1",
+			"00:00:00.000 --> 00:00:02.000",
+			"Alice: Setting the stage",
+			"",
+			"2",
+			"00:00:02.500 --> 00:00:04.000",
+			"@alice: real content here",
+			"",
+			"3",
+			"00:00:04.500 --> 00:00:06.000",
+			"Alice: Wrapping up",
+			"",
+		].join("\n");
+		const parsed = parseZoomTranscript(vtt);
+		expect(parsed?.transcript).toContain("real content here");
+	});
 });

@@ -46,13 +46,38 @@ function isFiller(text: string): boolean {
 	return FILLERS.has(normalized);
 }
 
+/**
+ * True when `label` plausibly reads as a speaker's name rather than the tail
+ * end of a sentence that happens to contain a colon (e.g. "so the plan is:
+ * we ship Friday", or "Let's meet at 10:30" splitting on the wrong colon).
+ * Real speaker names are short, don't contain digits or sentence punctuation,
+ * and start with a capital letter.
+ */
+function looksLikeSpeakerLabel(label: string): boolean {
+	if (!label || label.length > 60) return false;
+	if (/[.,!?]/.test(label)) return false;
+	if (/\d/.test(label)) return false;
+	if (label.split(/\s+/).length > 6) return false;
+	return /^[A-Z]/.test(label);
+}
+
+const SPEAKER_TEXT_RE = /^([^:\n]{1,60}):\s*(.+)$/;
+
 interface RawEntry {
 	speaker: string;
 	text: string;
 	isUnknown: boolean;
 }
 
-/** Parses WebVTT cue blocks (`index` / `start --> end` / text…) into speaker/text entries. */
+/**
+ * Parses WebVTT cue blocks (an optional numeric identifier, a `start --> end`
+ * timing line, then text lines) into speaker/text entries. The identifier is
+ * optional per the WebVTT spec — Zoom always writes one, but other exporters
+ * don't — so cues are found by their timing line alone, never by requiring a
+ * preceding digit line (a `.vtt` with unnumbered cues would otherwise have
+ * every one of them silently skipped, along with the fallback-to-LLM safety
+ * net, since only entries that *did* parse count toward that ratio).
+ */
 function parseCueBlocks(content: string): {
 	entries: RawEntry[];
 	cueCount: number;
@@ -64,30 +89,52 @@ function parseCueBlocks(content: string): {
 	let i = 0;
 	while (i < lines.length) {
 		const line = (lines[i] ?? "").trim();
-		const nextLine = (lines[i + 1] ?? "").trim();
 
-		if (/^\d+$/.test(line) && /-->/.test(nextLine)) {
+		if (/-->/.test(line)) {
 			cueCount += 1;
-			i += 2;
+			i += 1;
 			const textLines: string[] = [];
-			while (i < lines.length && (lines[i] ?? "").trim() !== "") {
+			// Stop at a blank line, the next timing line, or a bare identifier
+			// line immediately followed by one — some exports omit the blank
+			// separator between cues, and without this a missing one would
+			// swallow the next cue's identifier/timing (and its text) into
+			// this one.
+			while (
+				i < lines.length &&
+				(lines[i] ?? "").trim() !== "" &&
+				!/-->/.test((lines[i] ?? "").trim()) &&
+				!(
+					/^\d+$/.test((lines[i] ?? "").trim()) &&
+					/-->/.test((lines[i + 1] ?? "").trim())
+				)
+			) {
 				textLines.push(lines[i] ?? "");
 				i += 1;
 			}
 
 			const cueText = normalizeText(textLines.join(" "));
-			const speakerMatch = cueText.match(/^([^:]+):\s*(.+)$/);
+			const speakerMatch = cueText.match(SPEAKER_TEXT_RE);
+			let handled = false;
 			if (speakerMatch) {
 				const speaker = cleanSpeaker(speakerMatch[1] ?? "");
 				const text = normalizeText(speakerMatch[2] ?? "");
-				if (speaker && text) entries.push({ speaker, text, isUnknown: false });
-			} else if (cueText) {
+				// A speaker that fails the name heuristic, or one that cleaned
+				// away to nothing (e.g. a cue that's only "@alice:" with no
+				// other name), falls through to Unknown Speaker below instead
+				// of silently vanishing.
+				if (speaker && text && looksLikeSpeakerLabel(speaker)) {
+					entries.push({ speaker, text, isUnknown: false });
+					handled = true;
+				}
+			}
+			if (!handled && cueText) {
 				entries.push({
 					speaker: "Unknown Speaker",
 					text: cueText,
 					isUnknown: true,
 				});
 			}
+			continue;
 		}
 
 		i += 1;
@@ -127,20 +174,15 @@ export interface ParsedZoomTranscript {
 
 /**
  * True when content looks like a Zoom `.vtt` export: a `WEBVTT` header
- * followed by at least one numbered cue with a `-->` timestamp line. Renamed
- * or re-extensioned files still match, since this checks content, not the
- * filename.
+ * followed by at least one cue's `-->` timestamp line. Renamed or
+ * re-extensioned files still match, since this checks content, not the
+ * filename; a missing cue identifier (optional per the WebVTT spec) doesn't
+ * disqualify it either.
  */
 export function looksLikeZoomVtt(content: string): boolean {
 	const trimmed = content.replace(/^\uFEFF/, "").trimStart();
 	if (!/^WEBVTT/i.test(trimmed)) return false;
-	const lines = trimmed.split("\n");
-	for (let i = 0; i < lines.length - 1; i++) {
-		if (/^\d+$/.test((lines[i] ?? "").trim()) && /-->/.test((lines[i + 1] ?? "").trim())) {
-			return true;
-		}
-	}
-	return false;
+	return trimmed.split("\n").some((line) => /-->/.test(line.trim()));
 }
 
 /**

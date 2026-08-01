@@ -189,6 +189,7 @@ import {
     ENRICH_SYSTEM_PROMPT,
     extractEmbeddedTitle,
     fillPrompt,
+    truncateTranscriptForBudget,
 } from "./enrich/prompt";
 import {
     cleanSuggestedTitle,
@@ -5133,15 +5134,27 @@ export default class SystemRecordingPlugin extends Plugin {
             return "";
         }
         new Notice(t().notices.transcriptImportCleaning);
+        // Same transcript token budget and timeout enrichment itself uses, so
+        // a long import can't silently overrun the endpoint's context window
+        // (the model would otherwise have to guess where to cut, which reads
+        // as an unflagged truncation) or hang past what the user configured.
+        const budgeted = truncateTranscriptForBudget(
+            raw,
+            this.settings.enrichMaxTranscriptTokens
+        ).text;
+        const timeoutMs = Math.min(
+            600_000,
+            Math.max(60_000, (this.settings.enrichTimeoutSeconds || 120) * 1000)
+        );
         try {
             return await chatComplete({
                 baseUrl: apiBaseUrl,
                 apiKey,
                 model: enrichModel,
                 system: TRANSCRIPT_CLEANUP_SYSTEM_PROMPT,
-                user: buildTranscriptCleanupPrompt(raw),
+                user: buildTranscriptCleanupPrompt(budgeted),
                 signal,
-                timeoutMs: 180_000,
+                timeoutMs,
             });
         } catch (e) {
             if (e instanceof ChatAbortError) return "";
@@ -5160,12 +5173,14 @@ export default class SystemRecordingPlugin extends Plugin {
      * replace the note's transcript with a cleaned-up version of it, then
      * re-enriches from it. Runs as a "transcribe"-kind queue task (it *is*
      * producing a transcript, just from a file instead of audio) so it's
-     * visible/cancellable like any other background job.
+     * visible/cancellable like any other background job, and so cancelling
+     * it (or "Cancel transcription") behaves exactly like cancelling a real
+     * transcription.
      */
     private async importTranscript(note: TFile): Promise<void> {
         const id = this.importTaskId(note.path);
         if (this.taskQueue.has(id)) {
-            new Notice(t().notices.transcribeInProgress);
+            new Notice(t().notices.transcriptImportInProgress);
             return;
         }
         const file = await this.pickTranscriptFile();
@@ -5176,27 +5191,58 @@ export default class SystemRecordingPlugin extends Plugin {
             return;
         }
 
-        await this.taskQueue.enqueue({
-            id,
-            label: this.meetingNoteLabel(note),
-            kind: "transcribe",
-            run: async (signal) => {
-                const cleaned = await this.cleanImportedTranscript(raw, signal);
-                if (signal.aborted || !cleaned.trim()) return;
-                await insertTranscript(this.app, note, cleaned, {
-                    append: false,
-                });
-                new Notice(t().notices.transcriptAdded(note.basename));
-                this.setActionStatus(t().statusBar.transcriptAdded, "success");
-                this.agendaEvents.emit("changed", undefined);
-                if (this.settings.enableEnrichment) {
-                    void this.enqueueEnrichTask(note, {
-                        transcriptOverride: cleaned,
-                        quiet: true,
+        // Not awaited by design (mirrors enqueueEnrichTask): the caller is a
+        // fire-and-forget menu handler (`void this.importTranscript(...)`),
+        // so a cancellation rejecting this promise must be caught here or it
+        // surfaces as an unhandled rejection in the renderer.
+        this.taskQueue
+            .enqueue({
+                id,
+                label: this.meetingNoteLabel(note),
+                kind: "transcribe",
+                run: async (signal) => {
+                    const cleaned = await this.cleanImportedTranscript(
+                        raw,
+                        signal
+                    );
+                    if (signal.aborted || !cleaned.trim()) return;
+                    // Mirrors the re-transcribe flow: `insertTranscript`
+                    // writes the callout and stamps `transcript_saved`, which
+                    // is what makes the note's audio eligible for retention
+                    // pruning — so, same as re-transcribing, that only
+                    // happens when the user actually wants transcripts
+                    // written into notes. Enrichment still runs from the
+                    // cleaned transcript either way.
+                    if (this.settings.insertTranscript) {
+                        await insertTranscript(this.app, note, cleaned, {
+                            append: false,
+                        });
+                        new Notice(t().notices.transcriptAdded(note.basename));
+                        this.setActionStatus(
+                            t().statusBar.transcriptAdded,
+                            "success"
+                        );
+                        this.agendaEvents.emit("changed", undefined);
+                    }
+                    if (
+                        this.settings.enableEnrichment &&
+                        this.settings.enrichOnTranscribe
+                    ) {
+                        void this.enqueueEnrichTask(note, {
+                            transcriptOverride: cleaned,
+                            quiet: true,
+                        });
+                    }
+                },
+            })
+            .catch((e) => {
+                if (!(e instanceof TaskCancelledError)) {
+                    mcLog("import", "queue fail", {
+                        note: note.path,
+                        error: e instanceof Error ? e.message : String(e),
                     });
                 }
-            },
-        });
+            });
     }
 
     /** Reflects the queue's running/waiting state in the status bar (single-owner). */
@@ -5370,10 +5416,17 @@ export default class SystemRecordingPlugin extends Plugin {
             row.createSpan({ cls: "mc-queue-popover-icon" }),
             running ? "loader-2" : this.queueKindIcon(item.kind)
         );
+        // A transcript import runs as a "transcribe"-kind task (so cancelling
+        // it, and "Cancel transcription", behave the same as for a real
+        // transcription — see importTaskId/importTranscript), but it should
+        // still read as "Importing" rather than "Transcribing" in the queue
+        // UI; the id prefix is the only thing distinguishing the two.
         const verb =
-            item.kind === "transcribe"
-                ? t().statusBar.queueKindTranscribe
-                : t().statusBar.queueKindEnrich;
+            item.kind === "enrich"
+                ? t().statusBar.queueKindEnrich
+                : item.id.startsWith("import:")
+                ? t().statusBar.queueKindImport
+                : t().statusBar.queueKindTranscribe;
         row.createSpan({
             cls: "mc-queue-popover-label",
             text: `${verb} · ${item.label}`,
