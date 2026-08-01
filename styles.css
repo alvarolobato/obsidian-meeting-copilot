@@ -345,31 +345,36 @@
 	color: var(--mc-cal-text);
 }
 
-/* ---- Missing-piece badges (a past-meeting row that still needs attention
- * shows these inline, next to its time/status meta). ---------------------- */
+/* ---- Status pill: a past-meeting row's pipeline stage, in the same 4
+ * colours as the accent bar / status dot everywhere else — one signal
+ * instead of the status word and a separate "missing X" badge restating it. */
 
-.mc-badge {
+.mc-status-pill {
 	display: inline-block;
-	margin-inline-end: 4px;
-	padding: 1px 7px;
+	margin-left: 6px;
+	padding: 1px 8px;
 	border-radius: 999px;
 	font-size: 11px;
-	background: var(--mc-cal-chip);
-	color: var(--mc-cal-muted);
+	font-weight: 500;
 }
 
-.mc-badge-date {
-	background: color-mix(in oklch, var(--mc-cal-accent-live) 30%, var(--mc-cal-chip));
+.mc-status-pill-scheduled {
+	background: color-mix(in oklch, var(--mc-cal-caption) 30%, var(--mc-cal-chip));
 	color: var(--mc-cal-text);
 }
 
-.mc-badge-transcript {
-	background: color-mix(in oklch, var(--mc-cal-accent-block) 25%, var(--mc-cal-chip));
-	color: var(--mc-cal-text);
-}
-
-.mc-badge-summary {
+.mc-status-pill-recorded {
 	background: color-mix(in oklch, var(--mc-cal-accent-one-on-one) 30%, var(--mc-cal-chip));
+	color: var(--mc-cal-text);
+}
+
+.mc-status-pill-transcribed {
+	background: color-mix(in oklch, var(--mc-cal-accent-block) 30%, var(--mc-cal-chip));
+	color: var(--mc-cal-text);
+}
+
+.mc-status-pill-enriched {
+	background: color-mix(in oklch, oklch(0.68 0.15 145) 30%, var(--mc-cal-chip));
 	color: var(--mc-cal-text);
 }
 
@@ -438,34 +443,6 @@
 
 .mc-cal-event.needs-attention:hover {
 	background: color-mix(in oklch, var(--mc-cal-accent-live) 11%, var(--mc-cal-card-hi));
-}
-
-/* Status shown as a small colour-coded dot in "Needs attention" (the row
- * accent bar carries the same information in the meetings lists above). */
-.mc-status-dot {
-	display: inline-block;
-	width: 8px;
-	height: 8px;
-	border-radius: 50%;
-	margin-right: 6px;
-	background: var(--mc-cal-caption);
-	vertical-align: middle;
-}
-
-.mc-status-scheduled {
-	background: var(--mc-cal-caption);
-}
-
-.mc-status-recorded {
-	background: var(--mc-cal-accent-one-on-one);
-}
-
-.mc-status-transcribed {
-	background: var(--mc-cal-accent-block);
-}
-
-.mc-status-enriched {
-	background: oklch(0.68 0.15 145);
 }
 
 /* ---- Open action items / follow-ups ------------------------------------- */
@@ -619,26 +596,6 @@ ul.mc-action-tasks {
 .mc-dash-count {
 	color: var(--mc-cal-muted);
 	font-size: 12px;
-}
-
-/* Status colour key, shown in the meetings toolbar next to the count. */
-.mc-dash-legend {
-	display: flex;
-	align-items: center;
-	flex-wrap: wrap;
-	gap: 10px 12px;
-}
-
-.mc-dash-legend-item {
-	display: inline-flex;
-	align-items: center;
-	gap: 4px;
-	color: var(--mc-cal-muted);
-	font-size: 11.5px;
-}
-
-.mc-dash-legend-item .mc-status-dot {
-	margin: 0;
 }
 
 .mc-dash-toolbar-right {

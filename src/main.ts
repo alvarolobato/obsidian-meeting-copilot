@@ -3126,39 +3126,50 @@ export default class SystemRecordingPlugin extends Plugin {
                     text: row.title,
                 });
                 const meta = rowBody.createDiv({ cls: "mc-cal-event-meta" });
-                const metaParts = [timeStr(row.start)];
+                meta.createSpan({ text: timeStr(row.start) });
                 if (hasStatus) {
-                    metaParts.push(statusLabels[row.status] ?? row.status);
-                }
-                meta.createSpan({ text: metaParts.join(" · ") });
-                if (attention) {
-                    for (const m of attention.missing) {
-                        meta.createSpan({
-                            text: ad.missing[m],
-                            cls: `mc-badge mc-badge-${m}`,
-                        });
-                    }
+                    meta.createSpan({
+                        cls: `mc-status-pill mc-status-pill-${row.status}`,
+                        text: statusLabels[row.status] ?? row.status,
+                    });
                 }
 
                 if (file) {
                     rowEl.addEventListener("click", () =>
                         this.openFileInTab(file)
                     );
-                    // Attention rows get one extra action — an overflow menu
-                    // for Transcribe/Enrich — alongside the row's normal
-                    // click-to-open; everything else about the row (accent,
-                    // meta, click target) is identical to a plain past-note
-                    // row.
+                    // Attention rows get a default next-action button —
+                    // enrich (which transcribes first if needed) is the same
+                    // call whether the note is merely recorded or already
+                    // transcribed, so one button covers both — plus a
+                    // dropdown for the individual steps. Alongside the row's
+                    // normal click-to-open; everything else about the row
+                    // (accent, meta, click target) is identical to a plain
+                    // past-note row.
                     if (attention) {
                         const attnMeeting = this.agendaMeetingFromNote(file);
+                        const primaryLabel =
+                            row.status === "transcribed"
+                                ? acts.enrich
+                                : ad.transcribeAndEnrich;
                         const actions = rowEl.createDiv({
                             cls: "mc-cal-event-actions",
                         });
+                        const primaryBtn = actions.createEl("button", {
+                            cls: "mc-cal-event-btn",
+                            attr: { "aria-label": primaryLabel },
+                        });
+                        setIcon(primaryBtn, "sparkles");
+                        primaryBtn.addEventListener("click", (e) => {
+                            e.stopPropagation();
+                            void this.enqueueEnrich(file);
+                        });
+
                         const moreBtn = actions.createEl("button", {
                             cls: "mc-cal-event-btn",
                             attr: { "aria-label": ad.moreActions },
                         });
-                        setIcon(moreBtn, "ellipsis");
+                        setIcon(moreBtn, "chevron-down");
                         moreBtn.addEventListener("click", (e) => {
                             e.stopPropagation();
                             const menu = new Menu();
@@ -3208,12 +3219,6 @@ export default class SystemRecordingPlugin extends Plugin {
 
         this.renderDashToolbar(el, {
             countText: d.pastCount(view.total),
-            legend: [
-                { cls: "mc-status-scheduled", label: d.status.scheduled },
-                { cls: "mc-status-recorded", label: d.status.recorded },
-                { cls: "mc-status-transcribed", label: d.status.transcribed },
-                { cls: "mc-status-enriched", label: d.status.enriched },
-            ],
             pageSize,
             view,
             onPageSize: (n): void => {
@@ -3245,25 +3250,12 @@ export default class SystemRecordingPlugin extends Plugin {
             onPageSize: (size: number) => void;
             onGoTo: (page: number) => void;
             onRefresh: () => void;
-            /** Optional status colour key rendered on the left of the bar. */
-            legend?: Array<{ cls: string; label: string }>;
         }
     ): void {
         const c = t().dashboard.controls;
         const bar = parent.createDiv({ cls: "mc-dash-toolbar" });
         const left = bar.createDiv({ cls: "mc-dash-toolbar-left" });
         left.createSpan({ cls: "mc-dash-count", text: opts.countText });
-        if (opts.legend) {
-            const legend = left.createDiv({ cls: "mc-dash-legend" });
-            for (const item of opts.legend) {
-                const li = legend.createSpan({ cls: "mc-dash-legend-item" });
-                li.createSpan({ cls: `mc-status-dot ${item.cls}` });
-                li.createSpan({
-                    cls: "mc-dash-legend-label",
-                    text: item.label,
-                });
-            }
-        }
 
         const right = bar.createDiv({ cls: "mc-dash-toolbar-right" });
 

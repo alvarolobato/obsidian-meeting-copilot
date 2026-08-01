@@ -245,11 +245,7 @@ export const en = {
 		},
 		attention: {
 			moreActions: "More actions",
-			missing: {
-				date: "date",
-				transcript: "transcript",
-				summary: "summary",
-			},
+			transcribeAndEnrich: "Transcribe & enrich",
 		},
 		controls: {
 			perPage: "Per page",
