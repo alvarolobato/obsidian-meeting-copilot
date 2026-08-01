@@ -9,6 +9,7 @@ function input(over: Partial<AttentionInput>): AttentionInput {
 		status: "recorded",
 		hasRecording: true,
 		processing: false,
+		transcriptTruncated: false,
 		...over,
 	};
 }
@@ -42,6 +43,22 @@ describe("computeAttention", () => {
 	it("does not surface a fully enriched meeting", () => {
 		const rows = computeAttention([input({ status: "enriched" })]);
 		expect(rows).toHaveLength(0);
+	});
+
+	it("flags an enriched meeting whose transcript was truncated", () => {
+		const rows = computeAttention([
+			input({ status: "enriched", transcriptTruncated: true }),
+		]);
+		expect(rows[0]?.missing).toEqual(["truncated"]);
+	});
+
+	it("doesn't flag truncation before the meeting is actually enriched", () => {
+		// Stale flag from a prior enrich shouldn't pile onto an in-progress note.
+		expect(
+			computeAttention([
+				input({ status: "recorded", transcriptTruncated: true }),
+			])
+		).toEqual(computeAttention([input({ status: "recorded" })]));
 	});
 
 	it("skips a meeting that is currently being processed (transcribing/queued/enriching)", () => {

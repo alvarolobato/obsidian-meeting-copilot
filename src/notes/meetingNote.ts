@@ -242,6 +242,8 @@ export interface MeetingNoteScanEntry {
 	/** Raw `recording` frontmatter value (typically a `[[wikilink]]` string), if any. */
 	recording: unknown;
 	hasMeetingUrl: boolean;
+	/** `enrich_transcript_truncated` frontmatter — set by `runEnrich` when the transcript had to be budget-truncated. */
+	transcriptTruncated: boolean;
 }
 
 function nonEmptyString(v: unknown): string | null {
@@ -308,6 +310,7 @@ export function scanMeetingNotes(app: App): MeetingNoteScanEntry[] {
 			status: nonEmptyString(fm?.["status"]),
 			recording: fm?.["recording"],
 			hasMeetingUrl: nonEmptyString(fm?.["meeting_url"]) !== null,
+			transcriptTruncated: fm?.["enrich_transcript_truncated"] === true,
 		};
 	});
 }

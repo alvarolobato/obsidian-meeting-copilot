@@ -131,6 +131,13 @@ export const en = {
 		// a human skimming the note.
 		speakerBanner:
 			'[Speaker labels: "Me" is the note\'s author; "Them" are the other attendees.]',
+		// Prepended to the AI notes callout, by the plugin — never by the model —
+		// when the transcript had to be truncated to fit the configured budget.
+		// The model can't reliably self-report this (it may not even notice the
+		// mid-transcript truncation marker), so this has to be deterministic to
+		// be trustworthy.
+		truncatedWarning: (maxTokens: number) =>
+			`**⚠️ Transcript truncated for enrichment:** this meeting's transcript exceeded the configured budget (${maxTokens.toLocaleString()} tokens), so the AI only saw the beginning and end of the discussion — content from the middle may be missing below. Raise "Max transcript tokens for enrichment" in Settings → Meeting Copilot, then re-enrich, for full coverage.`,
 	},
 	statusBar: {
 		recording: (hms: string) => `Recording ${hms}`,
@@ -262,6 +269,7 @@ export const en = {
 				date: "date",
 				transcript: "transcript",
 				summary: "summary",
+				truncated: "transcript truncated",
 			},
 		},
 		controls: {
@@ -721,7 +729,7 @@ export const en = {
 		},
 		enrichMaxTranscriptTokens: {
 			name: "Max transcript tokens for enrichment",
-			desc: "Soft cap (~characters÷4) on how much of the transcript is spliced into the enrichment prompt. Longer transcripts keep the opening and closing with a visible truncation marker in the middle. 0 disables truncation. Default 12000.",
+			desc: "How much of the transcript enrichment is allowed to read (~characters ÷ 4). Most current models handle a full multi-hour transcript in one request, so it's fine to set this high — the point isn't to protect the model, it's to cap your own token cost/latency on the meetings you actually want summarized start to finish. Default 400000 (roughly a 5-6 hour meeting). If a transcript still exceeds this, the plugin keeps the opening and closing and drops the middle, which can silently omit whole agenda topics discussed in between — when that happens, the note is flagged with a warning and shown in Needs attention so it doesn't pass as a complete summary. 0 disables the cap entirely (never truncates, whatever the cost/latency).",
 		},
 		enrichTimeoutSeconds: {
 			name: "Enrichment timeout (seconds)",

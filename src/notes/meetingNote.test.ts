@@ -1098,10 +1098,11 @@ describe("scanMeetingNotes", () => {
 			meeting_url: "https://example.com",
 		});
 		vault.addNote("Meetings/b.md", {});
+		vault.addNote("Meetings/d.md", { enrich_transcript_truncated: true });
 		const app = makeApp(vault);
 
 		const entries = scanMeetingNotes(app);
-		expect(entries).toHaveLength(2);
+		expect(entries).toHaveLength(3);
 
 		const a = entries.find((e) => e.file.path === "Meetings/a.md");
 		expect(a?.eventId).toBe("evt-1");
@@ -1111,11 +1112,15 @@ describe("scanMeetingNotes", () => {
 		expect(a?.stamp).toBe("2026-01-01T10:00:00");
 		expect(a?.status).toBe("recorded");
 		expect(a?.hasMeetingUrl).toBe(true);
+		expect(a?.transcriptTruncated).toBe(false);
 
 		const b = entries.find((e) => e.file.path === "Meetings/b.md");
 		expect(b?.eventId).toBeNull();
 		expect(b?.stamp).toBeNull();
 		expect(b?.hasMeetingUrl).toBe(false);
+
+		const d = entries.find((e) => e.file.path === "Meetings/d.md");
+		expect(d?.transcriptTruncated).toBe(true);
 	});
 
 	it("falls back to date when start is present but not a non-empty string", () => {

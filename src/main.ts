@@ -2909,6 +2909,7 @@ export default class SystemRecordingPlugin extends Plugin {
                 status: entry.status,
                 hasRecording,
                 processing,
+                transcriptTruncated: entry.transcriptTruncated,
             });
         }
 
@@ -6272,6 +6273,15 @@ export default class SystemRecordingPlugin extends Plugin {
                 transcript,
             };
 
+            // fillPrompt() truncates the transcript internally when it exceeds
+            // the budget; computed again here (cheap, pure) purely to know
+            // *whether* that happened, so we can warn instead of silently
+            // shipping a summary that may have skipped whole agenda topics.
+            const transcriptTruncated = truncateTranscriptForBudget(
+                transcript,
+                this.settings.enrichMaxTranscriptTokens
+            ).truncated;
+
             new Notice(t().notices.enriching);
             this.setEnrichStatus(t().statusBar.enriching, "busy");
             // Ask for an ad-hoc title in the *same* enrich call (trailer parsed
@@ -6372,7 +6382,12 @@ export default class SystemRecordingPlugin extends Plugin {
             const extracted = wantTitle
                 ? extractEmbeddedTitle(rawOutput)
                 : { body: rawOutput, title: null };
-            const output = extracted.body;
+            // Deterministic, never LLM-generated: the model can't reliably
+            // self-report a mid-transcript truncation it may not even notice,
+            // so this has to come from the plugin to be trustworthy.
+            const output = transcriptTruncated
+                ? `${t().transcript.truncatedWarning(this.settings.enrichMaxTranscriptTokens)}\n\n${extracted.body}`
+                : extracted.body;
             if (wantTitle) {
                 const cleaned = extracted.title
                     ? cleanSuggestedTitle(extracted.title)
@@ -6412,13 +6427,19 @@ export default class SystemRecordingPlugin extends Plugin {
                 await this.app.vault.modify(file, apply(current));
             }
             await this.app.fileManager.processFrontMatter(file, (f) => {
-                (f as Record<string, unknown>).status = "enriched";
+                const fm = f as Record<string, unknown>;
+                fm.status = "enriched";
+                // Always written (true or false) so a later re-enrich that no
+                // longer truncates — e.g. after raising the token budget —
+                // self-heals the flag instead of leaving a stale warning.
+                fm.enrich_transcript_truncated = transcriptTruncated;
             });
             const elapsedMs = Date.now() - enrichStarted;
             mcLog("enrich", "ok", {
                 note: file.basename,
                 model: usedModel,
                 elapsedMs,
+                transcriptTruncated,
             });
             new Notice(t().notices.enrichDone(file.basename));
             this.setEnrichStatus(t().statusBar.enriched, "success");

@@ -380,6 +380,11 @@ table.mc-attention td {
     color: var(--text-normal);
 }
 
+.mc-badge-truncated {
+    background: rgba(var(--color-orange-rgb), 0.2);
+    color: var(--text-normal);
+}
+
 /* =========================================================================
  * Dashboard note layout: maximize screen usage. The Create-dashboard command
  * stamps the note with the `meeting-copilot-dashboard` cssclass; here that

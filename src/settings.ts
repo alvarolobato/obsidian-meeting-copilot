@@ -346,7 +346,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	enrichModel: "gpt-4o",
 	enrichPromptCustomize: false,
 	enrichPrompt: "",
-	enrichMaxTranscriptTokens: 12_000,
+	enrichMaxTranscriptTokens: 400_000,
 	enrichTimeoutSeconds: 120,
 	enrichOnTranscribe: true,
 	hideAiNotes: false,
@@ -1452,14 +1452,14 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
             .setDesc(s.settings.enrichMaxTranscriptTokens.desc)
             .addText((text) =>
                 text
-                    .setPlaceholder("12000")
+                    .setPlaceholder("400000")
                     .setValue(
                         String(this.plugin.settings.enrichMaxTranscriptTokens)
                     )
                     .onChange(async (value) => {
                         const n = Number.parseInt(value.trim(), 10);
                         this.plugin.settings.enrichMaxTranscriptTokens =
-                            Number.isFinite(n) && n >= 0 ? n : 12_000;
+                            Number.isFinite(n) && n >= 0 ? n : 400_000;
                         await this.plugin.saveSettings();
                     })
             );
