@@ -758,6 +758,11 @@ export default class SystemRecordingPlugin extends Plugin {
             window.clearTimeout(this.dashboardRefreshTimer);
             this.dashboardRefreshTimer = null;
         }
+        if (this.moveFixTimer !== null) {
+            window.clearTimeout(this.moveFixTimer);
+            this.moveFixTimer = null;
+        }
+        this.pendingMoveFixes.clear();
         this.dashboardBlocks.clear();
 		this.statusHovered = false;
 		this.hideQueuePopover();
@@ -3079,6 +3084,9 @@ export default class SystemRecordingPlugin extends Plugin {
         new Notice(t().notices.metadataFixDone(targets.length));
     }
 
+    private pendingMoveFixes: Map<string, TFile[]> = new Map();
+    private moveFixTimer: number | null = null;
+
     /**
      * Auto-detection (option B): when a meeting note with no 1:1/series
      * identity is moved into a different folder, and that folder's other
@@ -3094,9 +3102,6 @@ export default class SystemRecordingPlugin extends Plugin {
      * otherwise trigger its own full vault scan plus its own
      * never-auto-dismissing confirm Notice stacked on top of the last.
      */
-    private pendingMoveFixes: Map<string, TFile[]> = new Map();
-    private moveFixTimer: number | null = null;
-
     private maybeSuggestMetadataFixOnMove(file: TFile, oldPath: string): void {
         if (file.extension !== "md") return;
         const oldFolder = oldPath.includes("/")
