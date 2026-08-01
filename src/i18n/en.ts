@@ -281,6 +281,8 @@ export const en = {
 				recurring: "Recurring",
 				"ad-hoc": "Ad-hoc",
 			},
+			// Shared by both task sections — same table format for each.
+			ageDays: (n: number) => (n === 1 ? "1 day old" : `${n} days old`),
 		},
 		actions: {
 			count: (n: number) =>
@@ -299,7 +301,6 @@ export const en = {
 			showOlder: (n: number) =>
 				`Show older (${n})`,
 			hideOlder: "Hide older",
-			ageDays: (n: number) => (n === 1 ? "1 day old" : `${n} days old`),
 			taskMoved: "That follow-up has changed in its note; refreshing.",
 			taskError: (msg: string) =>
 				`Couldn't complete the follow-up: ${msg}`,

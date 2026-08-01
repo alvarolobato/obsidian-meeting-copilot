@@ -3395,11 +3395,13 @@ export default class SystemRecordingPlugin extends Plugin {
     ): Promise<void> {
         await this.renderTaskSection(el, {
             heading: ACTION_ITEMS_HEADING,
-            strings: t().dashboard.actions,
+            strings: {
+                ...t().dashboard.actions,
+                ageDays: t().dashboard.groups.ageDays,
+            },
             pageSizeKey: "dashboardActionsPageSize",
             page,
             force,
-            showAge: false,
             horizonDays: 0,
         });
     }
@@ -3416,19 +3418,22 @@ export default class SystemRecordingPlugin extends Plugin {
     ): Promise<void> {
         await this.renderTaskSection(el, {
             heading: FOLLOW_UPS_HEADING,
-            strings: t().dashboard.followups,
+            strings: {
+                ...t().dashboard.followups,
+                ageDays: t().dashboard.groups.ageDays,
+            },
             pageSizeKey: "dashboardFollowupsPageSize",
             page,
             force,
-            showAge: true,
             horizonDays: this.settings.followUpHorizonDays,
         });
     }
 
     /**
-     * Shared renderer for the action-items and follow-ups dashboard sections.
-     * `strings` is the i18n block (`actions` or `followups`); horizon filtering
-     * only applies when `horizonDays > 0`.
+     * Shared renderer for the action-items and follow-ups dashboard sections —
+     * same table format for both (age-on-the-right included). `strings` is the
+     * i18n block (`actions` or `followups`); horizon filtering only applies
+     * when `horizonDays > 0`.
      */
     private async renderTaskSection(
         el: HTMLElement,
@@ -3443,12 +3448,11 @@ export default class SystemRecordingPlugin extends Plugin {
                 taskError: (msg: string) => string;
                 showOlder?: (n: number) => string;
                 hideOlder?: string;
-                ageDays?: (n: number) => string;
+                ageDays: (n: number) => string;
             };
             pageSizeKey: "dashboardActionsPageSize" | "dashboardFollowupsPageSize";
             page: number;
             force: boolean;
-            showAge: boolean;
             horizonDays: number;
         }
     ): Promise<void> {
@@ -3496,11 +3500,7 @@ export default class SystemRecordingPlugin extends Plugin {
                 cls: "mc-actions-empty",
             });
         } else {
-            const list = el.createDiv({
-                cls: opts.showAge
-                    ? "mc-actions-list mc-followups-list"
-                    : "mc-actions-list",
-            });
+            const list = el.createDiv({ cls: "mc-actions-list" });
             for (const group of view.rows) {
                 this.renderActionNote(
                     list,
@@ -3566,12 +3566,11 @@ export default class SystemRecordingPlugin extends Plugin {
                 taskError: (msg: string) => string;
                 showOlder?: (n: number) => string;
                 hideOlder?: string;
-                ageDays?: (n: number) => string;
+                ageDays: (n: number) => string;
             };
             pageSizeKey: "dashboardActionsPageSize" | "dashboardFollowupsPageSize";
             page: number;
             force: boolean;
-            showAge: boolean;
             horizonDays: number;
         },
         today: Date
@@ -3602,16 +3601,6 @@ export default class SystemRecordingPlugin extends Plugin {
             cls: `mc-category-pill mc-category-pill-${group.category}`,
             text: t().dashboard.groups.category[group.category],
         });
-        if (group.date) {
-            const dt = group.date;
-            const pad = (n: number): string => String(n).padStart(2, "0");
-            header.createSpan({
-                cls: "mc-action-note-date",
-                text: `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(
-                    dt.getDate()
-                )}`,
-            });
-        }
 
         const ul = body.createEl("ul", { cls: "mc-action-tasks" });
         for (const task of group.tasks) {
@@ -3663,14 +3652,12 @@ export default class SystemRecordingPlugin extends Plugin {
                 task.path,
                 renderer
             );
-            if (opts.showAge && opts.strings.ageDays) {
-                const age = taskAgeDays(task, today);
-                if (age !== null && age > 0) {
-                    li.createSpan({
-                        cls: "mc-action-task-age",
-                        text: opts.strings.ageDays(age),
-                    });
-                }
+            const age = taskAgeDays(task, today);
+            if (age !== null && age > 0) {
+                li.createSpan({
+                    cls: "mc-action-task-age",
+                    text: opts.strings.ageDays(age),
+                });
             }
         }
     }

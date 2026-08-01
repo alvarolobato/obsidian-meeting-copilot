@@ -520,11 +520,6 @@
 	text-decoration: underline;
 }
 
-.mc-action-note-date {
-	color: var(--mc-cal-caption);
-	font-size: 11px;
-}
-
 ul.mc-action-tasks {
 	margin: 4px 0 0 0;
 	padding-left: 16px;
@@ -553,9 +548,9 @@ ul.mc-action-tasks {
 	text-decoration: line-through;
 }
 
-/* Keep rendered task markdown inline and margin-free for density, and let
- * the task text read at a normal weight (owners come through as bold from the
- * enricher; the user wants the list uniformly un-bold). */
+/* Keep rendered task markdown inline and margin-free for density. Both
+ * sections share one format: the **Owner:** prefix stays bold so you can
+ * scan who to ping. */
 .mc-action-task-text > * {
 	margin: 0;
 	display: inline;
@@ -563,12 +558,6 @@ ul.mc-action-tasks {
 
 .mc-action-task-text strong,
 .mc-action-task-text b {
-	font-weight: 400;
-}
-
-/* Meeting follow-ups: keep the **Owner:** prefix bold so you can scan who to ping. */
-.mc-followups-list .mc-action-task-text strong,
-.mc-followups-list .mc-action-task-text b {
 	font-weight: 700;
 }
 
