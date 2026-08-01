@@ -495,32 +495,15 @@ export default class SystemRecordingPlugin extends Plugin {
         this.registerEvent(
             this.app.workspace.on("editor-menu", (menu, _editor, info) => {
                 const file = info.file;
-                if (file instanceof TFile && this.isMeetingNote(file)) {
-                    this.addNoteMeetingMenu(menu, file);
-                }
+                if (file instanceof TFile) this.addNoteMeetingMenu(menu, file);
             })
         );
         this.registerEvent(
             this.app.workspace.on("file-menu", (menu, file) => {
-                if (file instanceof TFile && this.isMeetingNote(file)) {
+                if (file instanceof TFile) {
                     this.addNoteMeetingMenu(menu, file);
-                    const fm = this.app.metadataCache.getFileCache(file)
-                        ?.frontmatter as Record<string, unknown> | undefined;
-                    if (!fm?.["recurring_event_id"] && !fm?.["one_on_one_with"]) {
-                        menu.addItem((item) =>
-                            item
-                                .setTitle(t().menu.fixMetadataFile)
-                                .setIcon("link")
-                                .onClick(() => this.fixMetadataForNote(file))
-                        );
-                    }
                 } else if (file instanceof TFolder) {
-                    menu.addItem((item) =>
-                        item
-                            .setTitle(t().menu.fixMetadataFolder)
-                            .setIcon("link")
-                            .onClick(() => this.fixMetadataForFolder(file))
-                    );
+                    this.addFolderMeetingMenu(menu, file);
                 }
             })
         );
@@ -591,7 +574,7 @@ export default class SystemRecordingPlugin extends Plugin {
 			name: t().commands.fixMeetingMetadata,
 			checkCallback: (checking) => {
 				const file = this.app.workspace.getActiveFile();
-				if (!file || !this.isMeetingNote(file)) return false;
+				if (!file || !this.looksLikeMeetingNote(file)) return false;
 				if (!checking) this.fixMetadataForNote(file);
 				return true;
 			},
@@ -2791,16 +2774,75 @@ export default class SystemRecordingPlugin extends Plugin {
         );
     }
 
-    /** Adds a "Meeting Copilot" submenu with the shared meeting actions. */
+    /**
+     * Broader than {@link isMeetingNote}: also recognises a note synced from
+     * a third-party tool (currently Granola, via its `granola_id` stamp) that
+     * never goes through this plugin's own record/transcribe pipeline and so
+     * never gets `event_id`/`meeting_url`/`recording` — but is still a real
+     * meeting note worth offering a "Fix meeting metadata" identity fix for.
+     */
+    private looksLikeMeetingNote(file: TFile): boolean {
+        if (this.isMeetingNote(file)) return true;
+        if (file.extension !== "md") return false;
+        const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as
+            | Record<string, unknown>
+            | undefined;
+        const granolaId = fm?.["granola_id"];
+        return typeof granolaId === "string" && granolaId.trim().length > 0;
+    }
+
+    /** True when a note already carries 1:1 or recurring-series identity. */
+    private hasMeetingIdentity(file: TFile): boolean {
+        const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as
+            | Record<string, unknown>
+            | undefined;
+        return !!(fm?.["recurring_event_id"] || fm?.["one_on_one_with"]);
+    }
+
+    /**
+     * Adds a "Meeting Copilot" submenu: the shared meeting actions when the
+     * note is plugin-recognized, plus a "Fix meeting metadata" item when it
+     * looks like a meeting note (including a Granola-style import) but has no
+     * 1:1/series identity yet. Adds nothing when neither applies, so callers
+     * can invoke this unconditionally.
+     */
     private addNoteMeetingMenu(menu: Menu, file: TFile): void {
+        const isMeeting = this.isMeetingNote(file);
+        const canFixMetadata =
+            this.looksLikeMeetingNote(file) && !this.hasMeetingIdentity(file);
+        if (!isMeeting && !canFixMetadata) return;
         menu.addItem((item) => {
             item.setTitle(t().agenda.menuTitle).setIcon("mic");
             const sub = item.setSubmenu();
-            populateMeetingMenu(
-                sub,
-                this.agendaMeetingFromNote(file),
-                this.noteRowHandlers(),
-                { includeNavigation: false }
+            if (isMeeting) {
+                populateMeetingMenu(
+                    sub,
+                    this.agendaMeetingFromNote(file),
+                    this.noteRowHandlers(),
+                    { includeNavigation: false }
+                );
+            }
+            if (canFixMetadata) {
+                sub.addItem((fixItem) =>
+                    fixItem
+                        .setTitle(t().menu.fixMetadataFile)
+                        .setIcon("link")
+                        .onClick(() => this.fixMetadataForNote(file))
+                );
+            }
+        });
+    }
+
+    /** Adds a "Meeting Copilot" submenu with the folder-scoped metadata fix. */
+    private addFolderMeetingMenu(menu: Menu, folder: TFolder): void {
+        menu.addItem((item) => {
+            item.setTitle(t().agenda.menuTitle).setIcon("mic");
+            const sub = item.setSubmenu();
+            sub.addItem((fixItem) =>
+                fixItem
+                    .setTitle(t().menu.fixMetadataFolder)
+                    .setIcon("link")
+                    .onClick(() => this.fixMetadataForFolder(folder))
             );
         });
     }
@@ -2808,9 +2850,10 @@ export default class SystemRecordingPlugin extends Plugin {
     /**
      * A folder's direct markdown children split into `tagged` (already carry
      * `recurring_event_id` or `one_on_one_with` — the signal {@link
-     * inferIdentityFromSiblings} learns from) and `untagged` (meeting notes
-     * with neither — the candidates a fix would apply to). Non-meeting notes
-     * that happen to share the folder are ignored on both sides.
+     * inferIdentityFromSiblings} learns from) and `untagged` (meeting notes,
+     * including a Granola-style import, with neither — the candidates a fix
+     * would apply to). Notes that don't look like meeting notes at all are
+     * ignored on both sides.
      */
     private scanFolderForIdentity(folderPath: string): {
         tagged: SiblingIdentity[];
@@ -2834,7 +2877,7 @@ export default class SystemRecordingPlugin extends Plugin {
                     recurringEventId: entry.recurringEventId,
                     title,
                 });
-            } else if (this.isMeetingNote(entry.file)) {
+            } else if (this.looksLikeMeetingNote(entry.file)) {
                 untagged.push(entry.file);
             }
         }
@@ -2897,6 +2940,9 @@ export default class SystemRecordingPlugin extends Plugin {
                 }
             });
         }
+        // Keeps the dashboard's grouping (and the agenda) live — the notes
+        // just tagged should immediately stop showing as "Ad-hoc".
+        this.agendaEvents.emit("changed", undefined);
         new Notice(t().notices.metadataFixDone(targets.length));
     }
 
@@ -2914,12 +2960,7 @@ export default class SystemRecordingPlugin extends Plugin {
             : "";
         const newFolder = file.parent?.path ?? "";
         if (oldFolder === newFolder) return;
-        if (!this.isMeetingNote(file)) return;
-
-        const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as
-            | Record<string, unknown>
-            | undefined;
-        if (fm?.["recurring_event_id"] || fm?.["one_on_one_with"]) return;
+        if (!this.looksLikeMeetingNote(file) || this.hasMeetingIdentity(file)) return;
 
         const identity = this.inferFolderIdentity(newFolder);
         if (identity) this.confirmMetadataFix([file], identity);
@@ -2932,10 +2973,7 @@ export default class SystemRecordingPlugin extends Plugin {
      * whose auto-suggestion was missed/dismissed.
      */
     private fixMetadataForNote(file: TFile): void {
-        const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as
-            | Record<string, unknown>
-            | undefined;
-        if (fm?.["recurring_event_id"] || fm?.["one_on_one_with"]) {
+        if (this.hasMeetingIdentity(file)) {
             new Notice(t().notices.metadataFixAlreadyTagged);
             return;
         }

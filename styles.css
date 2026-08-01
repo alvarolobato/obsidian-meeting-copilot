@@ -422,7 +422,7 @@
 
 /* Date group subheader between runs of same-day rows. */
 .mc-dash-daylabel {
-	padding: 14px 2px 6px;
+	padding: 8px 2px 3px;
 	color: var(--mc-cal-muted);
 	font-weight: 600;
 	text-transform: uppercase;
@@ -431,13 +431,30 @@
 }
 
 .mc-cal-events > .mc-dash-daylabel:first-child {
-	padding-top: 2px;
+	padding-top: 0;
 }
 
 /* Suppress the event row's own top border right after a day label — the
  * label's spacing already separates it from the row above. */
 .mc-dash-daylabel + .mc-cal-event {
 	border-top: none;
+}
+
+/* Denser than the agenda's own event rows: the dashboard's past-meetings
+ * list is scanned down many rows at once, so tighter vertical rhythm
+ * matters more here than in the agenda's one-day-at-a-time view. Scoped to
+ * .mc-dash so the agenda sidebar's own rows are untouched. */
+.mc-dash .mc-cal-event {
+	padding: 6px 14px;
+	gap: 10px;
+}
+
+.mc-dash .mc-cal-event-bar {
+	min-height: 18px;
+}
+
+.mc-dash .mc-cal-event-meta {
+	margin-top: 0;
 }
 
 /* Status colour reused as the row's accent bar — same colour, same meaning,
