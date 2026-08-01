@@ -655,10 +655,29 @@ ul.mc-action-tasks {
 	font-size: 12px;
 }
 
+/* Obsidian's own `.dropdown` chrome (a bulky 24px chevron sized for
+ * full-width settings rows) reads as a mismatched control next to the
+ * compact 14px pagination icons, so it's fully replaced here: a small
+ * hand-drawn chevron at the same visual weight, on the same chip
+ * background/height/radius as `.mc-icon-btn` below, so the whole toolbar
+ * reads as one control group instead of two different button styles. */
 .mc-dash-perpage select {
-	background: var(--mc-cal-chip);
-	border: 1px solid var(--mc-cal-border-hi);
+	height: 30px;
+	padding: 0 22px 0 10px;
+	background-color: var(--mc-cal-chip) !important;
+	background-image:
+		linear-gradient(45deg, transparent 50%, var(--mc-cal-muted) 50%),
+		linear-gradient(135deg, var(--mc-cal-muted) 50%, transparent 50%) !important;
+	background-position:
+		right 13px center,
+		right 9px center;
+	background-size: 5px 5px;
+	background-repeat: no-repeat;
+	border: none;
+	border-radius: 8px;
 	color: var(--mc-cal-text);
+	font-size: 12px;
+	box-shadow: none;
 }
 
 .mc-pagination {
@@ -678,15 +697,19 @@ ul.mc-action-tasks {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	padding: 4px;
-	background: transparent;
+	width: 30px;
+	height: 30px;
+	padding: 0;
+	background: var(--mc-cal-chip);
 	box-shadow: none;
 	cursor: pointer;
 	color: var(--mc-cal-muted);
 	border: none;
+	border-radius: 8px;
 }
 
 .mc-icon-btn:hover:not(:disabled) {
+	background: var(--mc-cal-chip-hi);
 	color: var(--mc-cal-text);
 }
 
