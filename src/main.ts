@@ -131,6 +131,7 @@ import {
     type SiblingIdentity,
 } from "./notes/metadataRepair";
 import { isPathExcluded, parseFolderPatterns } from "./notes/folderExclusion";
+import { seriesKey } from "./calendar/recurringSeries";
 import { listEvents, type GCalEvent } from "./calendar/googleCalendar";
 import {
 	createCloudIdentityDirectory,
@@ -2938,7 +2939,8 @@ export default class SystemRecordingPlugin extends Plugin {
      */
     private confirmMetadataFix(
         targets: TFile[],
-        identity: InferredIdentity
+        identity: InferredIdentity,
+        onApplied?: () => void
     ): void {
         if (targets.length === 0) return;
         const n = t().notices;
@@ -2950,7 +2952,8 @@ export default class SystemRecordingPlugin extends Plugin {
             {
                 label: n.metadataFixApply,
                 cta: true,
-                onClick: () => void this.applyMetadataFix(targets, identity),
+                onClick: () =>
+                    void this.applyMetadataFix(targets, identity).then(onApplied),
             },
             { label: n.metadataFixDismiss, onClick: () => {} },
         ]);
@@ -2988,13 +2991,12 @@ export default class SystemRecordingPlugin extends Plugin {
         recurring: RecurringCandidate[]
     ): string[] {
         const n = t().notices;
-        // Google's recurring-instance IDs are `<seriesId>_R<startTimestamp>`
-        // — two genuinely different series can easily share a trailing
-        // timestamp (most meetings start on the hour), so the *front* of the
-        // ID is what's actually distinguishing; trim at the `_R` marker
-        // rather than truncating from the end.
+        // Truncated for display only — countCandidates already groups by
+        // seriesKey, so two candidates reaching this function with the same
+        // title necessarily have genuinely different series keys (a lineage
+        // split alone can no longer produce this collision).
         const shortEventId = (id: string): string => {
-            const base = id.split("_R")[0] ?? id;
+            const base = seriesKey(id);
             return base.length > 10 ? `${base.slice(0, 10)}…` : base;
         };
         const oneOnOneNameCounts = new Map<string, number>();
@@ -3886,13 +3888,11 @@ export default class SystemRecordingPlugin extends Plugin {
             const note = list.createDiv({ cls: "mc-action-note mc-issue-note" });
             note.createDiv({ cls: "mc-action-note-bar" });
             const noteBody = note.createDiv({ cls: "mc-action-note-body" });
-            // One condensed row (title + suggestion + pill + fix button)
-            // rather than a title row plus a separate detail line below —
-            // this section only reports one fact per note, so it doesn't
-            // need the two-line layout the task-list sections use.
-            const header = noteBody.createDiv({
-                cls: "mc-action-note-header mc-issue-row",
-            });
+            // Title + pill + fix button on one line, the suggestion text
+            // below on its own — same two-line shape as the action-items
+            // rows, so the suggestion has room to read in full instead of
+            // being squeezed and ellipsized next to the title.
+            const header = noteBody.createDiv({ cls: "mc-action-note-header" });
             const title = header.createEl("a", {
                 cls: "mc-action-note-title internal-link",
                 text: issue.title,
@@ -3910,6 +3910,7 @@ export default class SystemRecordingPlugin extends Plugin {
             // action there (matches reportAmbiguousMetadata's Notice, which
             // likewise only reports and never guesses).
             let fixIdentity: InferredIdentity | null = null;
+            let fixTooltip = "";
             if (issue.reason.kind === "missing") {
                 const label =
                     issue.reason.identity.kind === "one-on-one"
@@ -3918,6 +3919,7 @@ export default class SystemRecordingPlugin extends Plugin {
                 pillText = d.reasonMissing;
                 detailText = d.detailMissing(label);
                 fixIdentity = issue.reason.identity;
+                fixTooltip = d.fixTooltipTag(label);
             } else if (issue.reason.kind === "outlier") {
                 const actual =
                     issue.reason.actual.kind === "one-on-one"
@@ -3930,6 +3932,7 @@ export default class SystemRecordingPlugin extends Plugin {
                 pillText = d.reasonOutlier;
                 detailText = d.detailOutlier(actual, expected);
                 fixIdentity = issue.reason.expected;
+                fixTooltip = d.fixTooltipRetag(expected);
             } else {
                 const labels = this.formatAmbiguousLabels(
                     issue.reason.oneOnOnes,
@@ -3938,21 +3941,25 @@ export default class SystemRecordingPlugin extends Plugin {
                 pillText = d.reasonAmbiguous;
                 detailText = d.detailAmbiguous(labels.join(", "));
             }
-            header.createSpan({ cls: "mc-issue-detail", text: detailText });
             header.createSpan({ cls: "mc-status-pill mc-issue-pill", text: pillText });
             if (fixIdentity) {
                 const identity = fixIdentity;
                 const fixBtn = header.createEl("button", {
                     cls: "mc-cal-event-btn",
-                    attr: { "aria-label": d.fix },
+                    attr: { "aria-label": fixTooltip, title: fixTooltip },
                 });
                 setIcon(fixBtn, "wrench");
                 fixBtn.addEventListener("click", (e) => {
                     e.stopPropagation();
                     e.preventDefault();
-                    if (file instanceof TFile) this.confirmMetadataFix([file], identity);
+                    if (file instanceof TFile) {
+                        this.confirmMetadataFix([file], identity, () =>
+                            void this.renderNoteIssues(section, true)
+                        );
+                    }
                 });
             }
+            noteBody.createDiv({ cls: "mc-issue-detail", text: detailText });
         }
     }
 
@@ -4171,7 +4178,14 @@ export default class SystemRecordingPlugin extends Plugin {
                     })();
                 };
             }
-            const text = li.createSpan({ cls: "mc-action-task-text" });
+            // A group can aggregate tasks from several notes (every occurrence
+            // of a recurring series, or every one-on-one instance) — the
+            // header link above only opens the group's *most recent* note, so
+            // this task's own line needs its own link to reach whichever note
+            // it actually lives in.
+            const text = li.createSpan({
+                cls: "mc-action-task-text mc-action-task-link",
+            });
             void MarkdownRenderer.render(
                 this.app,
                 task.text,
@@ -4179,6 +4193,18 @@ export default class SystemRecordingPlugin extends Plugin {
                 task.path,
                 renderer
             );
+            text.addEventListener("click", (e) => {
+                // Don't hijack a click on a genuine link inside the task's
+                // own markdown (e.g. a `[[wikilink]]`) — only the plain text
+                // around it should jump to the source line.
+                if (e.target instanceof HTMLElement && e.target.closest("a")) {
+                    return;
+                }
+                const taskFile = this.app.vault.getAbstractFileByPath(task.path);
+                if (taskFile instanceof TFile) {
+                    this.openFileInTab(taskFile, task.line);
+                }
+            });
             const age = taskAgeDays(task, today);
             if (age !== null && age > 0) {
                 li.createSpan({
@@ -4210,13 +4236,15 @@ export default class SystemRecordingPlugin extends Plugin {
      * the dashboard entirely; degrading them into Action items beats losing
      * them. `mode: "followups"` stays strict — only genuine `## Follow-ups`.
      *
-     * The metadata cache only *pre-filters* to files that (may) have an open
+     * The metadata cache only *pre-filters* to files that might have an open
      * task — cheap, and avoids reading files with none — but the tasks
      * themselves are re-derived from a fresh disk read. That way a Refresh
      * reflects the current vault rather than a stale cache: a file the index
      * still lists but that has since moved/vanished (e.g. an external reorg
      * Obsidian hasn't fully re-indexed) fails the read and is dropped, instead
-     * of lingering with tasks pointing at a folder that no longer exists.
+     * of lingering with tasks pointing at a folder that no longer exists. The
+     * pre-filter itself fails open on an unindexed file rather than assuming
+     * it has no tasks — see the comment at its one call site.
      */
     private async scanOpenTaskNotes(
         mode: "actions" | "followups"
@@ -4233,9 +4261,18 @@ export default class SystemRecordingPlugin extends Plugin {
         for (const file of this.app.vault.getMarkdownFiles()) {
             if (isPathExcluded(file.path, excludeFolders)) continue;
             const cache = this.app.metadataCache.getFileCache(file);
-            const mayHaveTasks = (cache?.listItems ?? []).some(
-                (it) => it.task !== undefined
-            );
+            // A missing cache entry means "not indexed yet", not "no tasks" —
+            // right after this plugin's own writes (ticking a task,
+            // enrichment appending new ones) Obsidian's cache can still be
+            // catching up when the debounced refresh fires. Treating that as
+            // "definitely no tasks" was dropping the file for one scan pass,
+            // then picking it up again once the cache caught up — the tasks
+            // flickering in and out the user was seeing. Fail open (scan it)
+            // whenever the cache can't yet rule it out; the real filter is
+            // the fresh disk read below either way.
+            const mayHaveTasks =
+                !cache ||
+                (cache.listItems ?? []).some((it) => it.task !== undefined);
             if (!mayHaveTasks) continue;
 
             let content: string;
@@ -4281,7 +4318,11 @@ export default class SystemRecordingPlugin extends Plugin {
                 groupTitle = groupLabels.oneOnOne(oneOnOneWith);
             } else if (recurringId) {
                 category = "recurring";
-                key = `series:${recurringId}`;
+                // Normalized: a series' recurring_event_id changes when
+                // Google splits its lineage ("edit this and following
+                // events"), which would otherwise fragment one series'
+                // tasks into several same-titled "recurring" groups.
+                key = `series:${seriesKey(recurringId)}`;
                 groupTitle = title;
             } else {
                 category = "ad-hoc";
@@ -4454,8 +4495,10 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /** Opens a file in the active tab (used by dashboard row links/buttons). */
-    private openFileInTab(file: TFile): void {
-        void this.app.workspace.getLeaf(false).openFile(file);
+    private openFileInTab(file: TFile, line?: number): void {
+        void this.app.workspace
+            .getLeaf(false)
+            .openFile(file, line !== undefined ? { eState: { line } } : undefined);
     }
 
     /** Builds an AgendaMeeting view-model from a meeting note's frontmatter. */

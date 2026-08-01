@@ -136,6 +136,27 @@ describe("inferIdentityFromSiblings", () => {
 		});
 	});
 
+	it("treats two lineages of a Google-split series (same base id, different _R<timestamp> suffix) as one candidate", () => {
+		const result = inferIdentityFromSiblings([
+			sibling({
+				recurringEventId: "abc123_R20260601T090000",
+				title: "Weekly Sync",
+			}),
+			sibling({
+				recurringEventId: "abc123_R20260615T090000",
+				title: "Weekly Sync",
+			}),
+		]);
+		expect(result).toEqual({
+			kind: "resolved",
+			identity: {
+				kind: "recurring",
+				recurringEventId: "abc123_R20260601T090000",
+				title: "Weekly Sync",
+			},
+		});
+	});
+
 	it("prefers 1:1 identity for a sibling that is both recurring and a 1:1", () => {
 		// A weekly 1:1 carries both fields — this must not look "mixed".
 		const result = inferIdentityFromSiblings([
@@ -296,6 +317,43 @@ describe("findNoteIssues", () => {
 				reason: {
 					kind: "missing",
 					identity: { kind: "recurring", recurringEventId: "abc", title: "Weekly Sync" },
+				},
+			},
+		]);
+	});
+
+	it("doesn't flag a folder as ambiguous just because Google split its series lineage", () => {
+		// Same real series, two raw ids (a lineage split) — should resolve
+		// to one recurring identity and flag only the genuinely untagged
+		// note, not mark the whole folder ambiguous.
+		const rows = [
+			row({
+				path: "a.md",
+				recurringEventId: "abc123_R20260601T090000",
+				title: "Weekly Sync",
+				folder: "Meetings/Weekly",
+			}),
+			row({
+				path: "b.md",
+				recurringEventId: "abc123_R20260615T090000",
+				title: "Weekly Sync",
+				folder: "Meetings/Weekly",
+			}),
+			row({ path: "c.md", folder: "Meetings/Weekly" }),
+		];
+		const issues = findNoteIssues(rows, true);
+		expect(issues).toEqual([
+			{
+				path: "c.md",
+				title: "c.md",
+				folder: "Meetings/Weekly",
+				reason: {
+					kind: "missing",
+					identity: {
+						kind: "recurring",
+						recurringEventId: "abc123_R20260601T090000",
+						title: "Weekly Sync",
+					},
 				},
 			},
 		]);

@@ -430,23 +430,9 @@
 	--mc-cal-accent: var(--mc-cal-accent-live);
 }
 
-/* Title, suggestion, pill, and fix button all share one row (unlike the
- * task-list sections' title-then-detail stack) — this section reports one
- * fact per note, so a second line would only add height without adding
- * information. */
-.mc-issue-row {
-	align-items: center;
-	flex-wrap: nowrap;
-}
-
-.mc-issue-row .mc-action-note-title {
-	flex: 0 1 auto;
-	min-width: 120px;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
+/* Title + pill + fix button on one line (same shape as the action-items
+ * rows' header); the suggestion text is its own line below, wrapping
+ * normally rather than being squeezed and ellipsized next to the title. */
 .mc-issue-pill {
 	flex: none;
 	background: color-mix(in oklch, var(--mc-cal-accent-live) 30%, var(--mc-cal-chip));
@@ -454,11 +440,7 @@
 }
 
 .mc-issue-detail {
-	flex: 1 1 auto;
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	margin-top: 2px;
 	font-size: 11px;
 	color: var(--mc-cal-muted);
 }
@@ -639,6 +621,17 @@ ul.mc-action-tasks {
 .mc-action-task-text strong,
 .mc-action-task-text b {
 	font-weight: 700;
+}
+
+/* Clicking a task jumps to its own note/line — useful since a group can
+ * pull tasks from several notes (every occurrence of a series, or every
+ * one-on-one instance), so the header link alone can't reach all of them. */
+.mc-action-task-link {
+	cursor: pointer;
+}
+
+.mc-action-task-link:hover {
+	text-decoration: underline;
 }
 
 .mc-action-task-age {

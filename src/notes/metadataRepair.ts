@@ -20,6 +20,8 @@
  * both at once.
  */
 
+import { seriesKey } from "../calendar/recurringSeries";
+
 export interface SiblingIdentity {
 	oneOnOneWith: string | null;
 	oneOnOneEmail: string | null;
@@ -64,10 +66,18 @@ function countCandidates(siblings: SiblingIdentity[]): {
 			if (existing) existing.count++;
 			else oneOnOnes.set(key, { name: s.oneOnOneWith, email: s.oneOnOneEmail, count: 1 });
 		} else if (s.recurringEventId) {
-			const existing = recurring.get(s.recurringEventId);
+			// Keyed by the normalized series id, not the raw one: Google
+			// mints a new recurringEventId for the tail of a series whenever
+			// it's split ("edit this and following events"), so two
+			// siblings can belong to the exact same real series yet carry
+			// different raw ids — see seriesKey's own doc comment. Without
+			// this, that split alone made an otherwise-clean folder look
+			// "ambiguous" (two candidates, neither a majority).
+			const key = seriesKey(s.recurringEventId);
+			const existing = recurring.get(key);
 			if (existing) existing.count++;
 			else {
-				recurring.set(s.recurringEventId, {
+				recurring.set(key, {
 					recurringEventId: s.recurringEventId,
 					title: s.title,
 					count: 1,
@@ -136,7 +146,7 @@ export function inferIdentityFromSiblings(
 function identityKey(identity: InferredIdentity): string {
 	return identity.kind === "one-on-one"
 		? `1:1:${identity.email ?? identity.name.trim().toLowerCase()}`
-		: `series:${identity.recurringEventId}`;
+		: `series:${seriesKey(identity.recurringEventId)}`;
 }
 
 export interface NoteIdentityRow {

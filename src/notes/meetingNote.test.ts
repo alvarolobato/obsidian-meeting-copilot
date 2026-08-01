@@ -795,6 +795,26 @@ describe("resolveMeetingFolder", () => {
 		expect(folder).toBe("Projects/Weekly");
 	});
 
+	it("still follows the series' folder after Google splits the recurring lineage", () => {
+		// "Edit this and following events" mints a new recurringEventId for
+		// the tail of a series (old id + "_R<timestamp>"). The existing note
+		// carries the pre-split id; the incoming occurrence carries the
+		// post-split one — same real series, different raw id.
+		const vault = new FakeVault();
+		vault.addNote("Projects/Weekly/2026-06-01.md", {
+			recurring_event_id: "rec-1",
+			start: "2026-06-01T10:00:00",
+		});
+		const app = makeApp(vault);
+
+		const folder = resolveMeetingFolder(
+			app,
+			ev({ recurringEventId: "rec-1_R20260608T100000" }),
+			cfg()
+		);
+		expect(folder).toBe("Projects/Weekly");
+	});
+
 	it("renders the series folder template for a series with no notes yet", () => {
 		const app = makeApp(new FakeVault());
 		const folder = resolveMeetingFolder(

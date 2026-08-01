@@ -12,6 +12,7 @@ import {
 } from "./transcriptCallout";
 import { resolveCustomizable } from "../util/customizable";
 import { isPathExcluded } from "./folderExclusion";
+import { seriesKey } from "../calendar/recurringSeries";
 
 export {
 	normalizeFolderPath,
@@ -478,9 +479,18 @@ function resolveMeetingFolderFromScan(
 		);
 	}
 	if (ev.recurringEventId) {
+		// Matched by normalized series key, not the raw id: Google mints a
+		// new recurringEventId for the tail of a series whenever it's split
+		// ("edit this and following events"), so a later occurrence's raw id
+		// can differ from every existing note's while still being the same
+		// real series — an exact match would treat the split as a brand new
+		// series and stop reusing the folder.
+		const eventSeriesKey = seriesKey(ev.recurringEventId);
 		const home = mostRecentMatching(
 			entries,
-			(e) => e.recurringEventId === ev.recurringEventId
+			(e) =>
+				e.recurringEventId !== null &&
+				seriesKey(e.recurringEventId) === eventSeriesKey
 		);
 		if (home) return folderOf(home);
 		return normalizeFolderPath(renderFolderTemplate(cfg.seriesFolderTemplate, ev));
