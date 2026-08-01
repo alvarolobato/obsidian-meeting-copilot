@@ -263,12 +263,23 @@ export const en = {
 			loading: "Loading calendar…",
 			calendarError: "Couldn't load calendar meetings; showing notes only.",
 			createNote: "Create note",
-			// Status labels double as the dot tooltips and the toolbar legend.
+			// Status labels double as the pill text on each row.
 			status: {
 				scheduled: "Scheduled",
 				recorded: "Recorded",
 				transcribed: "Transcribed",
 				enriched: "Enriched",
+			},
+		},
+		// Shared between "Open action items" and "Meeting follow-ups": how a
+		// note's tasks are grouped into a section, and the category pill each
+		// section's header carries.
+		groups: {
+			oneOnOne: (name: string) => `1:1 · ${name}`,
+			category: {
+				"one-on-one": "1:1",
+				recurring: "Recurring",
+				"ad-hoc": "Ad-hoc",
 			},
 		},
 		actions: {

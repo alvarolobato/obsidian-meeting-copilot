@@ -109,13 +109,14 @@ import {
 } from "./notes/dashboardMeetings";
 import {
     countTasks,
-    mergeGroupsByPath,
+    mergeGroupsByKey,
     parseNoteTasks,
     sortActionNoteGroups,
     splitByHorizon,
     taskAgeDays,
+    type ActionGroupCategory,
     type ActionNoteGroup,
-    type ActionTask,
+    type GroupedTask,
 } from "./notes/dashboardActions";
 import { listEvents, type GCalEvent } from "./calendar/googleCalendar";
 import {
@@ -208,7 +209,7 @@ import {
     populateMeetingMenu,
     RowHandlers,
 } from "./ui/agenda/components/eventRow";
-import { accentClass, accentFor } from "./ui/agenda/components/accent";
+import { accentClass } from "./ui/agenda/components/accent";
 import { registerIcons, RECORD_ICON } from "./ui/icons";
 import {
 	notifyOs,
@@ -3127,8 +3128,15 @@ export default class SystemRecordingPlugin extends Plugin {
                 });
                 const meta = rowBody.createDiv({ cls: "mc-cal-event-meta" });
                 meta.createSpan({ text: timeStr(row.start) });
+
+                // The status pill lives with the action buttons (not the
+                // meta line) — it's the row's trailing "state + what you can
+                // do about it" cluster, all in one place.
+                const actions = rowEl.createDiv({
+                    cls: "mc-cal-event-actions",
+                });
                 if (hasStatus) {
-                    meta.createSpan({
+                    actions.createSpan({
                         cls: `mc-status-pill mc-status-pill-${row.status}`,
                         text: statusLabels[row.status] ?? row.status,
                     });
@@ -3152,9 +3160,6 @@ export default class SystemRecordingPlugin extends Plugin {
                             row.status === "transcribed"
                                 ? acts.enrich
                                 : ad.transcribeAndEnrich;
-                        const actions = rowEl.createDiv({
-                            cls: "mc-cal-event-actions",
-                        });
                         const primaryBtn = actions.createEl("button", {
                             cls: "mc-cal-event-btn",
                             attr: { "aria-label": primaryLabel },
@@ -3201,9 +3206,6 @@ export default class SystemRecordingPlugin extends Plugin {
                         );
                     };
                     rowEl.addEventListener("click", createNote);
-                    const actions = rowEl.createDiv({
-                        cls: "mc-cal-event-actions",
-                    });
                     const create = actions.createEl("button", {
                         cls: "mc-cal-event-btn",
                         attr: { "aria-label": d.createNote },
@@ -3465,7 +3467,7 @@ export default class SystemRecordingPlugin extends Plugin {
         const showOlder = el.dataset.mcShowOlder === "1";
         const groups = showOlder
             ? sortActionNoteGroups(
-                  mergeGroupsByPath([...split.recent, ...split.older])
+                  mergeGroupsByKey([...split.recent, ...split.older])
               )
             : split.recent;
         const olderCount = countTasks(split.older);
@@ -3574,17 +3576,15 @@ export default class SystemRecordingPlugin extends Plugin {
         },
         today: Date
     ): void {
-        const file = this.app.vault.getAbstractFileByPath(group.path);
-        // Every note reaching this list has already been enriched (that's
-        // what creates the "## Action items"/"## Follow-ups" section in the
-        // first place), so a status-coloured bar would be the same colour on
-        // every row. Colour by meeting type instead — the same 1:1/recurring/
-        // meeting classification the agenda itself uses, which doesn't move
-        // with pipeline status and actually varies note to note.
+        const file = this.app.vault.getAbstractFileByPath(group.notePath);
+        // Coloured by the group's category (1:1/recurring/ad-hoc) — the same
+        // classification the agenda itself uses for meeting type — rather
+        // than pipeline status: every note reaching this list has already
+        // been enriched (that's what creates the "## Action items"/
+        // "## Follow-ups" section in the first place), so a status colour
+        // would be identical on every row.
         const accentCls = accentClass(
-            file instanceof TFile
-                ? accentFor(this.agendaMeetingFromNote(file))
-                : "meeting"
+            group.category === "ad-hoc" ? "meeting" : group.category
         );
         const note = parent.createDiv({ cls: `mc-action-note ${accentCls}` });
         note.createDiv({ cls: "mc-action-note-bar" });
@@ -3598,6 +3598,10 @@ export default class SystemRecordingPlugin extends Plugin {
             e.preventDefault();
             if (file instanceof TFile) this.openFileInTab(file);
         };
+        header.createSpan({
+            cls: `mc-category-pill mc-category-pill-${group.category}`,
+            text: t().dashboard.groups.category[group.category],
+        });
         if (group.date) {
             const dt = group.date;
             const pad = (n: number): string => String(n).padStart(2, "0");
@@ -3629,7 +3633,7 @@ export default class SystemRecordingPlugin extends Plugin {
                     void (async (): Promise<void> => {
                         try {
                             await this.completeTask(
-                                group.path,
+                                task.path,
                                 task,
                                 opts.strings.taskMoved
                             );
@@ -3656,11 +3660,11 @@ export default class SystemRecordingPlugin extends Plugin {
                 this.app,
                 task.text,
                 text,
-                group.path,
+                task.path,
                 renderer
             );
             if (opts.showAge && opts.strings.ageDays) {
-                const age = taskAgeDays(task, group.date, today);
+                const age = taskAgeDays(task, today);
                 if (age !== null && age > 0) {
                     li.createSpan({
                         cls: "mc-action-task-age",
@@ -3673,10 +3677,16 @@ export default class SystemRecordingPlugin extends Plugin {
 
     /**
      * Scans every note in the vault for open (`- [ ]`) tasks under
-     * `sectionHeading`, returning a group per note with its title, origin
-     * date, and task lines. Kept whole-vault on purpose: action items live in
-     * meeting notes wherever they came from (including Granola-synced notes,
-     * which carry no `event_id`).
+     * `sectionHeading`, returning one group per *category* — a 1:1's tasks
+     * (when {@link SystemRecordingSettings.oneOnOneSeparately} is on) group by
+     * partner, a recurring series' tasks group by `recurring_event_id`, and
+     * anything else (an ad-hoc/one-off meeting) groups by its own note path —
+     * rather than one group per note. That way a person's 1:1 or a recurring
+     * series reads as one section no matter which instance's note the tasks
+     * were written into, or whether that instance got renamed; the note's own
+     * title only matters for the ad-hoc case. Kept whole-vault on purpose:
+     * action items live in meeting notes wherever they came from (including
+     * Granola-synced notes, which carry no `event_id`).
      *
      * The metadata cache only *pre-filters* to files that (may) have an open
      * task — cheap, and avoids reading files with none — but the tasks
@@ -3690,7 +3700,13 @@ export default class SystemRecordingPlugin extends Plugin {
         sectionHeading: string
     ): Promise<ActionNoteGroup[]> {
         const today = this.todayStamp();
-        const groups: ActionNoteGroup[] = [];
+        const groupLabels = t().dashboard.groups;
+        const byKey = new Map<string, ActionNoteGroup>();
+        // Tracks each group's most recently modified source note, separate
+        // from the public shape above, so the header link/title can "follow"
+        // whichever note was touched last.
+        const mtimeByKey = new Map<string, number>();
+
         for (const file of this.app.vault.getMarkdownFiles()) {
             const cache = this.app.metadataCache.getFileCache(file);
             const mayHaveTasks = (cache?.listItems ?? []).some(
@@ -3704,25 +3720,79 @@ export default class SystemRecordingPlugin extends Plugin {
             } catch {
                 continue;
             }
-            const tasks = parseNoteTasks(content, today, sectionHeading);
-            if (tasks.length === 0) continue;
+            const rawTasks = parseNoteTasks(content, today, sectionHeading);
+            if (rawTasks.length === 0) continue;
 
             const fm = cache?.frontmatter as
                 | Record<string, unknown>
                 | undefined;
+            const str = (k: string): string => {
+                const v = fm?.[k];
+                return typeof v === "string" ? v.trim() : "";
+            };
             const titleRaw = fm?.["title"];
             const title =
                 typeof titleRaw === "string" && titleRaw
                     ? titleRaw
                     : file.basename;
-            groups.push({
+            const date = this.resolveNoteDate(file, fm);
+            const oneOnOneWith = str("one_on_one_with");
+            const recurringId = str("recurring_event_id");
+
+            let key: string;
+            let category: ActionGroupCategory;
+            let groupTitle: string;
+            if (this.settings.oneOnOneSeparately && oneOnOneWith) {
+                category = "one-on-one";
+                key = `11:${str("one_on_one_email").toLowerCase() || oneOnOneWith.toLowerCase()}`;
+                groupTitle = groupLabels.oneOnOne(oneOnOneWith);
+            } else if (recurringId) {
+                category = "recurring";
+                key = `series:${recurringId}`;
+                groupTitle = title;
+            } else {
+                category = "ad-hoc";
+                key = `note:${file.path}`;
+                groupTitle = title;
+            }
+
+            const tasks: GroupedTask[] = rawTasks.map((task) => ({
+                ...task,
                 path: file.path,
-                title,
-                date: this.resolveNoteDate(file, fm),
-                tasks,
-            });
+                noteDate: date,
+            }));
+            const mtime = file.stat?.mtime ?? 0;
+            const existing = byKey.get(key);
+            if (!existing) {
+                byKey.set(key, {
+                    key,
+                    title: groupTitle,
+                    notePath: file.path,
+                    date,
+                    category,
+                    tasks,
+                });
+                mtimeByKey.set(key, mtime);
+            } else {
+                existing.tasks.push(...tasks);
+                // The most recently modified note "wins" as the header's
+                // click target and displayed title, so a renamed instance
+                // (or a 1:1 partner's display name drifting slightly) tracks
+                // the group's current state rather than its oldest one.
+                if (mtime > (mtimeByKey.get(key) ?? 0)) {
+                    existing.notePath = file.path;
+                    existing.title = groupTitle;
+                    mtimeByKey.set(key, mtime);
+                }
+                if (
+                    date &&
+                    (!existing.date || date.getTime() > existing.date.getTime())
+                ) {
+                    existing.date = date;
+                }
+            }
         }
-        return groups;
+        return [...byKey.values()];
     }
 
     /** Local `YYYY-MM-DD` for today (the `✅` completion date we write/match). */
@@ -3770,7 +3840,7 @@ export default class SystemRecordingPlugin extends Plugin {
      */
     private async completeTask(
         path: string,
-        task: ActionTask,
+        task: GroupedTask,
         movedNotice = t().dashboard.actions.taskMoved
     ): Promise<void> {
         const file = this.app.vault.getAbstractFileByPath(path);

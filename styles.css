@@ -347,15 +347,18 @@
 
 /* ---- Status pill: a past-meeting row's pipeline stage, in the same 4
  * colours as the accent bar / status dot everywhere else — one signal
- * instead of the status word and a separate "missing X" badge restating it. */
+ * instead of the status word and a separate "missing X" badge restating it.
+ * Sits with the action buttons (both are the row's trailing cluster), so
+ * spacing comes from .mc-cal-event-actions' own gap, not its own margin. */
 
-.mc-status-pill {
+.mc-status-pill,
+.mc-category-pill {
 	display: inline-block;
-	margin-left: 6px;
 	padding: 1px 8px;
 	border-radius: 999px;
 	font-size: 11px;
 	font-weight: 500;
+	white-space: nowrap;
 }
 
 .mc-status-pill-scheduled {
@@ -375,6 +378,25 @@
 
 .mc-status-pill-enriched {
 	background: color-mix(in oklch, oklch(0.68 0.15 145) 30%, var(--mc-cal-chip));
+	color: var(--mc-cal-text);
+}
+
+/* ---- Category pill: an action/follow-up section's grouping — 1:1, part of
+ * a recurring series, or a standalone ad-hoc note — same accent family as
+ * the meeting-type colours used elsewhere (agenda, this row's own bar). */
+
+.mc-category-pill-one-on-one {
+	background: color-mix(in oklch, var(--mc-cal-accent-one-on-one) 30%, var(--mc-cal-chip));
+	color: var(--mc-cal-text);
+}
+
+.mc-category-pill-recurring {
+	background: color-mix(in oklch, var(--mc-cal-accent-recurring) 30%, var(--mc-cal-chip));
+	color: var(--mc-cal-text);
+}
+
+.mc-category-pill-ad-hoc {
+	background: color-mix(in oklch, var(--mc-cal-accent-meeting) 30%, var(--mc-cal-chip));
 	color: var(--mc-cal-text);
 }
 

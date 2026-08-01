@@ -35,17 +35,43 @@ export interface ActionTask {
 	created: Date | null;
 }
 
-export interface ActionNoteGroup {
+/**
+ * A task once it's been placed in a dashboard group. A group can merge tasks
+ * from several notes (a 1:1's tasks live wherever that person's notes are, a
+ * recurring series' tasks live in whichever instance they were written into),
+ * so each task keeps its own source note's path and date — the group-level
+ * `date` is only a display/sort aggregate, not a reliable per-task fallback.
+ */
+export interface GroupedTask extends ActionTask {
+	/** Vault path of the note this task was found in. */
 	path: string;
+	/** That note's origin date (frontmatter/filename/mtime); null when unknown. */
+	noteDate: Date | null;
+}
+
+/** How a group of tasks was categorised — see {@link groupIdentity}. */
+export type ActionGroupCategory = "one-on-one" | "recurring" | "ad-hoc";
+
+export interface ActionNoteGroup {
+	/**
+	 * Stable identity for the section: a 1:1 partner, a recurring series, or a
+	 * single ad-hoc note's path. Distinct from any one note's own (possibly
+	 * renamed) title, so a rename can't fragment a series or a 1:1 into two
+	 * sections.
+	 */
+	key: string;
 	title: string;
-	/** The note's origin date (frontmatter/filename/mtime); null when unknown. */
+	/** Vault path of the group's most recently modified note — where the header link opens. */
+	notePath: string;
+	/** Most recent date among the group's notes; null when none is known. */
 	date: Date | null;
-	tasks: ActionTask[];
+	category: ActionGroupCategory;
+	tasks: GroupedTask[];
 }
 
 /**
  * Returns the groups that actually have open tasks, ordered by note date
- * (newest first). Groups without a date sort last, and ties break on the path
+ * (newest first). Groups without a date sort last, and ties break on the key
  * so the order is stable rather than dependent on scan order.
  */
 export function sortActionNoteGroups(
@@ -57,7 +83,7 @@ export function sortActionNoteGroups(
 			const at = a.date?.getTime() ?? Number.NEGATIVE_INFINITY;
 			const bt = b.date?.getTime() ?? Number.NEGATIVE_INFINITY;
 			if (bt !== at) return bt - at;
-			return a.path.localeCompare(b.path);
+			return a.key.localeCompare(b.key);
 		});
 }
 
@@ -218,15 +244,11 @@ function sectionStartLine(content: string, heading: string): number {
 
 /**
  * Age of a task in whole days relative to `today` (local calendar). Prefers the
- * `➕` creation stamp; falls back to the note's origin date. `null` when neither
- * is known (caller should treat as "in horizon" / unageable).
+ * `➕` creation stamp; falls back to the task's own source note's date. `null`
+ * when neither is known (caller should treat as "in horizon" / unageable).
  */
-export function taskAgeDays(
-	task: ActionTask,
-	noteDate: Date | null,
-	today: Date
-): number | null {
-	const origin = task.created ?? noteDate;
+export function taskAgeDays(task: GroupedTask, today: Date): number | null {
+	const origin = task.created ?? task.noteDate;
 	if (!origin) return null;
 	const start = Date.UTC(
 		origin.getFullYear(),
@@ -265,10 +287,10 @@ export function splitByHorizon(
 	const recent: ActionNoteGroup[] = [];
 	const older: ActionNoteGroup[] = [];
 	for (const g of groups) {
-		const recentTasks: ActionTask[] = [];
-		const olderTasks: ActionTask[] = [];
+		const recentTasks: GroupedTask[] = [];
+		const olderTasks: GroupedTask[] = [];
 		for (const task of g.tasks) {
-			const age = taskAgeDays(task, g.date, today);
+			const age = taskAgeDays(task, today);
 			if (age !== null && age > horizonDays) olderTasks.push(task);
 			else recentTasks.push(task);
 		}
@@ -279,21 +301,21 @@ export function splitByHorizon(
 }
 
 /**
- * Merges action groups that share a note path, concatenating their tasks.
- * Used when revealing horizon-hidden items so a meeting with both recent and
- * older tasks appears once (not twice) in the dashboard list.
+ * Merges action groups that share a group key, concatenating their tasks.
+ * Used when revealing horizon-hidden items so a meeting (or 1:1/series) with
+ * both recent and older tasks appears once, not twice.
  */
-export function mergeGroupsByPath(
+export function mergeGroupsByKey(
 	groups: ActionNoteGroup[]
 ): ActionNoteGroup[] {
-	const byPath = new Map<string, ActionNoteGroup>();
+	const byKey = new Map<string, ActionNoteGroup>();
 	for (const g of groups) {
-		const existing = byPath.get(g.path);
+		const existing = byKey.get(g.key);
 		if (!existing) {
-			byPath.set(g.path, { ...g, tasks: [...g.tasks] });
+			byKey.set(g.key, { ...g, tasks: [...g.tasks] });
 			continue;
 		}
 		existing.tasks.push(...g.tasks);
 	}
-	return [...byPath.values()];
+	return [...byKey.values()];
 }
