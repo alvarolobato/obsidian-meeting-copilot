@@ -25,6 +25,13 @@ const GLOBSTAR_SLASH = String.fromCharCode(0xe000);
 const SLASH_GLOBSTAR = String.fromCharCode(0xe001);
 const GLOBSTAR = String.fromCharCode(0xe002);
 
+// Compiled patterns are stateless (no /g flag, so no lastIndex to race) and
+// the pattern set is small and effectively fixed per `excludedFolders`
+// setting value, so a plain unbounded cache is fine — this is what makes
+// `isPathExcluded` cheap to call once per file on every whole-vault scan
+// instead of recompiling every pattern's RegExp on every call.
+const compiledPatternCache = new Map<string, RegExp>();
+
 /**
  * Compiles one glob-like pattern into a RegExp anchored to the whole string:
  * `*` matches within a single path segment, `**` matches across segments,
@@ -34,7 +41,15 @@ const GLOBSTAR = String.fromCharCode(0xe002);
  * Everything else is a literal.
  */
 function compilePattern(pattern: string): RegExp {
-	let p = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+	const cached = compiledPatternCache.get(pattern);
+	if (cached) return cached;
+	// `*` is deliberately excluded here — it's the one glob metacharacter this
+	// mini-language documents and handles below. Everything else, including
+	// `?` (a regex quantifier that would otherwise make the preceding
+	// character optional, or throw if it's the very first character), is
+	// escaped so an incidental regex-special character in a real folder name
+	// is matched literally.
+	let p = pattern.replace(/[.?+^${}()|[\]\\]/g, "\\$&");
 	// Order matters: both "**" idioms before a bare "**", which must be
 	// before a lone "*". Plain substring split/join (not regex) for the
 	// placeholder swaps, since the placeholders are simple literal strings.
@@ -45,7 +60,9 @@ function compilePattern(pattern: string): RegExp {
 	p = p.split(GLOBSTAR_SLASH).join("(?:.*/)?");
 	p = p.split(SLASH_GLOBSTAR).join("(?:/.*)?");
 	p = p.split(GLOBSTAR).join(".*");
-	return new RegExp(`^${p}$`);
+	const re = new RegExp(`^${p}$`);
+	compiledPatternCache.set(pattern, re);
+	return re;
 }
 
 /**

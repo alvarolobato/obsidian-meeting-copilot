@@ -921,6 +921,12 @@ export default class SystemRecordingPlugin extends Plugin {
         if (tokensStored) delete persisted.googleTokens;
         if (secretStored) delete persisted.googleClientSecret;
         await this.saveData(persisted);
+        // Broad but cheap: a settings change (excludedFolders,
+        // oneOnOneSeparately, either of which changes what the scan
+        // considers) shouldn't leave the "Notes with issues" list serving a
+        // stale cache until the next unrelated force-refresh. Only clears
+        // the cache — the next actual scan stays lazy.
+        this.noteIssuesCache = null;
     }
 
     /** Per-vault localStorage key for a sensitive credential field. */
@@ -2729,7 +2735,7 @@ export default class SystemRecordingPlugin extends Plugin {
         let leaf = workspace.getLeavesOfType(VIEW_TYPE_DASHBOARD)[0] ?? null;
         if (!leaf) {
             leaf = workspace.getLeaf("tab");
-            await leaf.setViewState({ type: VIEW_TYPE_DASHBOARD, active: true });
+            await leaf?.setViewState({ type: VIEW_TYPE_DASHBOARD, active: true });
         }
         if (leaf) void workspace.revealLeaf(leaf);
     }
@@ -3043,17 +3049,33 @@ export default class SystemRecordingPlugin extends Plugin {
         for (const file of targets) {
             await this.app.fileManager.processFrontMatter(file, (fm) => {
                 const f = fm as Record<string, unknown>;
+                // Clears the *other* kind's fields too — a target can arrive
+                // here already carrying a conflicting identity (that's what
+                // made it an "outlier" in the first place), and 1:1 identity
+                // outranks recurring everywhere it's read (countCandidates,
+                // the accent classifier), so leaving a stale
+                // one_on_one_with behind would make this note keep reading
+                // as its old identity even after a successful "fix".
                 if (identity.kind === "one-on-one") {
                     f.one_on_one_with = identity.name;
                     if (identity.email) f.one_on_one_email = identity.email;
+                    else delete f.one_on_one_email;
+                    delete f.recurring_event_id;
                 } else {
                     f.recurring_event_id = identity.recurringEventId;
+                    delete f.one_on_one_with;
+                    delete f.one_on_one_email;
                 }
             });
         }
         // Keeps the dashboard's grouping (and the agenda) live — the notes
-        // just tagged should immediately stop showing as "Ad-hoc".
+        // just tagged should immediately stop showing as "Ad-hoc". Also
+        // invalidates the "Notes with issues" cache regardless of which
+        // caller applied the fix (the list's own wrench button already
+        // forces a re-render itself, but the command palette and the
+        // file/folder context menu items go through this same method too).
         this.agendaEvents.emit("changed", undefined);
+        this.noteIssuesCache = null;
         new Notice(t().notices.metadataFixDone(targets.length));
     }
 
@@ -3066,7 +3088,15 @@ export default class SystemRecordingPlugin extends Plugin {
      * folder is ambiguous — an automatic trigger shouldn't scold the user
      * for an unrelated folder that merely happens to mix identities; the
      * manual fix commands report that explicitly instead.
+     *
+     * Debounced and batched by target folder: dragging several notes into
+     * one folder fires one `rename` event per file, and each would
+     * otherwise trigger its own full vault scan plus its own
+     * never-auto-dismissing confirm Notice stacked on top of the last.
      */
+    private pendingMoveFixes: Map<string, TFile[]> = new Map();
+    private moveFixTimer: number | null = null;
+
     private maybeSuggestMetadataFixOnMove(file: TFile, oldPath: string): void {
         if (file.extension !== "md") return;
         const oldFolder = oldPath.includes("/")
@@ -3076,10 +3106,22 @@ export default class SystemRecordingPlugin extends Plugin {
         if (oldFolder === newFolder) return;
         if (!this.looksLikeMeetingNote(file) || this.hasMeetingIdentity(file)) return;
 
-        const result = this.inferFolderIdentity(newFolder);
-        if (result.kind === "resolved") {
-            this.confirmMetadataFix([file], result.identity);
-        }
+        const pending = this.pendingMoveFixes.get(newFolder);
+        if (pending) pending.push(file);
+        else this.pendingMoveFixes.set(newFolder, [file]);
+
+        if (this.moveFixTimer !== null) window.clearTimeout(this.moveFixTimer);
+        this.moveFixTimer = window.setTimeout(() => {
+            this.moveFixTimer = null;
+            const batches = this.pendingMoveFixes;
+            this.pendingMoveFixes = new Map();
+            for (const [folder, files] of batches) {
+                const result = this.inferFolderIdentity(folder);
+                if (result.kind === "resolved") {
+                    this.confirmMetadataFix(files, result.identity);
+                }
+            }
+        }, 500);
     }
 
     /**
@@ -3135,11 +3177,6 @@ export default class SystemRecordingPlugin extends Plugin {
         }
     }
 
-    /**
-     * Renders the dashboard's "Needs attention" table: meeting notes that
-     * haven't finished the scheduled → recorded → transcribed → enriched
-     * pipeline, each with buttons to open, transcribe, and enrich.
-     */
     /**
      * Fetches the calendar events for the dashboard's past-meetings table,
      * over the *same* window the agenda sidebar uses (look-back/look-ahead
@@ -3847,6 +3884,7 @@ export default class SystemRecordingPlugin extends Plugin {
     ): Promise<void> {
         const d = t().dashboard.issues;
         const n = t().notices;
+        const seq = this.nextRenderSeq(section);
         // Persisted on `section` (survives the .empty() below across
         // re-renders); the CSS class that actually hides the body has to
         // live on `head`, since that's the element carrying .mc-cal-earlier.
@@ -3883,6 +3921,7 @@ export default class SystemRecordingPlugin extends Plugin {
         body.createEl("p", { text: d.loading, cls: "mc-actions-loading" });
 
         const issues = await this.scanNoteIssues(force);
+        if (this.renderSeq.get(section) !== seq) return;
         countEl.setText(String(issues.length));
         body.empty();
 
@@ -4194,6 +4233,7 @@ export default class SystemRecordingPlugin extends Plugin {
             // it actually lives in.
             const text = li.createSpan({
                 cls: "mc-action-task-text mc-action-task-link",
+                attr: { role: "button", tabindex: "0" },
             });
             void MarkdownRenderer.render(
                 this.app,
@@ -4202,17 +4242,26 @@ export default class SystemRecordingPlugin extends Plugin {
                 task.path,
                 renderer
             );
-            text.addEventListener("click", (e) => {
-                // Don't hijack a click on a genuine link inside the task's
-                // own markdown (e.g. a `[[wikilink]]`) — only the plain text
-                // around it should jump to the source line.
-                if (e.target instanceof HTMLElement && e.target.closest("a")) {
-                    return;
-                }
+            const openTaskNote = (): void => {
                 const taskFile = this.app.vault.getAbstractFileByPath(task.path);
                 if (taskFile instanceof TFile) {
                     this.openFileInTab(taskFile, task.line);
                 }
+            };
+            // Don't hijack activation of a genuine link inside the task's own
+            // markdown (e.g. a `[[wikilink]]`) — only the plain text around
+            // it should jump to the source line.
+            const targetsOwnLink = (e: Event): boolean =>
+                e.target instanceof HTMLElement && e.target.closest("a") !== null;
+            text.addEventListener("click", (e) => {
+                if (targetsOwnLink(e)) return;
+                openTaskNote();
+            });
+            text.addEventListener("keydown", (e) => {
+                if (e.key !== "Enter" && e.key !== " ") return;
+                if (targetsOwnLink(e)) return;
+                e.preventDefault();
+                openTaskNote();
             });
             const age = taskAgeDays(task, today);
             if (age !== null && age > 0) {
@@ -4290,14 +4339,23 @@ export default class SystemRecordingPlugin extends Plugin {
             } catch {
                 continue;
             }
+            // The unsectioned-task fallback is gated to notes that already
+            // look like meeting notes (including a Granola-style import,
+            // which is what it exists for) — without this, any open
+            // checkbox anywhere in any markdown file in the vault (a daily
+            // note, a project tracker, an unrelated checklist) would surface
+            // in the dashboard, since a random note has no "## Action items"
+            // heading to scope the strict parse below to.
             const rawTasks =
                 mode === "actions"
                     ? [
                           ...parseNoteTasks(content, today, ACTION_ITEMS_HEADING),
-                          ...tasksOutsideHeadings(content, today, [
-                              ACTION_ITEMS_HEADING,
-                              FOLLOW_UPS_HEADING,
-                          ]),
+                          ...(this.looksLikeMeetingNote(file)
+                              ? tasksOutsideHeadings(content, today, [
+                                    ACTION_ITEMS_HEADING,
+                                    FOLLOW_UPS_HEADING,
+                                ])
+                              : []),
                       ]
                     : parseNoteTasks(content, today, FOLLOW_UPS_HEADING);
             if (rawTasks.length === 0) continue;

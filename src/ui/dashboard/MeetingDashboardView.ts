@@ -99,7 +99,14 @@ export class MeetingDashboardView extends ItemView {
 		// Its own card, not `renderSection` — it builds its own collapsible
 		// header (title + count + refresh) rather than a static title, and
 		// deliberately isn't tracked for auto-refresh (see the host interface).
-		void this.host.renderNoteIssues(root.createDiv({ cls: "mc-dash-section" }));
+		// `force: true` because the underlying scan cache lives on the plugin
+		// instance, not this view — without it, reopening the dashboard tab
+		// later in the same Obsidian session would silently reuse whatever
+		// was cached on its *previous* open instead of scanning fresh.
+		void this.host.renderNoteIssues(
+			root.createDiv({ cls: "mc-dash-section" }),
+			true
+		);
 	}
 
 	async onClose(): Promise<void> {

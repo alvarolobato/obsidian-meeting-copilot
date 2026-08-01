@@ -93,4 +93,18 @@ describe("isPathExcluded", () => {
 		expect(isPathExcluded("PluginData/foo/data.json", patterns)).toBe(true);
 		expect(isPathExcluded("Meetings/foo.md", patterns)).toBe(false);
 	});
+
+	it("treats regex-special characters other than * as literal, not throwing", () => {
+		// A leading "?" is a regex quantifier with nothing to repeat — it must
+		// not reach RegExp unescaped, or every scan using this pattern throws.
+		expect(() => isPathExcluded("Notes/foo.md", ["?Archive"])).not.toThrow();
+		expect(isPathExcluded("?Archive/foo.md", ["?Archive"])).toBe(true);
+		expect(isPathExcluded("Archive/foo.md", ["?Archive"])).toBe(false);
+		// A trailing "?" must not make the preceding character optional.
+		expect(isPathExcluded("Archive/foo.md", ["Archive?"])).toBe(false);
+		expect(isPathExcluded("Archiv/foo.md", ["Archive?"])).toBe(false);
+		// Other regex metacharacters a real folder name could contain.
+		expect(isPathExcluded("Q&A (2026)/foo.md", ["Q&A (2026)"])).toBe(true);
+		expect(isPathExcluded("C++ notes/foo.md", ["C++ notes"])).toBe(true);
+	});
 });

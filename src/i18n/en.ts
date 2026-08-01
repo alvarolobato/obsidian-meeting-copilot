@@ -403,7 +403,7 @@ export const en = {
 		},
 		excludedFolders: {
 			name: "Excluded folders",
-			desc: "Folders (one per line, or comma-separated) the plugin never scans for anything — the dashboard, action items, the metadata-fix tool, everything. A plain folder path excludes that folder and everything under it; wildcards are supported (* within one folder level, ** across levels, e.g. \"**/archived\" matches an \"archived\" folder anywhere). Use this for archived notes, another plugin's data folder, or anything else you don't want touched.",
+			desc: "Folders (one per line, or comma-separated) the plugin never scans for anything — the dashboard, action items, the metadata-fix tool, everything. A plain folder path excludes that folder and everything under it; wildcards are supported (* within one folder level, ** across levels, e.g. \"**/archived\" matches an \"archived\" folder anywhere). Matching is case-sensitive. Use this for archived notes, another plugin's data folder, or anything else you don't want touched.",
 		},
 		noteTitlePatternCustomize: {
 			name: "Customize note title pattern",

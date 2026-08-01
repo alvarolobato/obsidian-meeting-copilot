@@ -25,4 +25,8 @@ describe("seriesKey", () => {
 		const b = seriesKey("8ea8oplmgruqkju0nkfl4fknvl_R20260715T150000");
 		expect(a).not.toBe(b);
 	});
+
+	it("returns an empty string for an id that is only a suffix", () => {
+		expect(seriesKey("_R20260730T140000")).toBe("");
+	});
 });
