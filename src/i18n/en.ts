@@ -114,6 +114,12 @@ export const en = {
 			"Speaker separation was skipped: the endpoint returned no timestamps this time. Run 'Load models' to re-check.",
 		diarizationNoTracks:
 			"No separate speaker tracks were recorded for this meeting — transcribing the single joint track instead.",
+		transcriptImportCleaning: "Cleaning up imported transcript…",
+		transcriptImportEmpty: "That file doesn't contain a readable transcript.",
+		transcriptImportError: (msg: string) =>
+			`Transcript import failed: ${msg}`,
+		transcriptImportNoEndpoint:
+			"Set the AI endpoint (base URL + API key) in settings before importing a non-Zoom transcript.",
 	},
 	transcript: {
 		// Prepended to a speaker-separated transcript. Tells the enrichment model
@@ -226,6 +232,7 @@ export const en = {
 			transcribe: "Transcribe recording",
 			transcribeDiarized: "Transcribe with speaker separation",
 			transcribeMixed: "Transcribe without speaker separation",
+			importTranscript: "Import transcript",
 			enrich: "Enrich with AI",
 			skipToday: "Hide for today",
 		},

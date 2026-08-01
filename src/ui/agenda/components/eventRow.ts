@@ -16,6 +16,7 @@ export interface RowHandlers {
 	 * configured default.
 	 */
 	onTranscribe: (m: AgendaMeeting, mode: "diarized" | "mixed") => void;
+	onImportTranscript: (m: AgendaMeeting) => void;
 	onEnrich: (m: AgendaMeeting) => void;
 	onOpenLink: ((m: AgendaMeeting) => void) | null;
 	onCopyLink: ((m: AgendaMeeting) => void) | null;
@@ -247,6 +248,15 @@ export function populateMeetingMenu(
 	}
 
 	if (meeting.note) {
+		// No `meeting.recording` gate: the whole point is offering this even when
+		// there's no local recording, or to replace one with a more accurate
+		// transcript obtained elsewhere (e.g. the official Zoom transcript).
+		menu.addItem((item) =>
+			item
+				.setTitle(a.actions.importTranscript)
+				.setIcon("file-up")
+				.onClick(() => handlers.onImportTranscript(meeting))
+		);
 		menu.addItem((item) =>
 			item
 				.setTitle(a.actions.enrich)
