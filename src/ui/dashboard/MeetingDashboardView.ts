@@ -20,12 +20,17 @@ export interface DashboardViewHost {
 	 * The "Notes with issues" catch-all — meeting notes that still need
 	 * something (a missing transcript/summary, a truncated transcript, or a
 	 * folder/tag mismatch) but have aged out of "Past meetings"'s short
-	 * recency window. Deliberately not tracked by {@link trackDashboardBlock}:
-	 * it scans once per dashboard open and otherwise only on its own explicit
-	 * Refresh click.
+	 * recency window. Deliberately NOT tracked by {@link trackDashboardBlock}:
+	 * that fires on every dashboard-wide change (a ticked checkbox, a page
+	 * turn elsewhere), and this section's scan is a full vault walk — too
+	 * heavy to redo on every one of those. Instead it's registered via
+	 * {@link trackNoteIssuesBlock}, refreshed only by the narrower set of
+	 * events that can actually change its contents (a transcribe/enrich job
+	 * finishing, or a metadata fix applied elsewhere).
 	 */
 	renderNoteIssues(el: HTMLElement, force?: boolean): Promise<void>;
 	trackDashboardBlock(el: HTMLElement, rerender: () => void): void;
+	trackNoteIssuesBlock(el: HTMLElement): void;
 	openSettings(): void;
 }
 
@@ -100,16 +105,14 @@ export class MeetingDashboardView extends ItemView {
 		});
 
 		// Its own card, not `renderSection` — it builds its own collapsible
-		// header (title + count + refresh) rather than a static title, and
-		// deliberately isn't tracked for auto-refresh (see the host interface).
-		// `force: true` because the underlying scan cache lives on the plugin
-		// instance, not this view — without it, reopening the dashboard tab
-		// later in the same Obsidian session would silently reuse whatever
-		// was cached on its *previous* open instead of scanning fresh.
-		void this.host.renderNoteIssues(
-			root.createDiv({ cls: "mc-dash-section" }),
-			true
-		);
+		// header (title + count + refresh) rather than a static title, so it
+		// gets the bare section div, not a pre-titled body. `force: true` only
+		// for this first paint (the cache may be stale from a previous
+		// dashboard open in the same session); after that it's refreshed only
+		// via `trackNoteIssuesBlock` (see the host interface doc comment).
+		const issuesSection = root.createDiv({ cls: "mc-dash-section" });
+		void this.host.renderNoteIssues(issuesSection, true);
+		this.host.trackNoteIssuesBlock(issuesSection);
 	}
 
 	async onClose(): Promise<void> {

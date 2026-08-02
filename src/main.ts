@@ -937,14 +937,10 @@ export default class SystemRecordingPlugin extends Plugin {
         if (tokensStored) delete persisted.googleTokens;
         if (secretStored) delete persisted.googleClientSecret;
         await this.saveData(persisted);
-        // Broad but cheap: a settings change (excludedFolders,
-        // oneOnOneSeparately, either of which changes what the scan
-        // considers) shouldn't leave the "Notes with issues" list serving a
-        // stale cache until the next unrelated force-refresh. Only clears
-        // the cache — the next actual scan stays lazy.
-        this.noteIssuesCache = null;
-        this.noteIssueDatesCache = null;
-        this.attentionRowsCache = null;
+        // A settings change (excludedFolders, oneOnOneSeparately, either of
+        // which changes what the scan considers) shouldn't leave "Notes with
+        // issues" serving a stale cache/view until the next unrelated event.
+        this.refreshNoteIssuesBlocks();
     }
 
     /** Per-vault localStorage key for a sensitive credential field. */
@@ -2769,6 +2765,7 @@ export default class SystemRecordingPlugin extends Plugin {
             renderNoteIssues: (el, force) => this.renderNoteIssues(el, force),
             trackDashboardBlock: (el, rerender) =>
                 this.trackDashboardBlock(el, rerender),
+            trackNoteIssuesBlock: (el) => this.trackNoteIssuesBlock(el),
             openSettings: () => this.openPluginSettings(),
         };
     }
@@ -3088,13 +3085,14 @@ export default class SystemRecordingPlugin extends Plugin {
         }
         // Keeps the dashboard's grouping (and the agenda) live — the notes
         // just tagged should immediately stop showing as "Ad-hoc". Also
-        // invalidates the "Notes with issues" cache regardless of which
+        // refreshes any open "Notes with issues" section regardless of which
         // caller applied the fix (the list's own wrench button already
-        // forces a re-render itself, but the command palette and the
-        // file/folder context menu items go through this same method too).
+        // re-renders itself synchronously after this returns, so this is a
+        // harmless redundant refresh there, but the command palette and the
+        // file/folder context menu items go through this same method too and
+        // have no section element of their own to refresh).
         this.agendaEvents.emit("changed", undefined);
-        this.noteIssuesCache = null;
-        this.noteIssueDatesCache = null;
+        this.refreshNoteIssuesBlocks();
         new Notice(t().notices.metadataFixDone(targets.length));
     }
 
@@ -3854,6 +3852,40 @@ export default class SystemRecordingPlugin extends Plugin {
     /** Registers a dashboard block for auto-refresh on the next change. */
     private trackDashboardBlock(el: HTMLElement, rerender: () => void): void {
         this.dashboardBlocks.set(el, rerender);
+    }
+
+    /**
+     * Open "Notes with issues" section elements — refreshed only by
+     * {@link refreshNoteIssuesBlocks}, deliberately NOT by
+     * `scheduleDashboardRefresh`'s broad "anything changed" debounce (that
+     * fires on every dashboard tick — a checked task, another section's page
+     * turn — and this section's scan is a full vault walk, too heavy to redo
+     * that often).
+     */
+    private noteIssuesBlocks: Set<HTMLElement> = new Set();
+
+    /** Registers a "Notes with issues" section for the narrower refresh below. */
+    private trackNoteIssuesBlock(el: HTMLElement): void {
+        this.noteIssuesBlocks.add(el);
+    }
+
+    /**
+     * Forces a fresh scan and re-renders every open "Notes with issues"
+     * section. Called only from the specific events that can actually change
+     * its contents: a transcribe or enrich job finishing, or a metadata fix
+     * applied from outside the section's own (self-refreshing) fix button.
+     */
+    private refreshNoteIssuesBlocks(): void {
+        this.noteIssuesCache = null;
+        this.noteIssueDatesCache = null;
+        this.attentionRowsCache = null;
+        for (const el of this.noteIssuesBlocks) {
+            if (!el.isConnected) {
+                this.noteIssuesBlocks.delete(el);
+                continue;
+            }
+            void this.renderNoteIssues(el, true);
+        }
     }
 
     /** The block's last-rendered (1-based) page, stashed on the element. */
@@ -5964,6 +5996,7 @@ export default class SystemRecordingPlugin extends Plugin {
             this.hideStatusBar();
         }
         this.agendaEvents.emit("changed", undefined);
+        this.refreshNoteIssuesBlocks();
         if (this.settings.enableEnrichment && this.settings.enrichOnTranscribe) {
             // The rebuild already ran through the queue; enqueue enrichment as its
             // own visible/cancellable task with the freshly combined transcript.
@@ -6980,6 +7013,7 @@ export default class SystemRecordingPlugin extends Plugin {
             console.warn("Meeting Copilot: failed to insert transcript", e);
         }
         this.agendaEvents.emit("changed", undefined);
+        this.refreshNoteIssuesBlocks();
 
         // Resolve the "Transcribing…" spinner deterministically here, before
         // enrichment runs: success only if we actually inserted, otherwise
@@ -7362,6 +7396,7 @@ export default class SystemRecordingPlugin extends Plugin {
             new Notice(t().notices.enrichDone(file.basename));
             this.setEnrichStatus(t().statusBar.enriched, "success");
             this.agendaEvents.emit("changed", undefined);
+            this.refreshNoteIssuesBlocks();
             enrichedOk = true;
         } catch (e) {
             // A cancel (via signal) is expected: stay quiet and rethrow as the
