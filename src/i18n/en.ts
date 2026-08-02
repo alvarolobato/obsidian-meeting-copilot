@@ -315,6 +315,14 @@ export const en = {
 				transcribed: "Transcribed",
 				enriched: "Enriched",
 			},
+			// Shown next to an "Enriched" row's status pill — the only way an
+			// already-enriched note still needs attention (and still gets a
+			// default Enrich action), so it needs its own explanation; every
+			// other attention reason is self-evident from the status pill
+			// itself (Recorded → needs transcribing, Transcribed → needs
+			// enriching).
+			transcriptTruncatedTooltip:
+				"Transcript was too long and got truncated for enrichment — the summary may be missing content. Raise \"Max transcript tokens for enrichment\" in settings, then re-enrich.",
 		},
 		// Shared between "Open action items" and "Meeting follow-ups": how a
 		// note's tasks are grouped into a section, and the category pill each

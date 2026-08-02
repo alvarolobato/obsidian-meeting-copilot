@@ -381,6 +381,18 @@
 	color: var(--mc-cal-text);
 }
 
+/* Sits beside an "Enriched" pill specifically — the one status whose row can
+ * still need attention (a truncated transcript) without the pill itself
+ * saying so, unlike every other reason. */
+.mc-truncated-warning {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	color: var(--color-orange);
+}
+
 /* ---- Category pill: an action/follow-up section's grouping — 1:1, part of
  * a recurring series, or a standalone ad-hoc note — same accent family as
  * the meeting-type colours used elsewhere (agenda, this row's own bar). */

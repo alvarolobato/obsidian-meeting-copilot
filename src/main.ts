@@ -3550,6 +3550,20 @@ export default class SystemRecordingPlugin extends Plugin {
                         text: statusLabels[row.status] ?? row.status,
                     });
                 }
+                // "Enriched" is the one status whose pill alone doesn't
+                // explain why the row is still flagged (every other reason —
+                // Recorded needs transcribing, Transcribed needs enriching —
+                // is obvious from the pill itself) — so a truncated
+                // transcript gets its own small warning icon, or a
+                // legitimately-done "Enriched" row would show a live action
+                // button with no visible reason why.
+                if (attention?.missing.includes("truncated")) {
+                    const warn = actions.createSpan({
+                        cls: "mc-truncated-warning",
+                        attr: { "aria-label": d.transcriptTruncatedTooltip },
+                    });
+                    setIcon(warn, "alert-triangle");
+                }
 
                 if (file) {
                     rowEl.addEventListener("click", () =>
