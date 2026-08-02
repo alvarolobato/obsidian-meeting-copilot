@@ -11,6 +11,8 @@ import {
 	TRANSCRIPT_CALLOUT_TITLE,
 } from "./transcriptCallout";
 import { resolveCustomizable } from "../util/customizable";
+import { isPathExcluded } from "./folderExclusion";
+import { seriesKey } from "../calendar/recurringSeries";
 
 export {
 	normalizeFolderPath,
@@ -156,6 +158,8 @@ export interface MeetingNoteConfig {
 	titlePattern: string;
 	/** `{{placeholder}}` template for the note body. */
 	template: string;
+	/** Glob patterns (see `folderExclusion.ts`) whose notes are invisible to identity/sticky-home lookups. */
+	excludeFolders: string[];
 }
 
 export const DEFAULT_TITLE_PATTERN = "{{date}} {{start:HHmm}} {{title}}";
@@ -290,12 +294,28 @@ export function parseStampDate(stamp: string): Date {
  * `one_on_one_with`/`one_on_one_email`), the "Needs attention" table, and
  * retention scoping, all in a single vault pass.
  *
+ * `excludeFolders` (glob patterns, see `folderExclusion.ts`) drops matching
+ * files *before* they're even read from the frontmatter cache — the plugin's
+ * "never touch this folder" setting. Left empty by callers that must see
+ * every note regardless (the recording-retention sweep's ownership check:
+ * a recording linked from an excluded note must still count as owned, or
+ * cleanup could delete it as if it were orphaned).
+ *
  * Depends on `metadataCache` being populated; shortly after startup a note
  * that was just created or moved outside the plugin may not show up yet
  * (known limitation — resolves itself once the cache catches up).
  */
-export function scanMeetingNotes(app: App): MeetingNoteScanEntry[] {
-	return app.vault.getMarkdownFiles().map((file) => {
+export function scanMeetingNotes(
+	app: App,
+	excludeFolders: string[] = []
+): MeetingNoteScanEntry[] {
+	const files =
+		excludeFolders.length === 0
+			? app.vault.getMarkdownFiles()
+			: app.vault
+					.getMarkdownFiles()
+					.filter((f) => !isPathExcluded(f.path, excludeFolders));
+	return files.map((file) => {
 		const fm = frontmatterOf(app, file);
 		return {
 			file,
@@ -459,9 +479,18 @@ function resolveMeetingFolderFromScan(
 		);
 	}
 	if (ev.recurringEventId) {
+		// Matched by normalized series key, not the raw id: Google mints a
+		// new recurringEventId for the tail of a series whenever it's split
+		// ("edit this and following events"), so a later occurrence's raw id
+		// can differ from every existing note's while still being the same
+		// real series — an exact match would treat the split as a brand new
+		// series and stop reusing the folder.
+		const eventSeriesKey = seriesKey(ev.recurringEventId);
 		const home = mostRecentMatching(
 			entries,
-			(e) => e.recurringEventId === ev.recurringEventId
+			(e) =>
+				e.recurringEventId !== null &&
+				seriesKey(e.recurringEventId) === eventSeriesKey
 		);
 		if (home) return folderOf(home);
 		return normalizeFolderPath(renderFolderTemplate(cfg.seriesFolderTemplate, ev));
@@ -478,7 +507,11 @@ export function resolveMeetingFolder(
 	ev: MeetingEventInfo,
 	cfg: MeetingNoteConfig
 ): string {
-	return resolveMeetingFolderFromScan(scanMeetingNotes(app), ev, cfg);
+	return resolveMeetingFolderFromScan(
+		scanMeetingNotes(app, cfg.excludeFolders),
+		ev,
+		cfg
+	);
 }
 
 /**
@@ -760,8 +793,11 @@ export async function createMeetingNote(
 	}
 
 	// One scan serves both the identity lookup below and the sticky-home
-	// lookups inside `resolveMeetingFolderFromScan`.
-	const entries = scanMeetingNotes(app);
+	// lookups inside `resolveMeetingFolderFromScan`. Excluded-folder notes
+	// are invisible here too — an event whose only existing note was
+	// archived/excluded gets a fresh note rather than the plugin reaching
+	// back into a folder the user asked it to leave alone.
+	const entries = scanMeetingNotes(app, cfg.excludeFolders);
 	const byIdentity = ev.id
 		? preferredByRecency(
 				entries.filter((e) => e.eventId === ev.id).map((e) => e.file)

@@ -16,7 +16,7 @@ alvarolobato/obsidian-meeting-copilot
 
 On first recording, the `system-recorder` helper (and its `whisper` runtime) download automatically. Grant the macOS prompts, then quit and reopen Obsidian.
 
-Optional: [Dataview](https://github.com/blacksmithgu/obsidian-dataview) (dashboard), [Tasks](https://github.com/obsidian-tasks-group/obsidian-tasks) (action-item tracking).
+Optional: [Tasks](https://github.com/obsidian-tasks-group/obsidian-tasks) (action-item tracking). The meetings dashboard and agenda are both built-in views — no Dataview or other query plugin needed.
 
 See [Setup](docs/setup.md) for Google Calendar, AI endpoint, transcription, and enrichment.
 

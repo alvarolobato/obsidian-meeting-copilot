@@ -61,6 +61,13 @@ export interface SystemRecordingSettings {
 	 */
 	recordingSubfolder: string;
 	/**
+	 * Free-text list (newline or comma separated) of folder paths/glob
+	 * patterns the plugin never scans for anything — see
+	 * `notes/folderExclusion.ts` for the pattern syntax and every scan site
+	 * that filters through it.
+	 */
+	excludedFolders: string;
+	/**
 	 * Save recordings (and their split sidecars) as AAC `.m4a` instead of WAV.
 	 * Same mono 24 kHz audio either way; this only picks the container/codec
 	 * the helper encodes at stop.
@@ -141,13 +148,6 @@ export interface SystemRecordingSettings {
 	 * notification fires so we never nag again.
 	 */
 	notificationStyleHintShown: boolean;
-	/**
-	 * True once the user has dismissed the first-run "create your meetings
-	 * dashboard?" prompt with "Don't ask again". Bookkeeping (not a user
-	 * preference the settings tab exposes); "Later" leaves this false so the
-	 * prompt can offer again next launch.
-	 */
-	dashboardPromptDismissed: boolean;
 	// Meeting detection (Tier 1, macOS).
 	detectMeetings: boolean;
 	detectZoom: boolean;
@@ -157,8 +157,6 @@ export interface SystemRecordingSettings {
 	agendaLookBackDays: number;
 	/** Where the "Coming up" agenda opens: a main-panel tab or the right sidebar. */
 	agendaPlacement: "main" | "sidebar";
-	/** How many upcoming meetings the dashboard shows per page (10/20/50/100). Set via the dashboard's own dropdown. */
-	dashboardUpcomingPageSize: number;
 	/** How many past meetings the dashboard shows per page (10/20/50/100). Set via the dashboard's own dropdown. */
 	dashboardPastPageSize: number;
 	/** How many notes-with-open-tasks the dashboard's action-items list shows per page (10/20/50/100). Set via the dashboard's own dropdown. */
@@ -277,6 +275,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	oneOnOneFolder: "Meetings/1-1s",
 	adhocFolder: "Meetings/Ad-hoc",
 	recordingSubfolder: "Recordings",
+	excludedFolders: "",
 	compressedRecordings: true,
 	micDeviceUid: "",
 	micDeviceLabel: "",
@@ -306,7 +305,6 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	excludeWithoutMeetingLink: false,
 	openMeetAutomatically: false,
 	notificationStyleHintShown: false,
-	dashboardPromptDismissed: false,
 	detectMeetings: true,
 	detectZoom: true,
 	detectGoogleMeet: false,
@@ -314,7 +312,6 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	agendaLookAheadDays: 7,
 	agendaLookBackDays: 7,
 	agendaPlacement: "main",
-	dashboardUpcomingPageSize: 10,
 	dashboardPastPageSize: 10,
 	dashboardActionsPageSize: 10,
 	dashboardFollowupsPageSize: 10,
@@ -2055,6 +2052,20 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 				await this.plugin.saveSettings();
 			}
 		);
+
+		new Setting(containerEl)
+			.setName(s.settings.excludedFolders.name)
+			.setDesc(s.settings.excludedFolders.desc)
+			.addTextArea((ta) => {
+				ta
+					.setValue(this.plugin.settings.excludedFolders)
+					.onChange(async (value) => {
+						this.plugin.settings.excludedFolders = value;
+						await this.plugin.saveSettings();
+					});
+				ta.inputEl.rows = 4;
+				ta.inputEl.addClass("meeting-copilot-template-input");
+			});
 
 		new Setting(containerEl)
 			.setName(s.settings.recordingSubfolder.name)
