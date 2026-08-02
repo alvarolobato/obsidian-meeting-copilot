@@ -316,400 +316,436 @@
 }
 
 /* =========================================================================
- * "Needs attention" dashboard section (rendered by the plugin).
+ * Meetings dashboard view (mc-dash) — past meetings (recent, or older but
+ * still needing attention), open action items, and follow-ups. Opened as a
+ * plain tab, no vault file — see MeetingDashboardView.ts. Shares the
+ * agenda's design tokens (--mc-cal-*, defined below) and header classes
+ * (.mc-cal-inner, .mc-cal-head*); the DOM each section renders is unchanged
+ * from when it rendered into a note's code block, only the styling below is
+ * new.
  * ====================================================================== */
-.mc-attention-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--size-4-2);
-    margin-bottom: var(--size-4-2);
+
+.mc-dash-section {
+	background: var(--mc-cal-card);
+	border: 1px solid var(--mc-cal-border);
+	border-radius: 12px;
+	padding: 16px 18px;
 }
 
-.mc-attention-empty {
-    color: var(--text-muted);
+.mc-dash-section-title {
+	margin: 0 0 12px;
+	font-family: var(--mc-cal-serif);
+	font-weight: 600;
+	font-size: 16px;
+	color: var(--mc-cal-title);
 }
 
-table.mc-attention {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: calc(var(--font-ui-smaller) - 1px);
+.mc-dash-section-body {
+	font-size: 13px;
+	color: var(--mc-cal-text);
 }
 
-table.mc-attention th,
-table.mc-attention td {
-    text-align: left;
-    padding: var(--size-2-1) var(--size-2-3);
-    border-bottom: 1px solid var(--background-modifier-border);
-    vertical-align: middle;
+/* ---- Status pill: a past-meeting row's pipeline stage, in the same 4
+ * colours as the accent bar / status dot everywhere else — one signal
+ * instead of the status word and a separate "missing X" badge restating it.
+ * Sits with the action buttons (both are the row's trailing cluster), so
+ * spacing comes from .mc-cal-event-actions' own gap, not its own margin. */
+
+.mc-status-pill,
+.mc-category-pill {
+	display: inline-block;
+	padding: 1px 8px;
+	border-radius: 999px;
+	font-size: 11px;
+	font-weight: 500;
+	white-space: nowrap;
 }
 
-.mc-attention-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--size-2-2);
+.mc-status-pill-scheduled {
+	background: color-mix(in oklch, var(--mc-cal-caption) 30%, var(--mc-cal-chip));
+	color: var(--mc-cal-text);
 }
 
-.mc-attention-actions button {
-    font-size: var(--font-ui-smaller);
-    padding: var(--size-2-1) var(--size-2-3);
+.mc-status-pill-recorded {
+	background: color-mix(in oklch, var(--mc-cal-accent-one-on-one) 30%, var(--mc-cal-chip));
+	color: var(--mc-cal-text);
 }
 
-.mc-badge {
-    display: inline-block;
-    margin-inline-end: var(--size-2-1);
-    padding: 0 var(--size-2-2);
-    border-radius: var(--radius-s);
-    font-size: var(--font-ui-smaller);
-    background: var(--background-modifier-border);
-    color: var(--text-muted);
+.mc-status-pill-transcribed {
+	background: color-mix(in oklch, var(--mc-cal-accent-block) 30%, var(--mc-cal-chip));
+	color: var(--mc-cal-text);
 }
 
-.mc-badge-date {
-    background: var(--background-modifier-error);
-    color: var(--text-on-accent);
+.mc-status-pill-enriched {
+	background: color-mix(in oklch, oklch(0.68 0.15 145) 30%, var(--mc-cal-chip));
+	color: var(--mc-cal-text);
 }
 
-.mc-badge-transcript {
-    background: rgba(var(--color-yellow-rgb), 0.2);
-    color: var(--text-normal);
+/* Sits beside an "Enriched" pill specifically — the one status whose row can
+ * still need attention (a truncated transcript) without the pill itself
+ * saying so, unlike every other reason. */
+.mc-truncated-warning {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	color: var(--color-orange);
 }
 
-.mc-badge-summary {
-    background: rgba(var(--color-blue-rgb), 0.2);
-    color: var(--text-normal);
+/* ---- Category pill: an action/follow-up section's grouping — 1:1, part of
+ * a recurring series, or a standalone ad-hoc note — same accent family as
+ * the meeting-type colours used elsewhere (agenda, this row's own bar). */
+
+.mc-category-pill-one-on-one {
+	background: color-mix(in oklch, var(--mc-cal-accent-one-on-one) 30%, var(--mc-cal-chip));
+	color: var(--mc-cal-text);
 }
 
-/* =========================================================================
- * Dashboard note layout: maximize screen usage. The Create-dashboard command
- * stamps the note with the `meeting-copilot-dashboard` cssclass; here that
- * turns off readable-line-length (so the tables use the full window) and trims
- * the side padding, in both reading and live-preview/source modes.
- * ====================================================================== */
-.meeting-copilot-dashboard .markdown-preview-sizer,
-.meeting-copilot-dashboard .cm-sizer,
-.meeting-copilot-dashboard .cm-content,
-.meeting-copilot-dashboard .cm-line {
-    max-width: none !important;
-    width: auto !important;
+.mc-category-pill-recurring {
+	background: color-mix(in oklch, var(--mc-cal-accent-recurring) 30%, var(--mc-cal-chip));
+	color: var(--mc-cal-text);
 }
 
-.meeting-copilot-dashboard.markdown-preview-view,
-.meeting-copilot-dashboard .markdown-preview-view {
-    padding-left: var(--size-4-1);
-    padding-right: var(--size-4-1);
+.mc-category-pill-ad-hoc {
+	background: color-mix(in oklch, var(--mc-cal-accent-meeting) 30%, var(--mc-cal-chip));
+	color: var(--mc-cal-text);
 }
 
-/* Hide the note's plumbing so the dashboard reads clean: the frontmatter
- * Properties widget (cssclasses is only there to trigger the styling above)
- * and the `%% meeting-copilot:dashboard %%` block markers. Reading view already
- * hides the comment markers; this also hides them in Live Preview (except the
- * line you're actively editing, so they stay reachable). */
-.meeting-copilot-dashboard .metadata-container {
-    display: none;
-}
+/* ---- Meetings (upcoming/past) — reuses the agenda's own .mc-cal-event card
+ * rows (see the "Coming up" section below) so the dashboard reads as one
+ * product with the agenda instead of a separate, plainer spreadsheet. ---- */
 
-.meeting-copilot-dashboard .cm-line:has(> .cm-comment):not(.cm-active) {
-    display: none;
-}
-
-/* =========================================================================
- * Dashboard sections rendered by the plugin (meetings tables + action items):
- * calendar-enriched, dense, and paginated via a shared bottom toolbar.
- * ====================================================================== */
 .mc-meetings-empty,
 .mc-meetings-loading,
 .mc-actions-empty,
 .mc-actions-loading {
-    color: var(--text-muted);
+	color: var(--mc-cal-muted);
 }
 
 .mc-meetings-error {
-    color: var(--text-error);
+	color: var(--mc-cal-accent-live);
 }
 
-table.mc-meetings {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: calc(var(--font-ui-smaller) - 1px);
-    line-height: 1.35;
+.mc-cal-events {
+	display: flex;
+	flex-direction: column;
 }
 
-table.mc-meetings td {
-    padding: 1px var(--size-2-2);
-    border: none;
-    vertical-align: middle;
+/* Date group subheader between runs of same-day rows. */
+.mc-dash-daylabel {
+	padding: 8px 2px 3px;
+	color: var(--mc-cal-muted);
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.03em;
+	font-size: 11px;
 }
 
-/* Dense, muted column headers to match the action-items list. */
-table.mc-attention th {
-    font-weight: var(--font-normal);
-    color: var(--text-muted);
+.mc-cal-events > .mc-dash-daylabel:first-child {
+	padding-top: 0;
 }
 
-/* Date group subheader: one row per day, so the rows below drop the date. */
-.mc-meetings-day {
-    padding-top: var(--size-4-1) !important;
-    padding-bottom: 1px !important;
-    color: var(--text-muted);
-    font-weight: var(--font-semibold);
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    border-bottom: 1px solid var(--background-modifier-border);
+/* Suppress the event row's own top border right after a day label — the
+ * label's spacing already separates it from the row above. */
+.mc-dash-daylabel + .mc-cal-event {
+	border-top: none;
 }
 
-.mc-meetings-dayrow:first-child .mc-meetings-day {
-    padding-top: 0 !important;
+/* Denser than the agenda's own event rows: the dashboard's past-meetings
+ * list is scanned down many rows at once, so tighter vertical rhythm
+ * matters more here than in the agenda's one-day-at-a-time view. Scoped to
+ * .mc-dash so the agenda sidebar's own rows are untouched. */
+.mc-dash .mc-cal-event {
+	padding: 6px 14px;
+	gap: 10px;
 }
 
-/* Time + title share one column; the time is a fixed-width, muted prefix. */
-.mc-meetings-when {
-    width: 100%;
-    white-space: nowrap;
+.mc-dash .mc-cal-event-bar {
+	min-height: 18px;
 }
 
-.mc-meetings-time {
-    display: inline-block;
-    min-width: 3.4em;
-    color: var(--text-muted);
-    font-variant-numeric: tabular-nums;
+.mc-dash .mc-cal-event-meta {
+	margin-top: 0;
 }
 
-/* No-note rows: muted, non-link title (the create-note icon signals it). */
-.mc-meeting-nonote {
-    color: var(--text-muted);
+/* Status colour reused as the row's accent bar — same colour, same meaning,
+ * as the dot in "Needs attention" and the toolbar legend below. */
+.mc-cal-accent-status-scheduled {
+	--mc-cal-accent: var(--mc-cal-caption);
+}
+.mc-cal-accent-status-recorded {
+	--mc-cal-accent: var(--mc-cal-accent-one-on-one);
+}
+.mc-cal-accent-status-transcribed {
+	--mc-cal-accent: var(--mc-cal-accent-block);
+}
+.mc-cal-accent-status-enriched {
+	--mc-cal-accent: oklch(0.68 0.15 145);
 }
 
-/* Trailing cell merges status + the create-note icon. Center each item as a
- * shrink-to-fit block with auto side margins so a lone status dot lines up
- * exactly under the create-note icon of other rows, despite their different
- * widths (text-align alone left them a couple of px off). */
-.mc-meetings-trail {
-    white-space: nowrap;
-    width: 1.8em;
+/* A row that still needs a transcript/summary (or a broken date): a warning
+ * accent overrides the plain status colour, plus a faint tint so it stands
+ * out at a glance in a list otherwise sorted newest-first. */
+.mc-cal-event.needs-attention {
+	--mc-cal-accent: var(--mc-cal-accent-live);
+	background: color-mix(in oklch, var(--mc-cal-accent-live) 6%, transparent);
 }
 
-.mc-meetings-trail .mc-status-dot {
-    display: block;
-    margin: 0 auto;
+.mc-cal-event.needs-attention:hover {
+	background: color-mix(in oklch, var(--mc-cal-accent-live) 11%, var(--mc-cal-card-hi));
 }
 
-.mc-meetings-trail .mc-icon-btn {
-    display: flex;
-    width: fit-content;
-    margin: 0 auto;
-    padding: 0;
-}
+/* ---- Open action items / follow-ups ------------------------------------- */
 
-.mc-meetings-trail .mc-icon-btn .svg-icon {
-    width: 14px;
-    height: 14px;
-}
-
-/* Status shown as a small colour-coded dot with the status as its tooltip. */
-.mc-status-dot {
-    display: inline-block;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    margin-right: var(--size-2-2);
-    background: var(--text-faint);
-    vertical-align: middle;
-}
-
-.mc-status-scheduled {
-    background: var(--text-faint);
-}
-
-.mc-status-recorded {
-    background: var(--interactive-accent);
-}
-
-.mc-status-transcribed {
-    background: rgba(var(--color-yellow-rgb), 0.9);
-}
-
-.mc-status-enriched {
-    background: rgba(var(--color-green-rgb), 0.9);
-}
-
-/* Open action items: dense, grouped by note (small muted title + date). */
 .mc-actions-list {
-    display: flex;
-    flex-direction: column;
-    gap: var(--size-4-2);
+	display: flex;
+	flex-direction: column;
+}
+
+/* Same divider rhythm — and the same coloured accent bar — as the meetings
+ * list above, so scrolling through this section reads as the same product. */
+.mc-action-note {
+	display: flex;
+	gap: 10px;
+	padding: 10px 4px;
+	border-top: 1px solid var(--mc-cal-border);
+}
+
+.mc-action-note:first-child {
+	padding-top: 0;
+	border-top: none;
+}
+
+.mc-action-note-bar {
+	flex: none;
+	align-self: stretch;
+	width: 3px;
+	min-height: 20px;
+	border-radius: 2px;
+	background: var(--mc-cal-accent);
+}
+
+.mc-action-note-body {
+	flex: 1 1 auto;
+	min-width: 0;
 }
 
 .mc-action-note-header {
-    display: flex;
-    align-items: baseline;
-    gap: var(--size-2-3);
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	margin-bottom: 4px;
 }
 
 .mc-action-note-title {
-    font-size: calc(var(--font-ui-smaller) - 1px);
-    font-weight: var(--font-normal);
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--mc-cal-title);
+	text-decoration: none;
 }
 
-.mc-action-note-date {
-    color: var(--text-muted);
-    font-size: calc(var(--font-ui-smaller) - 1px);
+.mc-action-note-title:hover {
+	text-decoration: underline;
 }
 
 ul.mc-action-tasks {
-    margin: var(--size-2-1) 0 0 0;
-    padding-left: var(--size-4-3);
-    list-style: none;
+	margin: 4px 0 0 0;
+	padding-left: 16px;
+	list-style: none;
 }
 
 .mc-action-task {
-    display: flex;
-    align-items: baseline;
-    gap: var(--size-2-2);
-    font-size: calc(var(--font-ui-smaller) - 1px);
-    line-height: 1.35;
-    padding: 1px 0;
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+	font-size: 12.5px;
+	line-height: 1.4;
+	padding: 1px 0;
+	color: var(--mc-cal-text);
 }
 
 .mc-action-task-check {
-    margin: 0;
-    flex-shrink: 0;
+	margin: 0;
+	flex-shrink: 0;
+	accent-color: var(--mc-cal-accent-one-on-one);
 }
 
 /* Recently-completed tasks kept for their grace period: muted + struck. */
 .mc-action-task-done .mc-action-task-text {
-    color: var(--text-muted);
-    text-decoration: line-through;
+	color: var(--mc-cal-muted);
+	text-decoration: line-through;
 }
 
-/* Keep rendered task markdown inline and margin-free for density, and let
- * the task text read at a normal weight (owners come through as bold from the
- * enricher; the user wants the list uniformly un-bold). */
+/* Keep rendered task markdown inline and margin-free for density. Both
+ * sections share one format: the **Owner:** prefix stays bold so you can
+ * scan who to ping. */
 .mc-action-task-text > * {
-    margin: 0;
-    display: inline;
+	margin: 0;
+	display: inline;
 }
 
 .mc-action-task-text strong,
 .mc-action-task-text b {
-    font-weight: var(--font-normal);
+	font-weight: 700;
 }
 
-/* Meeting follow-ups: keep the **Owner:** prefix bold so you can scan who to ping. */
-.mc-followups-list .mc-action-task-text strong,
-.mc-followups-list .mc-action-task-text b {
-    font-weight: var(--font-bold);
+/* The ==highlight== marking carried-over content in the note itself (see
+ * enrich/prompt.ts) is a spot-check aid for the note; it's not wanted here —
+ * the dashboard is for scanning tasks, not verifying provenance, so render
+ * it as plain text with no visual distinction at all. */
+.mc-action-task-text mark {
+	background: transparent;
+	color: inherit;
+	border: none;
+	padding: 0;
+}
+
+/* Clicking a task jumps to its own note/line — useful since a group can
+ * pull tasks from several notes (every occurrence of a series, or every
+ * one-on-one instance), so the header link alone can't reach all of them. */
+.mc-action-task-link {
+	cursor: pointer;
+}
+
+.mc-action-task-link:hover {
+	text-decoration: underline;
+}
+
+.mc-action-task-link:focus-visible {
+	outline: 2px solid var(--mc-cal-accent);
+	outline-offset: 2px;
+	border-radius: 2px;
 }
 
 .mc-action-task-age {
-    flex-shrink: 0;
-    margin-left: auto;
-    color: var(--text-muted);
-    font-size: var(--font-ui-smaller);
+	flex-shrink: 0;
+	margin-left: auto;
+	color: var(--mc-cal-muted);
+	font-size: 11px;
 }
 
 .mc-actions-older {
-    margin: var(--size-2-2) 0 0;
+	margin: 6px 0 0;
 }
 
 .mc-actions-older-btn {
-    font-size: var(--font-ui-smaller);
+	font-size: 12px;
+	background: transparent;
+	border: 1px solid var(--mc-cal-border-hi);
+	color: var(--mc-cal-muted);
+	box-shadow: none;
 }
 
-/* Shared bottom toolbar: count on the left, controls + pagination on the right. */
+.mc-actions-older-btn:hover {
+	color: var(--mc-cal-text);
+}
+
+/* ---- Shared bottom toolbar: count on the left, controls + pagination on the right. */
+
 .mc-dash-toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: var(--size-2-3);
-    margin-top: var(--size-4-2);
-    padding-top: var(--size-2-2);
-    border-top: 1px solid var(--background-modifier-border);
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 10px;
+	margin-top: 12px;
+	padding-top: 8px;
+	border-top: 1px solid var(--mc-cal-border);
 }
 
 .mc-dash-toolbar-left {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--size-2-3) var(--size-4-2);
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px 14px;
 }
 
 .mc-dash-count {
-    color: var(--text-muted);
-    font-size: var(--font-ui-smaller);
-}
-
-/* Status colour key, shown in the meetings toolbar next to the count. */
-.mc-dash-legend {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--size-2-3) var(--size-4-1);
-}
-
-.mc-dash-legend-item {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--size-2-1);
-    color: var(--text-muted);
-    font-size: calc(var(--font-ui-smaller) - 1px);
-}
-
-.mc-dash-legend-item .mc-status-dot {
-    margin: 0;
+	color: var(--mc-cal-muted);
+	font-size: 12px;
 }
 
 .mc-dash-toolbar-right {
-    display: flex;
-    align-items: center;
-    gap: var(--size-4-2);
+	display: flex;
+	align-items: center;
+	gap: 12px;
 }
 
 .mc-dash-perpage {
-    display: flex;
-    align-items: center;
-    gap: var(--size-2-2);
-    color: var(--text-muted);
-    font-size: var(--font-ui-smaller);
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--mc-cal-muted);
+	font-size: 12px;
+}
+
+/* Obsidian's own `.dropdown` chrome (a bulky 24px chevron sized for
+ * full-width settings rows) reads as a mismatched control next to the
+ * compact 14px pagination icons, so it's fully replaced here: a small
+ * hand-drawn chevron at the same visual weight, on the same chip
+ * background/height/radius as `.mc-icon-btn` below, so the whole toolbar
+ * reads as one control group instead of two different button styles. */
+.mc-dash-perpage select {
+	height: 30px;
+	padding: 0 22px 0 10px;
+	background-color: var(--mc-cal-chip) !important;
+	background-image:
+		linear-gradient(45deg, transparent 50%, var(--mc-cal-muted) 50%),
+		linear-gradient(135deg, var(--mc-cal-muted) 50%, transparent 50%) !important;
+	background-position:
+		right 13px center,
+		right 9px center;
+	background-size: 5px 5px;
+	background-repeat: no-repeat;
+	border: none;
+	border-radius: 8px;
+	color: var(--mc-cal-text);
+	font-size: 12px;
+	box-shadow: none;
 }
 
 .mc-pagination {
-    display: flex;
-    align-items: center;
-    gap: var(--size-2-3);
+	display: flex;
+	align-items: center;
+	gap: 10px;
 }
 
 .mc-pagination-status {
-    color: var(--text-muted);
-    font-size: var(--font-ui-smaller);
-    min-width: 3.5em;
-    text-align: center;
+	color: var(--mc-cal-muted);
+	font-size: 12px;
+	min-width: 3.5em;
+	text-align: center;
 }
 
 .mc-icon-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: var(--size-2-1);
-    background: transparent;
-    box-shadow: none;
-    cursor: pointer;
-    color: var(--text-muted);
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 30px;
+	height: 30px;
+	padding: 0;
+	background: var(--mc-cal-chip);
+	box-shadow: none;
+	cursor: pointer;
+	color: var(--mc-cal-muted);
+	border: none;
+	border-radius: 8px;
 }
 
 .mc-icon-btn:hover:not(:disabled) {
-    color: var(--text-normal);
+	background: var(--mc-cal-chip-hi);
+	color: var(--mc-cal-text);
 }
 
 .mc-icon-btn:disabled {
-    opacity: 0.4;
-    cursor: default;
+	opacity: 0.4;
+	cursor: default;
 }
 
 .mc-icon-btn .svg-icon {
-    width: var(--icon-s);
-    height: var(--icon-s);
+	width: 14px;
+	height: 14px;
 }
 
 /* =========================================================================
@@ -1210,21 +1246,28 @@ ul.mc-action-tasks {
 	gap: 6px;
 }
 
+/* Pill-shaped (fully rounded) rather than the square icon buttons elsewhere,
+ * with a border so they read as a control against the card instead of a
+ * flat icon — the border picks up the row's own accent colour on hover. */
 .mc-cal-event-btn {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: 26px;
-	height: 26px;
+	width: 28px;
+	height: 28px;
 	padding: 0;
-	border: none;
-	border-radius: 7px;
+	border: 1px solid var(--mc-cal-border-hi);
+	border-radius: 999px;
 	background: var(--mc-cal-chip);
 	color: var(--mc-cal-icon);
 	cursor: pointer;
 	box-shadow: none;
 	opacity: 0.85;
-	transition: background 0.12s ease, color 0.12s ease, opacity 0.12s ease;
+	transition:
+		background 0.12s ease,
+		color 0.12s ease,
+		opacity 0.12s ease,
+		border-color 0.12s ease;
 }
 
 .mc-cal-event:hover .mc-cal-event-btn {
@@ -1233,6 +1276,7 @@ ul.mc-action-tasks {
 
 .mc-cal-event-btn:hover {
 	background: var(--mc-cal-chip-hi);
+	border-color: var(--mc-cal-accent);
 	color: var(--mc-cal-text);
 }
 
@@ -1291,6 +1335,53 @@ ul.mc-action-tasks {
 
 .mc-cal-earlier.is-collapsed .mc-cal-earlier-body {
 	display: none;
+}
+
+/* ---- "Notes with issues" — vault-wide catch-all for anything "Past
+ * meetings" won't show because it's aged out of the recency window,
+ * collapsed by default. Reuses the agenda's own "Earlier today" collapse
+ * pattern for the header/chevron, and the action-items/follow-ups card-row
+ * style for each flagged note — this lists notes, not "meetings": many of
+ * them won't carry any meeting metadata at all, so there's nothing
+ * meeting-shaped to show. */
+
+.mc-issues-head {
+	/* .mc-cal-earlier's own top border is for separating it from a list above
+	 * it (the agenda); here it's the first thing in its own card. */
+	border-top: none;
+}
+
+.mc-issues-head .mc-cal-earlier-head {
+	/* The card (.mc-dash-section) already supplies the outer padding. */
+	padding: 0 0 12px;
+}
+
+.mc-issues-head.is-collapsed .mc-cal-earlier-head {
+	padding-bottom: 0;
+}
+
+.mc-issues-title {
+	margin: 0;
+	flex: 1 1 auto;
+}
+
+.mc-issue-note {
+	--mc-cal-accent: var(--mc-cal-accent-live);
+}
+
+/* Title + pill + fix button on one line (same shape as the action-items
+ * rows' header); the suggestion text is its own line below, wrapping
+ * normally rather than being squeezed and ellipsized next to the title. */
+.mc-issue-pill {
+	flex: none;
+	background: color-mix(in oklch, var(--mc-cal-accent-live) 30%, var(--mc-cal-chip));
+	color: var(--mc-cal-text);
+}
+
+.mc-issue-detail {
+	margin-top: 2px;
+	font-size: 11px;
+	color: var(--mc-cal-muted);
 }
 
 /* ---- Empty-run + placeholder states --------------------------------- */
@@ -1513,6 +1604,19 @@ ul.mc-action-tasks {
 	--callout-color: 136, 136, 136;
 	--callout-icon: lucide-sparkles;
 	background-color: rgba(136, 136, 136, 0.08);
+}
+
+/* Content carried verbatim from the participant's own notes/action items/
+ * follow-ups is marked with `==highlight==` (see enrich/prompt.ts) so it's
+ * spot-checkable — but Obsidian's default highlighter-yellow fill is too
+ * loud for a quiet marker meant to be glanced at, not shouted. A thin accent
+ * underline instead (matches the dashboard's own equivalent), scoped to our
+ * own callout so the user's own manual highlights elsewhere are untouched. */
+.callout[data-callout="ai-notes"] mark {
+	background: transparent;
+	color: inherit;
+	border-bottom: 2px solid var(--interactive-accent);
+	padding: 0;
 }
 
 /* "Toggle AI notes" command hides every enriched block. */

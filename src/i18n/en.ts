@@ -3,6 +3,7 @@ export const en = {
 	ribbon: {
 		toggleRecording: "Start/Stop on-demand meeting",
 		openAgenda: "Open meeting agenda",
+		openDashboard: "Open meetings dashboard",
 		recordForMeeting: (title: string) => `Record for “${title}”`,
 		newAdhoc: "New ad-hoc meeting",
 	},
@@ -12,11 +13,16 @@ export const en = {
 		authenticateCalendar: "Authenticate calendar",
 		toggleCalendarAutoRecording: "Toggle calendar auto-recording",
 		openAgenda: "Open meeting agenda",
+		openDashboard: "Open meetings dashboard",
 		enrichNote: "Enrich meeting note (AI)",
 		toggleAiNotes: "Toggle AI notes visibility",
 		cleanupRecordings: "Clean up old recordings",
-		createDashboard: "Create/update meetings dashboard",
 		cancelTranscription: "Cancel transcription",
+		fixMeetingMetadata: "Fix meeting metadata for this note",
+	},
+	menu: {
+		fixMetadataFile: "Fix meeting metadata",
+		fixMetadataFolder: "Fix meeting metadata for this folder",
 	},
 	adhoc: {
 		defaultTitle: "Meeting",
@@ -93,7 +99,6 @@ export const en = {
 		retentionCleaned: (n: number) =>
 			`Trashed ${n} old recording${n === 1 ? "" : "s"}`,
 		retentionNothing: "No recordings past the retention window.",
-		dashboardCreated: "Meetings dashboard updated",
 		transcribeError: (msg: string) => `Transcription failed: ${msg}`,
 		transcribeEmpty: "Transcription produced no text.",
 		transcribePartial:
@@ -114,6 +119,27 @@ export const en = {
 			"Speaker separation was skipped: the endpoint returned no timestamps this time. Run 'Load models' to re-check.",
 		diarizationNoTracks:
 			"No separate speaker tracks were recorded for this meeting — transcribing the single joint track instead.",
+		metadataFixLabelOneOnOne: (name: string) => `your 1:1 with ${name}`,
+		metadataFixLabelRecurring: (title: string) => `the "${title}" series`,
+		metadataFixConfirm: (count: number, label: string) =>
+			count === 1
+				? `This note looks like it belongs to ${label} — tag it?`
+				: `${count} notes here look like they belong to ${label} — tag them?`,
+		metadataFixApply: "Tag it",
+		metadataFixDismiss: "Not now",
+		metadataFixDone: (count: number) =>
+			count === 1 ? "Tagged 1 note." : `Tagged ${count} notes.`,
+		metadataFixNoSignal:
+			"Couldn't tell what this belongs to — no consistently-tagged note nearby.",
+		metadataFixAlreadyTagged: "This note already has 1:1/series metadata.",
+		metadataFixNothingToFix:
+			"Every note in this folder already has 1:1/series metadata.",
+		metadataFixAmbiguousOneOnOne: (name: string, count: number) =>
+			`1:1 with ${name} (${count} note${count === 1 ? "" : "s"})`,
+		metadataFixAmbiguousRecurring: (title: string, count: number) =>
+			`the "${title}" series (${count} note${count === 1 ? "" : "s"})`,
+		metadataFixAmbiguous: (labels: string) =>
+			`This folder's notes don't agree on one identity — found: ${labels}. Clean it up manually, then try again.`,
 		transcriptImportCleaning: "Cleaning up imported transcript…",
 		transcriptImportInProgress:
 			"A transcript import for this note is already in progress…",
@@ -131,6 +157,13 @@ export const en = {
 		// a human skimming the note.
 		speakerBanner:
 			'[Speaker labels: "Me" is the note\'s author; "Them" are the other attendees.]',
+		// Prepended to the AI notes callout, by the plugin — never by the model —
+		// when the transcript had to be truncated to fit the configured budget.
+		// The model can't reliably self-report this (it may not even notice the
+		// mid-transcript truncation marker), so this has to be deterministic to
+		// be trustworthy.
+		truncatedWarning: (maxTokens: number) =>
+			`**⚠️ Transcript truncated for enrichment:** this meeting's transcript exceeded the configured budget (${maxTokens.toLocaleString()} tokens), so the AI only saw the beginning and end of the discussion — content from the middle may be missing below. Raise "Max transcript tokens for enrichment" in Settings → Meeting Copilot, then re-enrich, for full coverage.`,
 	},
 	statusBar: {
 		recording: (hms: string) => `Recording ${hms}`,
@@ -248,21 +281,16 @@ export const en = {
 		menuTitle: "Meeting Copilot",
 	},
 	dashboard: {
+		/** View tab title and the ribbon icon's tooltip. */
+		title: "Meetings dashboard",
+		sections: {
+			past: "Past meetings",
+			actions: "Open action items",
+			followups: "Meeting follow-ups",
+		},
 		attention: {
-			allClear: "All meetings are complete. 🎉",
-			count: (n: number) =>
-				`${n} meeting${n === 1 ? "" : "s"} need attention`,
-			refresh: "Refresh",
-			colMeeting: "Meeting",
-			colDate: "Date",
-			colStatus: "Status",
-			colMissing: "Missing",
-			colActions: "Actions",
-			missing: {
-				date: "date",
-				transcript: "transcript",
-				summary: "summary",
-			},
+			moreActions: "More actions",
+			transcribeAndEnrich: "Transcribe & enrich",
 		},
 		controls: {
 			perPage: "Per page",
@@ -273,22 +301,41 @@ export const en = {
 				`${current} / ${total}`,
 		},
 		meetings: {
-			upcomingCount: (n: number) =>
-				`${n} upcoming meeting${n === 1 ? "" : "s"}`,
 			pastCount: (n: number) =>
 				`${n} past meeting${n === 1 ? "" : "s"}`,
-			upcomingEmpty: "No upcoming meetings.",
-			pastEmpty: "No past meetings yet.",
+			pastEmpty: "No meetings in the last couple of days.",
+			noDate: "No date",
 			loading: "Loading calendar…",
 			calendarError: "Couldn't load calendar meetings; showing notes only.",
 			createNote: "Create note",
-			// Status labels double as the dot tooltips and the toolbar legend.
+			// Status labels double as the pill text on each row.
 			status: {
 				scheduled: "Scheduled",
 				recorded: "Recorded",
 				transcribed: "Transcribed",
 				enriched: "Enriched",
 			},
+			// Shown next to an "Enriched" row's status pill — the only way an
+			// already-enriched note still needs attention (and still gets a
+			// default Enrich action), so it needs its own explanation; every
+			// other attention reason is self-evident from the status pill
+			// itself (Recorded → needs transcribing, Transcribed → needs
+			// enriching).
+			transcriptTruncatedTooltip:
+				"Transcript was too long and got truncated for enrichment — the summary may be missing content. Raise \"Max transcript tokens for enrichment\" in settings, then re-enrich.",
+		},
+		// Shared between "Open action items" and "Meeting follow-ups": how a
+		// note's tasks are grouped into a section, and the category pill each
+		// section's header carries.
+		groups: {
+			oneOnOne: (name: string) => `1:1 · ${name}`,
+			category: {
+				"one-on-one": "1:1",
+				recurring: "Recurring",
+				"ad-hoc": "Ad-hoc",
+			},
+			// Shared by both task sections — same table format for each.
+			ageDays: (n: number) => (n === 1 ? "1 day old" : `${n} days old`),
 		},
 		actions: {
 			count: (n: number) =>
@@ -307,18 +354,40 @@ export const en = {
 			showOlder: (n: number) =>
 				`Show older (${n})`,
 			hideOlder: "Hide older",
-			ageDays: (n: number) => (n === 1 ? "1 day old" : `${n} days old`),
 			taskMoved: "That follow-up has changed in its note; refreshing.",
 			taskError: (msg: string) =>
 				`Couldn't complete the follow-up: ${msg}`,
 		},
-	},
-	dashboardPrompt: {
-		heading: "Create your meetings dashboard?",
-		desc: "A dashboard note gives you one place to see upcoming/past meetings, open action items, and follow-ups — updated live as you record and enrich meetings. You can also create it anytime from the command palette.",
-		create: "Create",
-		later: "Later",
-		dontAskAgain: "Don't ask again",
+		// The "Notes with issues" catch-all — anything "Past meetings" won't
+		// show because it's aged out of the recency window: a broken date, a
+		// still-missing transcript/summary, a truncated transcript, or a
+		// folder/tag mismatch (see main.ts's renderNoteIssues doc comment). A
+		// vault-wide sanity check, low priority, not live-tracked.
+		issues: {
+			title: "Notes with issues",
+			empty: "No issues found.",
+			loading: "Scanning…",
+			refresh: "Refresh",
+			fixTooltipTag: (label: string) => `Tag as ${label}`,
+			fixTooltipRetag: (label: string) => `Retag as ${label}`,
+			reasonMissing: "Missing tag",
+			reasonOutlier: "Mismatched tag",
+			reasonAmbiguous: "Ambiguous folder",
+			detailMissing: (label: string) => `Folder suggests ${label}`,
+			detailOutlier: (actual: string, expected: string) =>
+				`Tagged as ${actual}, but folder suggests ${expected}`,
+			detailAmbiguous: (labels: string) =>
+				`Folder has conflicting tags: ${labels}`,
+			reasonDate: "Broken date",
+			reasonTranscript: "Missing transcript",
+			reasonSummary: "Missing summary",
+			reasonTruncated: "Transcript truncated",
+			detailDate: "The meeting date couldn't be read from this note.",
+			detailTranscript: "Recorded, but not transcribed yet.",
+			detailSummary: "Transcribed, but not summarized yet.",
+			detailTruncated:
+				"Transcript exceeded the token budget; the summary may be missing content.",
+		},
 	},
 	settings: {
 		// Version line at the top of the settings tab. Release builds show just
@@ -358,6 +427,10 @@ export const en = {
 		recordingSubfolder: {
 			name: "Recordings subfolder",
 			desc: "Subfolder, relative to each note's own folder, where that meeting's recordings are stored (e.g. 'Recordings' → notes in 'Meetings/' record into 'Meetings/Recordings/'). Leave empty to keep audio beside the note.",
+		},
+		excludedFolders: {
+			name: "Excluded folders",
+			desc: "Folders (one per line, or comma-separated) the plugin never scans for anything — the dashboard, action items, the metadata-fix tool, everything. A plain folder path excludes that folder and everything under it; wildcards are supported (* within one folder level, ** across levels, e.g. \"**/archived\" matches an \"archived\" folder anywhere). Matching is case-sensitive. Use this for archived notes, another plugin's data folder, or anything else you don't want touched.",
 		},
 		noteTitlePatternCustomize: {
 			name: "Customize note title pattern",
@@ -721,7 +794,7 @@ export const en = {
 		},
 		enrichMaxTranscriptTokens: {
 			name: "Max transcript tokens for enrichment",
-			desc: "Soft cap (~characters÷4) on how much of the transcript is spliced into the enrichment prompt. Longer transcripts keep the opening and closing with a visible truncation marker in the middle. 0 disables truncation. Default 12000.",
+			desc: "How much of the transcript enrichment is allowed to read (~characters ÷ 4). Most current models handle a full multi-hour transcript in one request, so it's fine to set this high — the point isn't to protect the model, it's to cap your own token cost/latency on the meetings you actually want summarized start to finish. Default 400000 (roughly a 5-6 hour meeting). If a transcript still exceeds this, the plugin keeps the opening and closing and drops the middle, which can silently omit whole agenda topics discussed in between — when that happens, the note is flagged with a warning and shown in Needs attention so it doesn't pass as a complete summary. 0 disables the cap entirely (never truncates, whatever the cost/latency).",
 		},
 		enrichTimeoutSeconds: {
 			name: "Enrichment timeout (seconds)",

@@ -208,6 +208,7 @@ function cfg(overrides: Partial<MeetingNoteConfig> = {}): MeetingNoteConfig {
 		adhocFolder: "Meetings/Ad-hoc",
 		titlePattern: DEFAULT_TITLE_PATTERN,
 		template: DEFAULT_NOTE_TEMPLATE,
+		excludeFolders: [],
 		...overrides,
 	};
 }
@@ -803,6 +804,26 @@ describe("resolveMeetingFolder", () => {
 		expect(folder).toBe("Projects/Weekly");
 	});
 
+	it("still follows the series' folder after Google splits the recurring lineage", () => {
+		// "Edit this and following events" mints a new recurringEventId for
+		// the tail of a series (old id + "_R<timestamp>"). The existing note
+		// carries the pre-split id; the incoming occurrence carries the
+		// post-split one — same real series, different raw id.
+		const vault = new FakeVault();
+		vault.addNote("Projects/Weekly/2026-06-01.md", {
+			recurring_event_id: "rec-1",
+			start: "2026-06-01T10:00:00",
+		});
+		const app = makeApp(vault);
+
+		const folder = resolveMeetingFolder(
+			app,
+			ev({ recurringEventId: "rec-1_R20260608T100000" }),
+			cfg()
+		);
+		expect(folder).toBe("Projects/Weekly");
+	});
+
 	it("renders the series folder template for a series with no notes yet", () => {
 		const app = makeApp(new FakeVault());
 		const folder = resolveMeetingFolder(
@@ -1098,10 +1119,11 @@ describe("scanMeetingNotes", () => {
 			meeting_url: "https://example.com",
 		});
 		vault.addNote("Meetings/b.md", {});
+		vault.addNote("Meetings/d.md", { enrich_transcript_truncated: true });
 		const app = makeApp(vault);
 
 		const entries = scanMeetingNotes(app);
-		expect(entries).toHaveLength(2);
+		expect(entries).toHaveLength(3);
 
 		const a = entries.find((e) => e.file.path === "Meetings/a.md");
 		expect(a?.eventId).toBe("evt-1");
@@ -1111,11 +1133,15 @@ describe("scanMeetingNotes", () => {
 		expect(a?.stamp).toBe("2026-01-01T10:00:00");
 		expect(a?.status).toBe("recorded");
 		expect(a?.hasMeetingUrl).toBe(true);
+		expect(a?.transcriptTruncated).toBe(false);
 
 		const b = entries.find((e) => e.file.path === "Meetings/b.md");
 		expect(b?.eventId).toBeNull();
 		expect(b?.stamp).toBeNull();
 		expect(b?.hasMeetingUrl).toBe(false);
+
+		const d = entries.find((e) => e.file.path === "Meetings/d.md");
+		expect(d?.transcriptTruncated).toBe(true);
 	});
 
 	it("falls back to date when start is present but not a non-empty string", () => {

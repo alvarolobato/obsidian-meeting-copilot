@@ -6,8 +6,13 @@
  * it can be unit-tested without a vault.
  */
 
-/** The steps a recorded meeting can still be missing, in pipeline order. */
-export type MissingStep = "date" | "transcript" | "summary";
+/**
+ * The steps a recorded meeting can still be missing, in pipeline order.
+ * "truncated" isn't literally missing — the pipeline did complete — but a
+ * transcript-budget truncation means the summary may be silently incomplete,
+ * which needs the same kind of user attention as a missing step.
+ */
+export type MissingStep = "date" | "transcript" | "summary" | "truncated";
 
 export interface AttentionInput {
 	path: string;
@@ -25,6 +30,12 @@ export interface AttentionInput {
 	 * user to do.
 	 */
 	processing: boolean;
+	/**
+	 * True when the last enrichment had to truncate the transcript to fit the
+	 * configured token budget — `enrich_transcript_truncated` frontmatter, set
+	 * by `runEnrich`. Only meaningful once `status` is "enriched".
+	 */
+	transcriptTruncated: boolean;
 }
 
 export interface AttentionRow {
@@ -51,7 +62,10 @@ function validDate(d: Date | null): d is Date {
  *   progress, is automatic; the note is advancing on its own, so it's skipped.
  *
  * Among the rest, the outstanding steps are a broken date, a missing transcript
- * (recorded but not transcribed), or — once transcribed — a missing summary.
+ * (recorded but not transcribed), a missing summary (transcribed but not
+ * enriched) — or, once enriched, a transcript that had to be truncated to fit
+ * the token budget, which can mean the summary silently skipped whole topics
+ * (see `transcriptTruncated`).
  */
 export function computeAttention(items: AttentionInput[]): AttentionRow[] {
 	const rows: AttentionRow[] = [];
@@ -67,6 +81,7 @@ export function computeAttention(items: AttentionInput[]): AttentionRow[] {
 		if (!dateOk) missing.push("date");
 		if (!transcribed) missing.push("transcript");
 		else if (!enriched) missing.push("summary");
+		else if (it.transcriptTruncated) missing.push("truncated");
 
 		if (missing.length === 0) continue;
 		rows.push({

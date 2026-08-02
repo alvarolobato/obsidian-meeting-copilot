@@ -77,4 +77,4 @@ For notification tracing, see [Development → Debugging notifications](developm
 - **AI enrichment** — enable, model, auto-enrich after transcription.
 - **Action items as tasks** — lift Next steps / Follow-ups into checkboxes.
 
-Useful commands: *Clean up old recordings*, *Create/update meetings dashboard*, *Enrich meeting note (AI)*, *Toggle AI notes visibility*.
+Useful commands: *Clean up old recordings*, *Open meetings dashboard*, *Enrich meeting note (AI)*, *Toggle AI notes visibility*.
