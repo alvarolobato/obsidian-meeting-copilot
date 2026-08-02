@@ -99,7 +99,11 @@ import {
 	isFallbackEndpointConfigured,
 } from "./util/endpointFallback";
 import { isServiceFailure } from "./util/serviceFailure";
-import { computeAttention, type AttentionInput } from "./notes/attention";
+import {
+    computeAttention,
+    type AttentionInput,
+    type AttentionRow,
+} from "./notes/attention";
 import {
     meetingRows,
     normalizePageSize,
@@ -160,6 +164,13 @@ import { findExpiredRecordings, underFolder } from "./recordings/retention";
 const ACTION_ITEMS_HEADING = "## Action items";
 /** Note section that holds meeting-wide follow-up checkboxes. */
 const FOLLOW_UPS_HEADING = "## Follow-ups";
+/**
+ * How far back "Past meetings" reaches by default. Shared with
+ * `renderNoteIssues`, which picks up anything (attention reason or identity
+ * issue) that falls outside this same window — the two lists are meant to
+ * partition the vault's problem notes by recency, not overlap.
+ */
+const PAST_WINDOW_DAYS = 2;
 import { chatComplete, ChatAbortError, EnrichTimeoutError } from "./enrich/llm";
 import { isPartialTranscript } from "./transcribe/partial";
 import { stripHallucinatedLines } from "./transcribe/hallucination";
@@ -932,6 +943,8 @@ export default class SystemRecordingPlugin extends Plugin {
         // stale cache until the next unrelated force-refresh. Only clears
         // the cache — the next actual scan stays lazy.
         this.noteIssuesCache = null;
+        this.noteIssueDatesCache = null;
+        this.attentionRowsCache = null;
     }
 
     /** Per-vault localStorage key for a sensitive credential field. */
@@ -2753,6 +2766,7 @@ export default class SystemRecordingPlugin extends Plugin {
                 this.renderActionItems(el, page, force),
             renderFollowUps: (el, page, force) =>
                 this.renderFollowUps(el, page, force),
+            renderNoteIssues: (el, force) => this.renderNoteIssues(el, force),
             trackDashboardBlock: (el, rerender) =>
                 this.trackDashboardBlock(el, rerender),
             openSettings: () => this.openPluginSettings(),
@@ -3080,6 +3094,7 @@ export default class SystemRecordingPlugin extends Plugin {
         // file/folder context menu items go through this same method too).
         this.agendaEvents.emit("changed", undefined);
         this.noteIssuesCache = null;
+        this.noteIssueDatesCache = null;
         new Notice(t().notices.metadataFixDone(targets.length));
     }
 
@@ -3243,27 +3258,31 @@ export default class SystemRecordingPlugin extends Plugin {
 
     /**
      * Renders the dashboard's single "Past meetings" section: recent meeting
-     * notes/calendar events (the last {@link PAST_WINDOW_DAYS} days) plus any
-     * *older* recorded meeting that still needs a transcript or summary —
-     * those stay visible regardless of age and are flagged inline (missing-
-     * piece badges, an overflow menu for Transcribe/Enrich) instead of living
-     * in a separate "Needs attention" table. Merges the vault's meeting notes
-     * with the calendar events the agenda already loads
-     * ({@link loadDashboardEvents}): a scheduled meeting with no note yet
-     * shows a "create note" action; noted meetings link straight to the note.
-     * `page` is 1-based; the controls re-render this same element. `force`
-     * re-fetches the calendar (the Refresh button).
+     * notes/calendar events, strictly the last {@link PAST_WINDOW_DAYS} days —
+     * a row is never kept around past that window just because it still
+     * needs attention (a missing transcript/summary, a truncated transcript,
+     * or a folder/tag mismatch). Anything outside the window with an
+     * outstanding issue instead surfaces in "Notes with issues"
+     * ({@link renderNoteIssues}); within the window, an issue only decorates
+     * a row already shown here (missing-piece badges, an overflow menu for
+     * Transcribe/Enrich) rather than pulling it into view. Merges the
+     * vault's meeting notes with the calendar events the agenda already
+     * loads ({@link loadDashboardEvents}): a scheduled meeting with no note
+     * yet shows a "create note" action; noted meetings link straight to the
+     * note. `page` is 1-based; the controls re-render this same element.
+     * `force` re-fetches the calendar (the Refresh button).
      */
     private async renderPastMeetings(
         el: HTMLElement,
         page = 1,
         force = false
     ): Promise<void> {
-        const PAST_WINDOW_DAYS = 2;
         // Sentinel "start" for a row with no usable date at all (a broken
         // frontmatter stamp) so it still sorts — to the very top, same as
         // `computeAttention`'s own "broken date first" rule — without giving
         // `DashboardMeetingRow.start` a null case just for this one row kind.
+        // Such a row can never fall inside the recency window (see the
+        // filter below), so it only ever shows up via "Notes with issues".
         const NO_DATE_SENTINEL = new Date(8640000000000000);
 
         const d = t().dashboard.meetings;
@@ -3430,18 +3449,20 @@ export default class SystemRecordingPlugin extends Plugin {
         const attentionByPath = new Map(
             computeAttention(attentionInputs).map((row) => [row.path, row])
         );
-        // Unlike the attention reasons above, an identity issue never pulls a
-        // note into view past the short window on its own (per design: this
-        // is a lighter-touch flag on a row already being shown, not a second
-        // indefinite "needs attention" list) — it only decorates a row that's
-        // already there for some other reason (recency, or an attention row).
+        // Neither an attention reason nor an identity issue pulls a note into
+        // view past the short window on its own — both are lighter-touch
+        // flags on a row already being shown for another reason (recency).
+        // Anything outside the window with either problem instead surfaces
+        // in "Notes with issues" (see `renderNoteIssues`'s own independent
+        // scan), so the two lists partition by recency rather than overlap.
         const issueByPath = new Map(issues.map((issue) => [issue.path, issue]));
 
         const now = new Date();
         let rows = meetingRows(inputs, now, "past");
         // Attention items the merge above doesn't already cover (a broken
         // date, or matched only by the stricter attention predicate) still
-        // need a row of their own.
+        // need a row of their own so a *recent* one isn't simply missing from
+        // the list — it's still subject to the same cutoff filter below.
         const represented = new Set(
             rows.map((r) => r.notePath).filter((p): p is string => p !== null)
         );
@@ -3458,16 +3479,19 @@ export default class SystemRecordingPlugin extends Plugin {
             represented.add(ar.path);
         }
 
-        // Only the last couple of days by default; a meeting that still needs
-        // attention stays visible regardless of age.
+        // Strictly the last couple of days — no exception for a row that
+        // still needs attention (see the doc comment above): that's what
+        // "Notes with issues" is for, so this list doesn't grow without
+        // bound. A `NO_DATE_SENTINEL` row (no usable date at all) can never
+        // be "recent", so it's excluded here too despite its sentinel value
+        // technically being >= cutoff.
         const cutoff = now.getTime() - PAST_WINDOW_DAYS * 24 * 60 * 60 * 1000;
         rows = rows
-            .filter((r) => {
-                const needsAttention = r.notePath
-                    ? attentionByPath.has(r.notePath)
-                    : false;
-                return needsAttention || r.start.getTime() >= cutoff;
-            })
+            .filter(
+                (r) =>
+                    r.start.getTime() !== NO_DATE_SENTINEL.getTime() &&
+                    r.start.getTime() >= cutoff
+            )
             .sort((a, b) => b.start.getTime() - a.start.getTime());
 
         const pageSize = normalizePageSize(this.settings.dashboardPastPageSize);
@@ -3934,19 +3958,25 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /**
-     * Cached result of the last identity-issue scan (folder-vs-tag mismatches
-     * flagged inline in "Past meetings" — see `renderPastMeetings`). Unlike
-     * that section's own live data, this one is deliberately *not* rescanned
-     * on every vault-change auto-refresh: it's a low-priority sanity check,
-     * not something that needs to track every edit live. It's computed once
-     * (the first time `renderPastMeetings` runs) and otherwise only refreshed
-     * when the section's own Refresh button passes `force`.
+     * Cached result of the last identity-issue scan (folder-vs-tag
+     * mismatches — flagged inline in "Past meetings" when recent, otherwise
+     * shown in "Notes with issues"; see `renderPastMeetings` and
+     * `renderNoteIssues`). Unlike those sections' own live data, this one is
+     * deliberately *not* rescanned on every vault-change auto-refresh: it's a
+     * low-priority sanity check, not something that needs to track every edit
+     * live. It's computed once (the first time either section runs) and
+     * otherwise only refreshed when a section's own Refresh button passes
+     * `force`.
      */
     private noteIssuesCache: NoteIssue[] | null = null;
+    /** Each issue's meeting date (by path), so `renderNoteIssues` can tell
+     * whether it's already covered by "Past meetings"'s own recency window. */
+    private noteIssueDatesCache: Map<string, Date | null> | null = null;
 
     private async scanNoteIssues(force = false): Promise<NoteIssue[]> {
         if (!force && this.noteIssuesCache) return this.noteIssuesCache;
         const excludeFolders = this.excludedFolderPatterns();
+        const dates = new Map<string, Date | null>();
         const rows: NoteIdentityRow[] = scanMeetingNotes(
             this.app,
             excludeFolders
@@ -3958,6 +3988,10 @@ export default class SystemRecordingPlugin extends Plugin {
                 typeof titleRaw === "string" && titleRaw
                     ? titleRaw
                     : entry.file.basename;
+            dates.set(
+                entry.file.path,
+                entry.stamp ? parseStampDate(entry.stamp) : null
+            );
             return {
                 path: entry.file.path,
                 title,
@@ -3971,9 +4005,294 @@ export default class SystemRecordingPlugin extends Plugin {
         });
         const issues = findNoteIssues(rows, this.settings.oneOnOneSeparately);
         this.noteIssuesCache = issues;
+        this.noteIssueDatesCache = dates;
         return issues;
     }
 
+    /**
+     * Cached result of the last "needs attention" pipeline scan (missing
+     * transcript/summary, a broken date, or a truncated transcript) — an
+     * independent re-derivation of the same `computeAttention` data
+     * `renderPastMeetings` computes inline, used by `renderNoteIssues` to
+     * catch a note that's aged out of that section's recency window but
+     * still needs something done. Same low-priority, force-gated caching as
+     * `noteIssuesCache`.
+     */
+    private attentionRowsCache: AttentionRow[] | null = null;
+
+    private async scanAttentionRows(force = false): Promise<AttentionRow[]> {
+        if (!force && this.attentionRowsCache) return this.attentionRowsCache;
+        const roots = this.configuredMeetingRoots();
+        const scanned = scanMeetingNotes(this.app, this.excludedFolderPatterns());
+        const attentionInputs: AttentionInput[] = [];
+        for (const entry of scanned) {
+            const recLink = recordingLinkTarget(entry.recording);
+            const hasRecording = recLink !== "";
+            const pluginOwned = entry.eventId !== null;
+            const inAttention =
+                pluginOwned ||
+                ((hasRecording || entry.hasMeetingUrl) &&
+                    roots.some((root) => underFolder(entry.file.path, root)));
+            if (!inAttention) continue;
+
+            const fm = this.app.metadataCache.getFileCache(entry.file)
+                ?.frontmatter as Record<string, unknown> | undefined;
+            const titleRaw = fm?.["title"];
+            const title =
+                typeof titleRaw === "string" && titleRaw
+                    ? titleRaw
+                    : entry.file.basename;
+            const start = entry.stamp ? parseStampDate(entry.stamp) : null;
+            const recDest = hasRecording
+                ? this.app.metadataCache.getFirstLinkpathDest(
+                      recLink,
+                      entry.file.path
+                  )
+                : null;
+            const processing =
+                this.taskQueue.has(this.enrichTaskId(entry.file.path)) ||
+                (recDest instanceof TFile && this.taskQueue.has(recDest.path));
+            attentionInputs.push({
+                path: entry.file.path,
+                title,
+                start,
+                status: entry.status,
+                hasRecording,
+                processing,
+                transcriptTruncated: entry.transcriptTruncated,
+            });
+        }
+        const rows = computeAttention(attentionInputs);
+        this.attentionRowsCache = rows;
+        return rows;
+    }
+
+    /**
+     * Renders the dashboard's "Notes with issues" section — collapsed by
+     * default, the header itself is the toggle. The catch-all for anything
+     * "Past meetings" won't show because it's aged out of the short recency
+     * window: a broken date, a still-missing transcript/summary, a
+     * transcript that had to be truncated, or a folder/tag mismatch. Builds
+     * its own header (title + count + refresh) rather than going through the
+     * shared `renderSection` helper the other sections use, since this one
+     * needs a dynamic count and a collapse state the others don't have.
+     */
+    private async renderNoteIssues(
+        section: HTMLElement,
+        force = false
+    ): Promise<void> {
+        const d = t().dashboard.issues;
+        const ad = t().dashboard.attention;
+        const n = t().notices;
+        const acts = t().agenda.actions;
+        const seq = this.nextRenderSeq(section);
+        // Persisted on `section` (survives the .empty() below across
+        // re-renders); the CSS class that actually hides the body has to
+        // live on `head`, since that's the element carrying .mc-cal-earlier.
+        const wasCollapsed = section.dataset.mcCollapsed !== "0";
+        section.empty();
+        section.dataset.mcCollapsed = wasCollapsed ? "1" : "0";
+
+        const head = section.createDiv({ cls: "mc-cal-earlier mc-issues-head" });
+        head.toggleClass("is-collapsed", wasCollapsed);
+        const headRow = head.createDiv({ cls: "mc-cal-earlier-head" });
+        const chevron = headRow.createSpan({ cls: "mc-cal-earlier-chevron" });
+        setIcon(chevron, "chevron-down");
+        headRow.createEl("h3", {
+            cls: "mc-dash-section-title mc-issues-title",
+            text: d.title,
+        });
+        const countEl = headRow.createSpan({ cls: "mc-cal-earlier-count" });
+        const refresh = headRow.createEl("button", {
+            cls: "mc-icon-btn",
+            attr: { "aria-label": d.refresh },
+        });
+        setIcon(refresh, "refresh-cw");
+        refresh.addEventListener("click", (e) => {
+            e.stopPropagation();
+            void this.renderNoteIssues(section, true);
+        });
+        headRow.addEventListener("click", () => {
+            const collapsed = section.dataset.mcCollapsed !== "0";
+            section.dataset.mcCollapsed = collapsed ? "0" : "1";
+            head.toggleClass("is-collapsed", !collapsed);
+        });
+
+        const body = head.createDiv({ cls: "mc-cal-earlier-body" });
+        body.createEl("p", { text: d.loading, cls: "mc-actions-loading" });
+
+        const [issues, attentionRows] = await Promise.all([
+            this.scanNoteIssues(force),
+            this.scanAttentionRows(force),
+        ]);
+        if (this.renderSeq.get(section) !== seq) return;
+
+        // Anything within "Past meetings"'s own recency window is already
+        // shown (and actionable) there — only the aged-out tail belongs here,
+        // so the two lists partition by recency instead of overlapping.
+        const cutoff = Date.now() - PAST_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+        const outOfWindow = (start: Date | null): boolean =>
+            start === null || start.getTime() < cutoff;
+
+        const dates = this.noteIssueDatesCache;
+        type Entry =
+            | { kind: "identity"; start: Date | null; issue: NoteIssue }
+            | { kind: "attention"; start: Date | null; row: AttentionRow };
+        const entries: Entry[] = [
+            ...issues
+                .filter((issue) => outOfWindow(dates?.get(issue.path) ?? null))
+                .map(
+                    (issue): Entry => ({
+                        kind: "identity",
+                        start: dates?.get(issue.path) ?? null,
+                        issue,
+                    })
+                ),
+            ...attentionRows
+                .filter((row) => outOfWindow(row.start))
+                .map((row): Entry => ({ kind: "attention", start: row.start, row })),
+        ];
+        entries.sort((a, b) => {
+            const at = a.start?.getTime() ?? Number.POSITIVE_INFINITY;
+            const bt = b.start?.getTime() ?? Number.POSITIVE_INFINITY;
+            return bt - at;
+        });
+
+        countEl.setText(String(entries.length));
+        body.empty();
+
+        if (entries.length === 0) {
+            body.createEl("p", { text: d.empty, cls: "mc-actions-empty" });
+            return;
+        }
+
+        const list = body.createDiv({ cls: "mc-actions-list" });
+        for (const entry of entries) {
+            const path = entry.kind === "identity" ? entry.issue.path : entry.row.path;
+            const entryTitle =
+                entry.kind === "identity" ? entry.issue.title : entry.row.title;
+            const file = this.app.vault.getAbstractFileByPath(path);
+            const note = list.createDiv({ cls: "mc-action-note mc-issue-note" });
+            note.createDiv({ cls: "mc-action-note-bar" });
+            const noteBody = note.createDiv({ cls: "mc-action-note-body" });
+            // Title + pill + fix button on one line, the suggestion text
+            // below on its own — same two-line shape as the action-items
+            // rows, so the suggestion has room to read in full instead of
+            // being squeezed and ellipsized next to the title.
+            const header = noteBody.createDiv({ cls: "mc-action-note-header" });
+            const titleEl = header.createEl("a", {
+                cls: "mc-action-note-title internal-link",
+                text: entryTitle,
+            });
+            titleEl.onclick = (e): void => {
+                e.preventDefault();
+                if (file instanceof TFile) this.openFileInTab(file);
+            };
+
+            if (entry.kind === "attention") {
+                const row = entry.row;
+                const reason = row.missing[0];
+                const pillText =
+                    reason === "date"
+                        ? d.reasonDate
+                        : reason === "transcript"
+                          ? d.reasonTranscript
+                          : reason === "summary"
+                            ? d.reasonSummary
+                            : d.reasonTruncated;
+                const detailText =
+                    reason === "date"
+                        ? d.detailDate
+                        : reason === "transcript"
+                          ? d.detailTranscript
+                          : reason === "summary"
+                            ? d.detailSummary
+                            : d.detailTruncated;
+                header.createSpan({
+                    cls: "mc-status-pill mc-issue-pill",
+                    text: pillText,
+                });
+                if (file instanceof TFile) {
+                    const primaryLabel =
+                        row.status === "transcribed" || row.status === "enriched"
+                            ? acts.enrich
+                            : ad.transcribeAndEnrich;
+                    const primaryBtn = header.createEl("button", {
+                        cls: "mc-cal-event-btn",
+                        attr: { "aria-label": primaryLabel, title: primaryLabel },
+                    });
+                    setIcon(primaryBtn, "sparkles");
+                    primaryBtn.addEventListener("click", (e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        void this.enqueueEnrich(file);
+                    });
+                }
+                noteBody.createDiv({ cls: "mc-issue-detail", text: detailText });
+                continue;
+            }
+
+            const issue = entry.issue;
+            let pillText: string;
+            let detailText: string;
+            // Only "missing"/"outlier" have one specific identity to offer —
+            // an "ambiguous" folder disagrees with itself, so there's
+            // nothing safe to auto-apply; the detail text is the full
+            // action there (matches reportAmbiguousMetadata's Notice, which
+            // likewise only reports and never guesses).
+            let fixIdentity: InferredIdentity | null = null;
+            let fixTooltip = "";
+            if (issue.reason.kind === "missing") {
+                const label =
+                    issue.reason.identity.kind === "one-on-one"
+                        ? n.metadataFixLabelOneOnOne(issue.reason.identity.name)
+                        : n.metadataFixLabelRecurring(issue.reason.identity.title);
+                pillText = d.reasonMissing;
+                detailText = d.detailMissing(label);
+                fixIdentity = issue.reason.identity;
+                fixTooltip = d.fixTooltipTag(label);
+            } else if (issue.reason.kind === "outlier") {
+                const actual =
+                    issue.reason.actual.kind === "one-on-one"
+                        ? n.metadataFixLabelOneOnOne(issue.reason.actual.name)
+                        : n.metadataFixLabelRecurring(issue.reason.actual.title);
+                const expected =
+                    issue.reason.expected.kind === "one-on-one"
+                        ? n.metadataFixLabelOneOnOne(issue.reason.expected.name)
+                        : n.metadataFixLabelRecurring(issue.reason.expected.title);
+                pillText = d.reasonOutlier;
+                detailText = d.detailOutlier(actual, expected);
+                fixIdentity = issue.reason.expected;
+                fixTooltip = d.fixTooltipRetag(expected);
+            } else {
+                const labels = this.formatAmbiguousLabels(
+                    issue.reason.oneOnOnes,
+                    issue.reason.recurring
+                );
+                pillText = d.reasonAmbiguous;
+                detailText = d.detailAmbiguous(labels.join(", "));
+            }
+            header.createSpan({ cls: "mc-status-pill mc-issue-pill", text: pillText });
+            if (fixIdentity) {
+                const identity = fixIdentity;
+                const fixBtn = header.createEl("button", {
+                    cls: "mc-cal-event-btn",
+                    attr: { "aria-label": fixTooltip, title: fixTooltip },
+                });
+                setIcon(fixBtn, "wrench");
+                fixBtn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    if (file instanceof TFile) {
+                        this.confirmMetadataFix([file], identity, () =>
+                            void this.renderNoteIssues(section, true)
+                        );
+                    }
+                });
+            }
+            noteBody.createDiv({ cls: "mc-issue-detail", text: detailText });
+        }
+    }
 
     /**
      * Shared renderer for the action-items and follow-ups dashboard sections —

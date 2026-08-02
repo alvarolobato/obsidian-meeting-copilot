@@ -430,6 +430,18 @@ export function migrateSettings(
 	if (!("noteTitlePatternCustomize" in migrated))
 		delete migrated.noteTitlePattern;
 	if (!("noteTemplateCustomize" in migrated)) delete migrated.noteTemplate;
+	// enrichMaxTranscriptTokens's default rose from 12,000 to 400,000 (the old
+	// value was needlessly conservative and silently truncated long
+	// transcripts). Unlike the *Customize-gated settings above, this one has
+	// no toggle to detect "never touched" — but 12,000 exactly is the one
+	// value that could only have gotten into a vault's data.json as the old
+	// default being persisted, since nothing else would ever produce that
+	// exact number. Drop it so DEFAULT_SETTINGS's new value takes over; a
+	// vault that deliberately chose exactly 12000 (unlikely) would need to
+	// re-enter it.
+	if (migrated.enrichMaxTranscriptTokens === 12_000) {
+		delete migrated.enrichMaxTranscriptTokens;
+	}
 	return migrated;
 }
 

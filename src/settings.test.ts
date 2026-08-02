@@ -191,4 +191,26 @@ describe("migrateSettings", () => {
 		expect(migrated.noteTemplate).toBe("# {{title}} custom");
 		expect(migrated.noteTitlePattern).toBe("{{title}}");
 	});
+
+	// enrichMaxTranscriptTokens's default rose 12,000 -> 400,000; a vault whose
+	// data.json still has exactly the old default (the only way that precise
+	// number gets there pre-migration) should pick up the new one on load.
+	it("drops a persisted enrichMaxTranscriptTokens that's exactly the old default", () => {
+		const migrated = migrateSettings({
+			oneOffFolderTemplate: "Meetings",
+			enrichMaxTranscriptTokens: 12_000,
+		});
+		expect(migrated).not.toHaveProperty("enrichMaxTranscriptTokens");
+		expect(
+			Object.assign({}, DEFAULT_SETTINGS, migrated).enrichMaxTranscriptTokens
+		).toBe(400_000);
+	});
+
+	it("keeps a deliberately-customized enrichMaxTranscriptTokens", () => {
+		const migrated = migrateSettings({
+			oneOffFolderTemplate: "Meetings",
+			enrichMaxTranscriptTokens: 50_000,
+		});
+		expect(migrated.enrichMaxTranscriptTokens).toBe(50_000);
+	});
 });

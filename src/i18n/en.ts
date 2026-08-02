@@ -303,7 +303,7 @@ export const en = {
 		meetings: {
 			pastCount: (n: number) =>
 				`${n} past meeting${n === 1 ? "" : "s"}`,
-			pastEmpty: "No meetings need attention, and nothing in the last couple of days.",
+			pastEmpty: "No meetings in the last couple of days.",
 			noDate: "No date",
 			loading: "Loading calendar…",
 			calendarError: "Couldn't load calendar meetings; showing notes only.",
@@ -358,14 +358,35 @@ export const en = {
 			taskError: (msg: string) =>
 				`Couldn't complete the follow-up: ${msg}`,
 		},
-		// Tooltips for the identity-issue fix/info buttons inline in "Past
-		// meetings" rows (see main.ts's scanNoteIssues doc comment) — a
+		// The "Notes with issues" catch-all — anything "Past meetings" won't
+		// show because it's aged out of the recency window: a broken date, a
+		// still-missing transcript/summary, a truncated transcript, or a
+		// folder/tag mismatch (see main.ts's renderNoteIssues doc comment). A
 		// vault-wide sanity check, low priority, not live-tracked.
 		issues: {
+			title: "Notes with issues",
+			empty: "No issues found.",
+			loading: "Scanning…",
+			refresh: "Refresh",
 			fixTooltipTag: (label: string) => `Tag as ${label}`,
 			fixTooltipRetag: (label: string) => `Retag as ${label}`,
+			reasonMissing: "Missing tag",
+			reasonOutlier: "Mismatched tag",
+			reasonAmbiguous: "Ambiguous folder",
+			detailMissing: (label: string) => `Folder suggests ${label}`,
+			detailOutlier: (actual: string, expected: string) =>
+				`Tagged as ${actual}, but folder suggests ${expected}`,
 			detailAmbiguous: (labels: string) =>
 				`Folder has conflicting tags: ${labels}`,
+			reasonDate: "Broken date",
+			reasonTranscript: "Missing transcript",
+			reasonSummary: "Missing summary",
+			reasonTruncated: "Transcript truncated",
+			detailDate: "The meeting date couldn't be read from this note.",
+			detailTranscript: "Recorded, but not transcribed yet.",
+			detailSummary: "Transcribed, but not summarized yet.",
+			detailTruncated:
+				"Transcript exceeded the token budget; the summary may be missing content.",
 		},
 	},
 	settings: {

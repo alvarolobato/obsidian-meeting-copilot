@@ -590,17 +590,14 @@ ul.mc-action-tasks {
 	font-weight: 700;
 }
 
-/* Content carried verbatim from the participant's own notes/action items/
- * follow-ups is marked with Obsidian's `==highlight==` syntax (see
- * enrich/prompt.ts) so it's spot-checkable — but Obsidian's default
- * highlighter-yellow fill is too loud for a quiet marker meant to be
- * glanced at, not shouted. A thin accent underline instead, scoped to our
- * own rendered task text so the user's own manual highlights elsewhere in
- * the vault are untouched. */
+/* The ==highlight== marking carried-over content in the note itself (see
+ * enrich/prompt.ts) is a spot-check aid for the note; it's not wanted here —
+ * the dashboard is for scanning tasks, not verifying provenance, so render
+ * it as plain text with no visual distinction at all. */
 .mc-action-task-text mark {
 	background: transparent;
 	color: inherit;
-	border-bottom: 2px solid var(--interactive-accent);
+	border: none;
 	padding: 0;
 }
 
@@ -1338,6 +1335,53 @@ ul.mc-action-tasks {
 
 .mc-cal-earlier.is-collapsed .mc-cal-earlier-body {
 	display: none;
+}
+
+/* ---- "Notes with issues" — vault-wide catch-all for anything "Past
+ * meetings" won't show because it's aged out of the recency window,
+ * collapsed by default. Reuses the agenda's own "Earlier today" collapse
+ * pattern for the header/chevron, and the action-items/follow-ups card-row
+ * style for each flagged note — this lists notes, not "meetings": many of
+ * them won't carry any meeting metadata at all, so there's nothing
+ * meeting-shaped to show. */
+
+.mc-issues-head {
+	/* .mc-cal-earlier's own top border is for separating it from a list above
+	 * it (the agenda); here it's the first thing in its own card. */
+	border-top: none;
+}
+
+.mc-issues-head .mc-cal-earlier-head {
+	/* The card (.mc-dash-section) already supplies the outer padding. */
+	padding: 0 0 12px;
+}
+
+.mc-issues-head.is-collapsed .mc-cal-earlier-head {
+	padding-bottom: 0;
+}
+
+.mc-issues-title {
+	margin: 0;
+	flex: 1 1 auto;
+}
+
+.mc-issue-note {
+	--mc-cal-accent: var(--mc-cal-accent-live);
+}
+
+/* Title + pill + fix button on one line (same shape as the action-items
+ * rows' header); the suggestion text is its own line below, wrapping
+ * normally rather than being squeezed and ellipsized next to the title. */
+.mc-issue-pill {
+	flex: none;
+	background: color-mix(in oklch, var(--mc-cal-accent-live) 30%, var(--mc-cal-chip));
+	color: var(--mc-cal-text);
+}
+
+.mc-issue-detail {
+	margin-top: 2px;
+	font-size: 11px;
+	color: var(--mc-cal-muted);
 }
 
 /* ---- Empty-run + placeholder states --------------------------------- */
