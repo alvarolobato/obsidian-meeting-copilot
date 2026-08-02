@@ -2753,7 +2753,6 @@ export default class SystemRecordingPlugin extends Plugin {
                 this.renderActionItems(el, page, force),
             renderFollowUps: (el, page, force) =>
                 this.renderFollowUps(el, page, force),
-            renderNoteIssues: (el, force) => this.renderNoteIssues(el, force),
             trackDashboardBlock: (el, rerender) =>
                 this.trackDashboardBlock(el, rerender),
             openSettings: () => this.openPluginSettings(),
@@ -3269,6 +3268,8 @@ export default class SystemRecordingPlugin extends Plugin {
 
         const d = t().dashboard.meetings;
         const ad = t().dashboard.attention;
+        const id = t().dashboard.issues;
+        const n = t().notices;
         const acts = t().agenda.actions;
         const seq = this.nextRenderSeq(el);
         const restoreScroll = this.preserveScroll(el);
@@ -3282,11 +3283,24 @@ export default class SystemRecordingPlugin extends Plugin {
 
         let events: GCalEvent[] = [];
         let calendarError = false;
-        try {
-            events = await this.loadDashboardEvents(force);
-        } catch {
+        // Identity-issue detection (folder-vs-tag mismatches) is a low-priority
+        // sanity check, not something that needs to track every edit live —
+        // scanNoteIssues() only rescans on the same explicit `force` this
+        // section's own Refresh button already passes, otherwise reusing
+        // whatever was cached from this render's (or the dashboard's) first.
+        // Fetched alongside the calendar, but kept in its own try/catch so a
+        // failure here can't masquerade as (or swallow) a calendar error.
+        const [eventsResult, issuesResult] = await Promise.allSettled([
+            this.loadDashboardEvents(force),
+            this.scanNoteIssues(force),
+        ]);
+        if (eventsResult.status === "fulfilled") {
+            events = eventsResult.value;
+        } else {
             calendarError = true;
         }
+        const issues: NoteIssue[] =
+            issuesResult.status === "fulfilled" ? issuesResult.value : [];
         // A newer render started while the calendar loaded — let it win.
         if (this.renderSeq.get(el) !== seq) return;
 
@@ -3416,6 +3430,12 @@ export default class SystemRecordingPlugin extends Plugin {
         const attentionByPath = new Map(
             computeAttention(attentionInputs).map((row) => [row.path, row])
         );
+        // Unlike the attention reasons above, an identity issue never pulls a
+        // note into view past the short window on its own (per design: this
+        // is a lighter-touch flag on a row already being shown, not a second
+        // indefinite "needs attention" list) — it only decorates a row that's
+        // already there for some other reason (recency, or an attention row).
+        const issueByPath = new Map(issues.map((issue) => [issue.path, issue]));
 
         const now = new Date();
         let rows = meetingRows(inputs, now, "past");
@@ -3514,6 +3534,9 @@ export default class SystemRecordingPlugin extends Plugin {
                 const attention = row.notePath
                     ? attentionByPath.get(row.notePath)
                     : undefined;
+                const issue = row.notePath
+                    ? issueByPath.get(row.notePath)
+                    : undefined;
                 // Keyed off `file` (not `row.notePath`) so this can never
                 // disagree with the click/action branching below — a notePath
                 // whose file lookup misses must not show a status label next
@@ -3527,7 +3550,7 @@ export default class SystemRecordingPlugin extends Plugin {
                     cls: `mc-cal-event ${accentCls}`,
                 });
                 if (file) rowEl.addClass("has-note");
-                if (attention) rowEl.addClass("needs-attention");
+                if (attention || issue) rowEl.addClass("needs-attention");
                 rowEl.createDiv({ cls: "mc-cal-event-bar" });
 
                 const rowBody = rowEl.createDiv({ cls: "mc-cal-event-body" });
@@ -3626,6 +3649,59 @@ export default class SystemRecordingPlugin extends Plugin {
                             );
                             menu.showAtMouseEvent(e);
                         });
+                    }
+                    // A folder-vs-tag identity issue is independent of the
+                    // pipeline attention above — a row can have neither, one,
+                    // or both — so this is a sibling block, not nested inside
+                    // it. "missing"/"outlier" get a one-click fix (wrench);
+                    // "ambiguous" has no single identity to safely apply, so
+                    // it's report-only, matching the manual fix command's own
+                    // refusal to guess.
+                    if (issue) {
+                        if (issue.reason.kind === "ambiguous") {
+                            const labels = this.formatAmbiguousLabels(
+                                issue.reason.oneOnOnes,
+                                issue.reason.recurring
+                            );
+                            const detail = id.detailAmbiguous(labels.join(", "));
+                            const helpBtn = actions.createEl("button", {
+                                cls: "mc-cal-event-btn",
+                                attr: { "aria-label": detail },
+                            });
+                            setIcon(helpBtn, "help-circle");
+                            helpBtn.addEventListener("click", (e) => {
+                                e.stopPropagation();
+                                new Notice(detail);
+                            });
+                        } else {
+                            const identity =
+                                issue.reason.kind === "missing"
+                                    ? issue.reason.identity
+                                    : issue.reason.expected;
+                            const label =
+                                identity.kind === "one-on-one"
+                                    ? n.metadataFixLabelOneOnOne(identity.name)
+                                    : n.metadataFixLabelRecurring(identity.title);
+                            const fixTooltip =
+                                issue.reason.kind === "missing"
+                                    ? id.fixTooltipTag(label)
+                                    : id.fixTooltipRetag(label);
+                            const fixBtn = actions.createEl("button", {
+                                cls: "mc-cal-event-btn",
+                                attr: { "aria-label": fixTooltip },
+                            });
+                            setIcon(fixBtn, "wrench");
+                            fixBtn.addEventListener("click", (e) => {
+                                e.stopPropagation();
+                                this.confirmMetadataFix([file], identity, () =>
+                                    void this.renderPastMeetings(
+                                        el,
+                                        view.page,
+                                        true
+                                    )
+                                );
+                            });
+                        }
                     }
                 } else if (meeting) {
                     const createNote = (): void => {
@@ -3858,11 +3934,13 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /**
-     * Cached result of the last "Notes with issues" scan — unlike every other
-     * dashboard section, this one is deliberately *not* wired into the
-     * vault-change auto-refresh: it's a low-priority sanity check, not
-     * something that needs to track every edit live. It scans once when the
-     * dashboard is opened and otherwise only on an explicit Refresh click.
+     * Cached result of the last identity-issue scan (folder-vs-tag mismatches
+     * flagged inline in "Past meetings" — see `renderPastMeetings`). Unlike
+     * that section's own live data, this one is deliberately *not* rescanned
+     * on every vault-change auto-refresh: it's a low-priority sanity check,
+     * not something that needs to track every edit live. It's computed once
+     * (the first time `renderPastMeetings` runs) and otherwise only refreshed
+     * when the section's own Refresh button passes `force`.
      */
     private noteIssuesCache: NoteIssue[] | null = null;
 
@@ -3896,145 +3974,6 @@ export default class SystemRecordingPlugin extends Plugin {
         return issues;
     }
 
-    /**
-     * Renders the dashboard's "Notes with issues" section — collapsed by
-     * default, the header itself is the toggle. Builds its own header (title
-     * + count + refresh) rather than going through the shared
-     * `renderSection` helper the other sections use, since this one needs a
-     * dynamic count and a collapse state the others don't have.
-     */
-    private async renderNoteIssues(
-        section: HTMLElement,
-        force = false
-    ): Promise<void> {
-        const d = t().dashboard.issues;
-        const n = t().notices;
-        const seq = this.nextRenderSeq(section);
-        // Persisted on `section` (survives the .empty() below across
-        // re-renders); the CSS class that actually hides the body has to
-        // live on `head`, since that's the element carrying .mc-cal-earlier.
-        const wasCollapsed = section.dataset.mcCollapsed !== "0";
-        section.empty();
-        section.dataset.mcCollapsed = wasCollapsed ? "1" : "0";
-
-        const head = section.createDiv({ cls: "mc-cal-earlier mc-issues-head" });
-        head.toggleClass("is-collapsed", wasCollapsed);
-        const headRow = head.createDiv({ cls: "mc-cal-earlier-head" });
-        const chevron = headRow.createSpan({ cls: "mc-cal-earlier-chevron" });
-        setIcon(chevron, "chevron-down");
-        headRow.createEl("h3", {
-            cls: "mc-dash-section-title mc-issues-title",
-            text: d.title,
-        });
-        const countEl = headRow.createSpan({ cls: "mc-cal-earlier-count" });
-        const refresh = headRow.createEl("button", {
-            cls: "mc-icon-btn",
-            attr: { "aria-label": d.refresh },
-        });
-        setIcon(refresh, "refresh-cw");
-        refresh.addEventListener("click", (e) => {
-            e.stopPropagation();
-            void this.renderNoteIssues(section, true);
-        });
-        headRow.addEventListener("click", () => {
-            const collapsed = section.dataset.mcCollapsed !== "0";
-            section.dataset.mcCollapsed = collapsed ? "0" : "1";
-            head.toggleClass("is-collapsed", !collapsed);
-        });
-
-        const body = head.createDiv({ cls: "mc-cal-earlier-body" });
-        body.createEl("p", { text: d.loading, cls: "mc-actions-loading" });
-
-        const issues = await this.scanNoteIssues(force);
-        if (this.renderSeq.get(section) !== seq) return;
-        countEl.setText(String(issues.length));
-        body.empty();
-
-        if (issues.length === 0) {
-            body.createEl("p", { text: d.empty, cls: "mc-actions-empty" });
-            return;
-        }
-
-        const list = body.createDiv({ cls: "mc-actions-list" });
-        for (const issue of issues) {
-            const file = this.app.vault.getAbstractFileByPath(issue.path);
-            const note = list.createDiv({ cls: "mc-action-note mc-issue-note" });
-            note.createDiv({ cls: "mc-action-note-bar" });
-            const noteBody = note.createDiv({ cls: "mc-action-note-body" });
-            // Title + pill + fix button on one line, the suggestion text
-            // below on its own — same two-line shape as the action-items
-            // rows, so the suggestion has room to read in full instead of
-            // being squeezed and ellipsized next to the title.
-            const header = noteBody.createDiv({ cls: "mc-action-note-header" });
-            const title = header.createEl("a", {
-                cls: "mc-action-note-title internal-link",
-                text: issue.title,
-            });
-            title.onclick = (e): void => {
-                e.preventDefault();
-                if (file instanceof TFile) this.openFileInTab(file);
-            };
-
-            let pillText: string;
-            let detailText: string;
-            // Only "missing"/"outlier" have one specific identity to offer —
-            // an "ambiguous" folder disagrees with itself, so there's
-            // nothing safe to auto-apply; the detail text is the full
-            // action there (matches reportAmbiguousMetadata's Notice, which
-            // likewise only reports and never guesses).
-            let fixIdentity: InferredIdentity | null = null;
-            let fixTooltip = "";
-            if (issue.reason.kind === "missing") {
-                const label =
-                    issue.reason.identity.kind === "one-on-one"
-                        ? n.metadataFixLabelOneOnOne(issue.reason.identity.name)
-                        : n.metadataFixLabelRecurring(issue.reason.identity.title);
-                pillText = d.reasonMissing;
-                detailText = d.detailMissing(label);
-                fixIdentity = issue.reason.identity;
-                fixTooltip = d.fixTooltipTag(label);
-            } else if (issue.reason.kind === "outlier") {
-                const actual =
-                    issue.reason.actual.kind === "one-on-one"
-                        ? n.metadataFixLabelOneOnOne(issue.reason.actual.name)
-                        : n.metadataFixLabelRecurring(issue.reason.actual.title);
-                const expected =
-                    issue.reason.expected.kind === "one-on-one"
-                        ? n.metadataFixLabelOneOnOne(issue.reason.expected.name)
-                        : n.metadataFixLabelRecurring(issue.reason.expected.title);
-                pillText = d.reasonOutlier;
-                detailText = d.detailOutlier(actual, expected);
-                fixIdentity = issue.reason.expected;
-                fixTooltip = d.fixTooltipRetag(expected);
-            } else {
-                const labels = this.formatAmbiguousLabels(
-                    issue.reason.oneOnOnes,
-                    issue.reason.recurring
-                );
-                pillText = d.reasonAmbiguous;
-                detailText = d.detailAmbiguous(labels.join(", "));
-            }
-            header.createSpan({ cls: "mc-status-pill mc-issue-pill", text: pillText });
-            if (fixIdentity) {
-                const identity = fixIdentity;
-                const fixBtn = header.createEl("button", {
-                    cls: "mc-cal-event-btn",
-                    attr: { "aria-label": fixTooltip, title: fixTooltip },
-                });
-                setIcon(fixBtn, "wrench");
-                fixBtn.addEventListener("click", (e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    if (file instanceof TFile) {
-                        this.confirmMetadataFix([file], identity, () =>
-                            void this.renderNoteIssues(section, true)
-                        );
-                    }
-                });
-            }
-            noteBody.createDiv({ cls: "mc-issue-detail", text: detailText });
-        }
-    }
 
     /**
      * Shared renderer for the action-items and follow-ups dashboard sections —

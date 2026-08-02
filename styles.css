@@ -412,51 +412,6 @@
 	color: var(--mc-cal-text);
 }
 
-/* ---- "Notes with issues" — vault-wide metadata sanity check, collapsed by
- * default. Reuses the agenda's own "Earlier today" collapse pattern for the
- * header/chevron, and the action-items/follow-ups card-row style for each
- * flagged note — this lists notes, not "meetings": many of them won't carry
- * any meeting metadata at all, so there's nothing meeting-shaped to show. */
-
-.mc-issues-head {
-	/* .mc-cal-earlier's own top border is for separating it from a list above
-	 * it (the agenda); here it's the first thing in its own card. */
-	border-top: none;
-}
-
-.mc-issues-head .mc-cal-earlier-head {
-	/* The card (.mc-dash-section) already supplies the outer padding. */
-	padding: 0 0 12px;
-}
-
-.mc-issues-head.is-collapsed .mc-cal-earlier-head {
-	padding-bottom: 0;
-}
-
-.mc-issues-title {
-	margin: 0;
-	flex: 1 1 auto;
-}
-
-.mc-issue-note {
-	--mc-cal-accent: var(--mc-cal-accent-live);
-}
-
-/* Title + pill + fix button on one line (same shape as the action-items
- * rows' header); the suggestion text is its own line below, wrapping
- * normally rather than being squeezed and ellipsized next to the title. */
-.mc-issue-pill {
-	flex: none;
-	background: color-mix(in oklch, var(--mc-cal-accent-live) 30%, var(--mc-cal-chip));
-	color: var(--mc-cal-text);
-}
-
-.mc-issue-detail {
-	margin-top: 2px;
-	font-size: 11px;
-	color: var(--mc-cal-muted);
-}
-
 /* ---- Meetings (upcoming/past) — reuses the agenda's own .mc-cal-event card
  * rows (see the "Coming up" section below) so the dashboard reads as one
  * product with the agenda instead of a separate, plainer spreadsheet. ---- */
@@ -633,6 +588,20 @@ ul.mc-action-tasks {
 .mc-action-task-text strong,
 .mc-action-task-text b {
 	font-weight: 700;
+}
+
+/* Content carried verbatim from the participant's own notes/action items/
+ * follow-ups is marked with Obsidian's `==highlight==` syntax (see
+ * enrich/prompt.ts) so it's spot-checkable — but Obsidian's default
+ * highlighter-yellow fill is too loud for a quiet marker meant to be
+ * glanced at, not shouted. A thin accent underline instead, scoped to our
+ * own rendered task text so the user's own manual highlights elsewhere in
+ * the vault are untouched. */
+.mc-action-task-text mark {
+	background: transparent;
+	color: inherit;
+	border-bottom: 2px solid var(--interactive-accent);
+	padding: 0;
 }
 
 /* Clicking a task jumps to its own note/line — useful since a group can
@@ -1591,6 +1560,19 @@ ul.mc-action-tasks {
 	--callout-color: 136, 136, 136;
 	--callout-icon: lucide-sparkles;
 	background-color: rgba(136, 136, 136, 0.08);
+}
+
+/* Content carried verbatim from the participant's own notes/action items/
+ * follow-ups is marked with `==highlight==` (see enrich/prompt.ts) so it's
+ * spot-checkable — but Obsidian's default highlighter-yellow fill is too
+ * loud for a quiet marker meant to be glanced at, not shouted. A thin accent
+ * underline instead (matches the dashboard's own equivalent), scoped to our
+ * own callout so the user's own manual highlights elsewhere are untouched. */
+.callout[data-callout="ai-notes"] mark {
+	background: transparent;
+	color: inherit;
+	border-bottom: 2px solid var(--interactive-accent);
+	padding: 0;
 }
 
 /* "Toggle AI notes" command hides every enriched block. */

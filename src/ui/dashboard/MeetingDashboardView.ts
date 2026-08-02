@@ -16,12 +16,6 @@ export interface DashboardViewHost {
 	renderPastMeetings(el: HTMLElement, page?: number, force?: boolean): Promise<void>;
 	renderActionItems(el: HTMLElement, page?: number, force?: boolean): Promise<void>;
 	renderFollowUps(el: HTMLElement, page?: number, force?: boolean): Promise<void>;
-	/**
-	 * The "Notes with issues" sanity check — deliberately not tracked by
-	 * {@link trackDashboardBlock}: it scans once per dashboard open and
-	 * otherwise only on its own explicit Refresh click.
-	 */
-	renderNoteIssues(el: HTMLElement, force?: boolean): Promise<void>;
 	trackDashboardBlock(el: HTMLElement, rerender: () => void): void;
 	openSettings(): void;
 }
@@ -95,18 +89,6 @@ export class MeetingDashboardView extends ItemView {
 				void this.host.renderFollowUps(body, this.blockPage(body), true)
 			);
 		});
-
-		// Its own card, not `renderSection` — it builds its own collapsible
-		// header (title + count + refresh) rather than a static title, and
-		// deliberately isn't tracked for auto-refresh (see the host interface).
-		// `force: true` because the underlying scan cache lives on the plugin
-		// instance, not this view — without it, reopening the dashboard tab
-		// later in the same Obsidian session would silently reuse whatever
-		// was cached on its *previous* open instead of scanning fresh.
-		void this.host.renderNoteIssues(
-			root.createDiv({ cls: "mc-dash-section" }),
-			true
-		);
 	}
 
 	async onClose(): Promise<void> {

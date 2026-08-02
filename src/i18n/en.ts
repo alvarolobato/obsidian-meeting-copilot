@@ -358,21 +358,12 @@ export const en = {
 			taskError: (msg: string) =>
 				`Couldn't complete the follow-up: ${msg}`,
 		},
-		// The vault-wide metadata sanity check — collapsed by default, low
-		// priority (see main.ts's renderNoteIssues doc comment).
+		// Tooltips for the identity-issue fix/info buttons inline in "Past
+		// meetings" rows (see main.ts's scanNoteIssues doc comment) — a
+		// vault-wide sanity check, low priority, not live-tracked.
 		issues: {
-			title: "Notes with issues",
-			empty: "No issues found.",
-			loading: "Scanning…",
-			refresh: "Refresh",
 			fixTooltipTag: (label: string) => `Tag as ${label}`,
 			fixTooltipRetag: (label: string) => `Retag as ${label}`,
-			reasonMissing: "Missing tag",
-			reasonOutlier: "Mismatched tag",
-			reasonAmbiguous: "Ambiguous folder",
-			detailMissing: (label: string) => `Folder suggests ${label}`,
-			detailOutlier: (actual: string, expected: string) =>
-				`Tagged as ${actual}, but folder suggests ${expected}`,
 			detailAmbiguous: (labels: string) =>
 				`Folder has conflicting tags: ${labels}`,
 		},
