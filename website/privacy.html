@@ -49,7 +49,7 @@
 	<main class="article">
 		<div class="wrap">
 			<h1>Privacy Policy</h1>
-			<p class="updated">Last updated: 31 July 2026</p>
+			<p class="updated">Last updated: 3 August 2026</p>
 
 			<p>
 				Meeting Copilot is an open-source <a href="https://obsidian.md">Obsidian</a>
@@ -119,6 +119,26 @@
 				only on-device transcription and skip enrichment, nothing leaves your Mac.
 			</p>
 
+			<h2>Data protection mechanisms</h2>
+			<p>
+				Because the plugin handles sensitive data — calendar events contain attendee
+				email addresses, meeting titles, descriptions, and scheduling details, and
+				OAuth tokens grant ongoing read access to your calendar — we apply the
+				following protections:
+			</p>
+			<ul>
+				<li><strong>Encrypted in transit.</strong> All communication with Google APIs (<code>accounts.google.com</code>, <code>oauth2.googleapis.com</code>, <code>www.googleapis.com</code>) uses HTTPS/TLS. No data is ever sent over an unencrypted connection.</li>
+				<li><strong>No developer-side storage — no at-rest encryption risk.</strong> The developer retains absolutely no Google user data. There is no server, no database, and no cloud storage operated by the developer, so there is no developer-side at-rest data to secure or breach. All data at rest exists only on your device, in your Obsidian vault, protected by your operating system's file-system permissions. We strongly encourage enabling full-disk encryption (FileVault on macOS).</li>
+				<li><strong>No developer server.</strong> There is no Meeting Copilot backend that could be breached or subpoenaed. Data flows only between your device and Google's own endpoints.</li>
+				<li><strong>OAuth tokens kept out of sync.</strong> Tokens are stored in Obsidian's per-vault <em>local</em> storage, which is explicitly excluded from vault sync (e.g. Obsidian Sync, iCloud, Dropbox). They never travel outside your device.</li>
+				<li><strong>Google data held in memory until you act.</strong> Calendar event data (titles, attendees, descriptions) is fetched into memory and only written to disk when you explicitly choose to create a meeting note. If you close Obsidian without creating a note, that data is discarded.</li>
+				<li><strong>Contacts cache stored locally in your vault.</strong> The optional local cache of resolved contact names (<code>directory-cache.json</code>) is written inside your vault folder. It never leaves your device and you can delete it at any time.</li>
+				<li><strong>Minimum necessary access.</strong> The default app requests only <code>calendar.readonly</code> — the narrowest scope sufficient for the feature. The plugin never requests write access and cannot modify your calendar.</li>
+				<li><strong>Open-source and auditable.</strong> The plugin's full source code is published at <a href="https://github.com/alvarolobato/obsidian-meeting-copilot">github.com/alvarolobato/obsidian-meeting-copilot</a>. Anyone can inspect exactly how data is fetched, stored, and used.</li>
+				<li><strong>No data sent to the developer.</strong> The developer has no way to access your Google data, notes, recordings, or tokens. There is no telemetry, analytics pipeline, or crash-reporting mechanism that transmits user data to the developer.</li>
+				<li><strong>User controls all AI/transcription endpoints.</strong> If you enable transcription or AI enrichment, you supply your own API key and endpoint URL. Data goes to the service you chose, under your account — not to the developer.</li>
+			</ul>
+
 			<h2>Data retention and deletion</h2>
 			<ul>
 				<li>Notes and recordings live in your vault; delete them like any other file. Recordings can be auto-pruned by the retention setting (only after a transcript is saved).</li>
@@ -146,12 +166,32 @@
 				<li>Issues: <a href="https://github.com/alvarolobato/obsidian-meeting-copilot/issues">github.com/alvarolobato/obsidian-meeting-copilot/issues</a></li>
 			</ul>
 
+			<h2>Security incidents</h2>
+			<p>
+				Because the developer retains no Google user data, the realistic security
+				incident is compromise of the OAuth client credentials (client ID / client
+				secret). In the event of any such incident, we will promptly notify
+				<a href="mailto:security@google.com">security@google.com</a> and publish
+				details in the plugin's
+				<a href="https://github.com/alvarolobato/obsidian-meeting-copilot/issues">GitHub issue tracker</a>.
+				Users should revoke the plugin's access at
+				<a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>
+				until a patched version is available.
+			</p>
+
 			<h2>Compliance with Google API Services User Data Policy</h2>
 			<p>
 				Meeting Copilot's use and transfer of information received from Google APIs
 				adheres to the
 				<a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>,
 				including the Limited Use requirements.
+			</p>
+			<p>
+				The use of raw or derived user data received from Google Workspace APIs —
+				including any data aggregated, anonymized, or derived from those scopes — will
+				not be used to develop, improve, or train generalized AI or ML models. This
+				applies to all data obtained via <code>calendar.readonly</code>,
+				<code>directory.readonly</code>, and <code>cloud-identity.groups.readonly</code>.
 			</p>
 		</div>
 	</main>
