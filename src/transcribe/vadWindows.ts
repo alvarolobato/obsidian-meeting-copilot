@@ -84,6 +84,11 @@ async function probeDurationSeconds(app: App, file: TFile): Promise<number | nul
 	return new Promise((resolve) => {
 		const audio = new Audio();
 		let settled = false;
+		// Declared before `finish` (which closes over it) even though every
+		// caller of `finish` already runs strictly after the `setTimeout` below —
+		// event listeners aren't attached until after it — so a future reorder
+		// can't reintroduce a TDZ access.
+		let timer: ReturnType<typeof setTimeout>;
 		const finish = (result: number | null): void => {
 			if (settled) return;
 			settled = true;
@@ -98,7 +103,7 @@ async function probeDurationSeconds(app: App, file: TFile): Promise<number | nul
 			finish(Number.isFinite(d) ? d : null);
 		};
 		const onError = (): void => finish(null);
-		const timer = setTimeout(() => finish(null), DURATION_PROBE_TIMEOUT_MS);
+		timer = setTimeout(() => finish(null), DURATION_PROBE_TIMEOUT_MS);
 		audio.addEventListener("loadedmetadata", onLoaded);
 		audio.addEventListener("error", onError);
 		audio.preload = "metadata";

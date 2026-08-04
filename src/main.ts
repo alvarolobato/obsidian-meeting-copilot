@@ -2120,9 +2120,12 @@ export default class SystemRecordingPlugin extends Plugin {
 	 * (in-app when focused, OS notification otherwise) pattern as
 	 * {@link promptStopRecording} — a stuck/forgotten recording is exactly the
 	 * case where the user may be away from Obsidian, so the OS channel matters
-	 * here more than most prompts.
+	 * here more than most prompts. Also supersedes every other live prompt, same
+	 * as {@link promptStopRecording}, so this doesn't stack a second overlapping
+	 * OS notification on top of e.g. a live "meeting ended, stop?" prompt.
 	 */
 	private promptMaxRecordingWarning(maxHours: number): void {
+		this.dismissAllLivePrompts();
 		const title = t().event.maxRecordingWarningTitle;
 		const body = t().event.maxRecordingWarning(maxHours);
 		const keepRecording = (): void => {
@@ -2154,7 +2157,12 @@ export default class SystemRecordingPlugin extends Plugin {
 	 * branch already accounts for) without a second timer to keep in sync.
 	 */
 	private checkMaxRecordingLength(elapsedSeconds: number): void {
-		if (!this.recorder.isRecording) return;
+		// A stop already in flight (stop-file written, helper still finalizing)
+		// must not re-fire "stop"/re-notice every tick until the helper's
+		// "stopped" status lands and clears the duration timer — finalize scales
+		// with recording length, so for the very long recordings this exists to
+		// catch, that window is the opposite of instant.
+		if (!this.recorder.isRecording || this.isStopInProgress()) return;
 		const maxHours = this.settings.maxRecordingHours;
 		const action = maxRecordingAction({
 			elapsedSeconds,
@@ -2186,9 +2194,11 @@ export default class SystemRecordingPlugin extends Plugin {
 	/**
 	 * Warns that the recording has seen no speech for `silenceAutoStopMinutes`
 	 * and will be force-stopped, with a "Keep recording" action to cancel. Same
-	 * single-channel dual-prompt pattern as {@link promptMaxRecordingWarning}.
+	 * single-channel dual-prompt pattern — including superseding every other
+	 * live prompt — as {@link promptMaxRecordingWarning}.
 	 */
 	private promptSilenceWarning(thresholdMinutes: number): void {
+		this.dismissAllLivePrompts();
 		const title = t().event.silenceWarningTitle;
 		const body = t().event.silenceWarning(thresholdMinutes);
 		const keepRecording = (): void => {
@@ -2220,7 +2230,9 @@ export default class SystemRecordingPlugin extends Plugin {
 	 * anything computed from the duration-timer tick itself.
 	 */
 	private checkSilenceAutoStop(): void {
-		if (!this.recorder.isRecording) return;
+		// See the same guard in checkMaxRecordingLength: a stop already in
+		// flight must not re-fire every tick while finalize is still running.
+		if (!this.recorder.isRecording || this.isStopInProgress()) return;
 		const thresholdMinutes = this.settings.silenceAutoStopMinutes;
 		const action = silenceAutoStopAction({
 			silentSeconds: this.lastSilentSeconds,
