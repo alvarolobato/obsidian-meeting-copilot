@@ -106,8 +106,14 @@ private func decodePCM16kMono(_ url: URL, startSeconds: Double = 0) throws -> [F
 
     let srcFormat = file.processingFormat
     if startSeconds > 0 {
-        let startFrame = AVAudioFramePosition((startSeconds * srcFormat.sampleRate).rounded())
-        file.framePosition = min(max(startFrame, 0), file.length)
+        // Clamp in Double space before the Int64 conversion below: a bogus or
+        // corrupted `startSeconds` (well outside the file's actual length)
+        // would otherwise trap ("Double value cannot be converted to Int64")
+        // instead of failing gracefully — AVAudioFramePosition's init is a
+        // narrowing conversion, not a throwing one.
+        let rawFrame = (startSeconds * srcFormat.sampleRate).rounded()
+        let clampedFrame = min(max(rawFrame, 0), Double(file.length))
+        file.framePosition = AVAudioFramePosition(clampedFrame)
     }
     let frameCount = file.length - file.framePosition
     guard frameCount > 0 else { return [] }
@@ -213,6 +219,11 @@ private func runJob(
     wantSegments: Bool,
     startOffsetSec: Double = 0
 ) throws {
+    // Symmetric with decodePCM16kMono's `startSeconds > 0` seek guard: a
+    // non-positive offset means "nothing was trimmed," so segment timestamps
+    // must not be shifted either — a negative offset here would silently
+    // desync them from the un-seeked decode.
+    let offsetSec = max(startOffsetSec, 0)
     // whisper_full takes the sample count as an Int32; guard against wrap on an
     // absurdly long recording (> ~37 h at 16 kHz) rather than passing a negative
     // count into the C API.
@@ -282,8 +293,8 @@ private func runJob(
             // whisper's t0/t1 are relative to the (possibly trimmed) samples we
             // handed it; add back the seek offset so segments stay on the same
             // absolute original-file clock the VAD/RMS windows use.
-            let start = Double(whisper_full_get_segment_t0(ctx, i)) / 100.0 + startOffsetSec
-            let end = Double(whisper_full_get_segment_t1(ctx, i)) / 100.0 + startOffsetSec
+            let start = Double(whisper_full_get_segment_t0(ctx, i)) / 100.0 + offsetSec
+            let end = Double(whisper_full_get_segment_t1(ctx, i)) / 100.0 + offsetSec
             segments.append([
                 "start": start,
                 "end": end,
