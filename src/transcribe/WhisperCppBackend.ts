@@ -20,11 +20,15 @@
  * the orchestrator's post-loop check covers the impossible case regardless.
  *
  * A job's `speechWindows` (the remote pre-gate that trims silence off the
- * upload, issue #67) are intentionally NOT forwarded: there's no network upload
- * to shrink on-device, and the diarized merge already drops out-of-window and
- * hallucinated segments after the fact, so correctness holds. Whole-file local
- * passes just spend some compute on silence; trimming the decode to windows is
- * a future optimization, not a correctness requirement.
+ * upload, issue #67) are NOT used to trim the *upload* here — there's no
+ * network cost to shrink on-device — but the first window's start (padded) IS
+ * forwarded as `trimStartSeconds`, a correctness requirement, not an
+ * optimization: whisper.cpp fed one continuous decode spanning a long silent
+ * lead-in gets its internal decoder state stuck emitting near-empty output and
+ * never recovers for the rest of the file (reproduced with a real ~16-minute
+ * lead-in — see `computeTrimStartSeconds`). The diarized merge's window filter
+ * still runs after the fact for everything else (interior gaps, hallucinated
+ * filler); this only protects against the specific long-lead-in failure mode.
  *
  * No internal serial queue (the remote backend needs one only to guard a
  * process-global endpoint seam, which this backend doesn't have). Concurrent
@@ -93,6 +97,36 @@ interface ManifestJob {
 	id: string;
 	audio: string;
 	segments: boolean;
+	/** Seconds to seek past before decoding starts; see `computeTrimStartSeconds`. */
+	trimStartSeconds?: number;
+}
+
+/**
+ * Generous padding kept before the first detected speech window when trimming
+ * the leading silence handed to whisper.cpp. Deliberately large: getting this
+ * wrong by clipping real speech is a worse outcome than leaving a bit of extra
+ * silence, and the fix only needs to keep the lead-in far below whatever
+ * length actually triggers whisper.cpp's decoder-stuck failure (a real
+ * ~16-minute lead-in reproduced it; 30s is nowhere close).
+ */
+const LEADING_SILENCE_TRIM_PADDING_SECONDS = 30;
+
+/**
+ * How far into a stream to seek before handing it to whisper.cpp, or
+ * `undefined` to transcribe from the start (no trustworthy windows, or not
+ * enough leading silence to bother). Only ever trims the *lead-in* — a long
+ * silent *tail* doesn't trigger the decoder-stuck failure this exists for
+ * (nothing comes after it to corrupt), so leaving it alone is both simpler and
+ * lower-risk than also computing a trailing cut point.
+ */
+export function computeTrimStartSeconds(
+	windows: Array<[number, number]> | undefined
+): number | undefined {
+	if (!windows || windows.length === 0) return undefined;
+	const firstStart = windows.reduce((min, [start]) => Math.min(min, start), Infinity);
+	if (!Number.isFinite(firstStart)) return undefined;
+	const trimStart = firstStart - LEADING_SILENCE_TRIM_PADDING_SECONDS;
+	return trimStart > 0 ? trimStart : undefined;
 }
 
 /** A JSON string field, or the fallback when it's absent or a non-string. */
@@ -144,6 +178,7 @@ export class WhisperCppBackend implements TranscriptionBackend {
 				id: job.id,
 				audio: this.deps.resolveAudioPath(job.file),
 				segments: job.wantSegments,
+				trimStartSeconds: computeTrimStartSeconds(job.speechWindows),
 			})),
 		};
 		const manifestPath = await this.deps.writeManifest(JSON.stringify(manifest));
