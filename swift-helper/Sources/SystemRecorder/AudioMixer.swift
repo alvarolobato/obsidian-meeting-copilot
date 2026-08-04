@@ -131,6 +131,14 @@ final class AudioMixer: @unchecked Sendable {
     /// must be visible to `secondsSinceLoudAudio` even while the system-audio
     /// thread holds its own stream lock, and vice versa. Starts at `init` time,
     /// so a meeting that's silent from the very first buffer already counts.
+    ///
+    /// Deliberately locked on both write and read, unlike `capturedFrames`'
+    /// documented lock-free "tolerable torn read" for a similar cross-thread
+    /// heuristic: `Date` isn't as clearly torn-read-safe under Swift's memory
+    /// model as a plain `Int`/`AVAudioFramePosition`, and the mic tap — the one
+    /// genuinely real-time-sensitive caller — already does a blocking file
+    /// write in this same callback, so an uncontended `NSLock` here adds no
+    /// new category of real-time risk.
     private let silenceLock = NSLock()
     private var lastLoudAt = Date()
 
