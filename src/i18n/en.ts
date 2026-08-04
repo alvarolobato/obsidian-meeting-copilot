@@ -226,6 +226,13 @@ export const en = {
 		dismiss: "Dismiss",
 		autoStarted: (title: string) => `Recording "${title}"`,
 		autoStopped: (title: string) => `"${title}" ended — recording stopped`,
+		// Max-recording-length safety cap (checkMaxRecordingLength).
+		maxRecordingWarningTitle: "Recording will stop soon",
+		maxRecordingWarning: (hours: number) =>
+			`This recording has run for ${hours}h and will stop automatically in 30s.`,
+		maxRecordingWarningCancel: "Keep recording",
+		maxRecordingStopped: (hours: number) =>
+			`Recording auto-stopped after ${hours}h (safety limit)`,
 	},
 	agenda: {
 		title: "Meetings",
@@ -595,6 +602,14 @@ export const en = {
 		detectionInterval: {
 			name: "Detection interval (seconds)",
 			desc: "How often to check for a meeting in progress (3–120).",
+		},
+		detectionAutoStop: {
+			name: "Auto-stop when meeting ends",
+			desc: "Stop the recording automatically when a detected Zoom/Google Meet call ends, instead of only prompting. Separate from calendar auto-stop, which can cut off a meeting that's simply running long — this only reacts to the meeting itself ending.",
+		},
+		maxRecordingHours: {
+			name: "Max recording length (hours)",
+			desc: "Force-stop any recording that runs this long, as a safety net against a forgotten or stuck recording. You'll get a warning with a \"Keep recording\" option 30 seconds before it stops. 0 disables the cap (0–24).",
 		},
 		endpointHeading: "AI endpoint",
 		apiBaseUrl: {

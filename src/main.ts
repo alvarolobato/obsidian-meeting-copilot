@@ -158,6 +158,7 @@ import {
 	PEOPLE_MAX_REQUESTS_PER_MINUTE,
 	PeopleApiRateLimiter,
 } from "./calendar/directoryCache";
+import { maxRecordingAction } from "./recordings/maxRecordingLength";
 import { findExpiredRecordings, underFolder } from "./recordings/retention";
 
 /** Note section that holds personal action-item checkboxes (obsidian-tasks compatible). */
@@ -297,6 +298,12 @@ type TranscribeTakeResult =
  */
 const FVAD_PROVISION_TIMEOUT_MS = 15_000;
 
+/**
+ * How long before the `maxRecordingHours` cutoff to warn, with a chance to
+ * cancel, before force-stopping. See `checkMaxRecordingLength`.
+ */
+const MAX_RECORDING_WARNING_SECONDS = 30;
+
 export default class SystemRecordingPlugin extends Plugin {
     settings: SystemRecordingSettings;
     private recorder = new Recorder();
@@ -310,6 +317,15 @@ export default class SystemRecordingPlugin extends Plugin {
     private statusTimeout: number | null = null;
     private durationInterval: number | null = null;
     private recordingStartTime: number | null = null;
+    /** Live "recording will stop soon" prompt from `checkMaxRecordingLength`, if any. */
+    private maxRecordingWarningNotice: DualChannelController | null = null;
+    /**
+     * True once the user dismisses the max-recording-length warning ("Keep
+     * recording"). Suppresses further warnings/auto-stop for the rest of this
+     * recording session — an explicit choice to keep going shouldn't be
+     * re-litigated every second. Reset when a new recording starts.
+     */
+    private maxRecordingCancelled = false;
     /** Hover popover listing the task queue (running + next few waiting), with per-item cancel. */
     private queuePopoverEl: HTMLElement | null = null;
     /** True while the pointer is over the status bar item or the popover (keeps it shown). */
@@ -1239,6 +1255,7 @@ export default class SystemRecordingPlugin extends Plugin {
                     inputDeviceUid,
                 });
                 this.recordingStartTime = Date.now();
+                this.maxRecordingCancelled = false;
                 this.startDurationTimer();
                 this.updateRibbonIcon(true);
                 this.agendaEvents.emit("changed", undefined);
@@ -1263,6 +1280,7 @@ export default class SystemRecordingPlugin extends Plugin {
         }
 
         this.dismissStopPrompt();
+        this.dismissMaxRecordingWarning();
         if (this.recorder.hasStopBeenSignaled) {
             if (showNotice) new Notice(t().notices.stoppingRecording);
             return;
@@ -1688,15 +1706,19 @@ export default class SystemRecordingPlugin extends Plugin {
 	}
 
 	/**
-	 * When a detected meeting ends, never stop the recording on its own — offer
-	 * to stop instead, for both ad-hoc and scheduled recordings. (Auto-stop only
-	 * ever happens at a calendar event's own end when the user opted into it; see
-	 * {@link handleEventEnd}.)
+	 * When a detected meeting ends, offer to stop the recording by default, for
+	 * both ad-hoc and scheduled recordings — unless `detectionAutoStop` is on,
+	 * in which case it stops automatically instead. This is deliberately a
+	 * separate opt-in from `calendarAutoStop` (see {@link handleEventEnd}): a
+	 * meeting that runs past its *calendar* slot shouldn't be cut off just
+	 * because the scheduled end time passed, but once the detector sees the
+	 * meeting itself actually end, that's a real signal.
 	 */
 	private onMeetingEnded(app: string): void {
 		// The detected meeting is over, so a pending "record?" prompt for it is
-		// moot — drop its in-app notice whether or not we go on to offer a stop
-		// below, but keep the OS notification recoverable in Notification Center.
+		// moot — drop its in-app notice whether or not we go on to stop/offer a
+		// stop below, but keep the OS notification recoverable in Notification
+		// Center.
 		this.dismissMeetingNotice(`detect:${app}`, { keepOs: true });
 		// Ignore if detection was disabled meanwhile (an in-flight poll's onEnd
 		// must not prompt after the user opted out), and only act once *all*
@@ -1704,6 +1726,13 @@ export default class SystemRecordingPlugin extends Plugin {
 		// doesn't prompt while another is still live.
 		if (!this.detector || this.detector.activeCount() > 0) return;
 		if (!this.recorder.isRecording) return;
+		if (this.settings.detectionAutoStop) {
+			const title =
+				this.currentMeetingNote?.basename ?? t().adhoc.defaultTitle;
+			new Notice(t().event.autoStopped(title));
+			this.stopRecording({ notice: false });
+			return;
+		}
 		this.promptStopRecording(t().detect.ended(app), t().event.stopRecordingPrompt);
 	}
 
@@ -2053,6 +2082,75 @@ export default class SystemRecordingPlugin extends Plugin {
 	private dismissStopPrompt(): void {
 		this.stopPromptNotice?.dispose();
 		this.stopPromptNotice = null;
+	}
+
+	/** Drops the live max-recording-length warning prompt, if any. */
+	private dismissMaxRecordingWarning(): void {
+		this.maxRecordingWarningNotice?.dispose();
+		this.maxRecordingWarningNotice = null;
+	}
+
+	/**
+	 * Warns that the recording is about to hit `maxRecordingHours` and will be
+	 * force-stopped, with a "Keep recording" action to cancel. Same single-channel
+	 * (in-app when focused, OS notification otherwise) pattern as
+	 * {@link promptStopRecording} — a stuck/forgotten recording is exactly the
+	 * case where the user may be away from Obsidian, so the OS channel matters
+	 * here more than most prompts.
+	 */
+	private promptMaxRecordingWarning(maxHours: number): void {
+		const title = t().event.maxRecordingWarningTitle;
+		const body = t().event.maxRecordingWarning(maxHours);
+		const keepRecording = (): void => {
+			this.dismissMaxRecordingWarning();
+			this.maxRecordingCancelled = true;
+		};
+		this.maxRecordingWarningNotice = this.startOsPrompt({
+			title,
+			body,
+			webHint: t().event.notificationWebHint,
+			onClick: () => {},
+			actions: [{ text: t().event.maxRecordingWarningCancel, run: keepRecording }],
+			showInApp: () =>
+				actionNotice(
+					`${title} — ${body}`,
+					t().event.maxRecordingWarningCancel,
+					keepRecording
+				),
+		});
+	}
+
+	/**
+	 * Safety net against a forgotten/stuck recording (a real ~15h accidental
+	 * recording OOM-crashed transcription once — see `vadWindows.ts`'s duration
+	 * guard). Warns `MAX_RECORDING_WARNING_SECONDS` before `maxRecordingHours`
+	 * with a chance to cancel, then force-stops. Driven by the 1s duration-timer
+	 * tick rather than its own `setTimeout`, so it naturally tracks wall-clock
+	 * elapsed time (including any sleep gap the tick's own sleep-detection
+	 * branch already accounts for) without a second timer to keep in sync.
+	 */
+	private checkMaxRecordingLength(elapsedSeconds: number): void {
+		if (!this.recorder.isRecording) return;
+		const maxHours = this.settings.maxRecordingHours;
+		const action = maxRecordingAction({
+			elapsedSeconds,
+			maxHours,
+			warningSeconds: MAX_RECORDING_WARNING_SECONDS,
+			warningAlreadyShown: this.maxRecordingWarningNotice !== null,
+			cancelled: this.maxRecordingCancelled,
+		});
+		switch (action) {
+			case "stop":
+				this.dismissMaxRecordingWarning();
+				new Notice(t().event.maxRecordingStopped(maxHours));
+				this.stopRecording({ notice: false });
+				break;
+			case "warn":
+				this.promptMaxRecordingWarning(maxHours);
+				break;
+			case "none":
+				break;
+		}
 	}
 
 	/**
@@ -6689,6 +6787,8 @@ export default class SystemRecordingPlugin extends Plugin {
             const elapsed = Math.floor(
                 (now - this.recordingStartTime) / 1000
             );
+            this.checkMaxRecordingLength(elapsed);
+            if (!this.recorder.isRecording) return;
             const h = String(Math.floor(elapsed / 3600)).padStart(2, "0");
             const m = String(Math.floor((elapsed % 3600) / 60)).padStart(2, "0");
             const s = String(elapsed % 60).padStart(2, "0");
@@ -6731,9 +6831,10 @@ export default class SystemRecordingPlugin extends Plugin {
         this.currentMeetingNote = null;
         this.currentRecordingEventId = null;
         this.currentRecordingEventEnd = null;
-        // Recording has ended, so any "meeting ended — stop recording?" prompt is
-        // moot; drop it.
+        // Recording has ended, so any "meeting ended — stop recording?" prompt or
+        // max-length warning is moot; drop them.
         this.dismissStopPrompt();
+        this.dismissMaxRecordingWarning();
         this.agendaEvents.emit("changed", undefined);
         // A stop that ends without going through attachRecording (no file, or an
         // error) must still release any back-to-back waiter.
