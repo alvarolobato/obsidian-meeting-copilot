@@ -170,6 +170,14 @@ export interface SystemRecordingSettings {
 	 * `MAX_RECORDING_WARNING_SECONDS` before the cutoff. `0` disables the cap.
 	 */
 	maxRecordingHours: number;
+	/**
+	 * Earlier, more targeted safety net than `maxRecordingHours`: force-stops
+	 * a recording after this many minutes with no detected speech on either
+	 * stream (the common real shape of a forgotten recording — an empty room,
+	 * not necessarily an open meeting app). Same warning-then-stop UX as the
+	 * max-length cap. `0` disables it.
+	 */
+	silenceAutoStopMinutes: number;
 	agendaLookAheadDays: number;
 	agendaLookBackDays: number;
 	/** Where the "Coming up" agenda opens: a main-panel tab or the right sidebar. */
@@ -328,6 +336,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	detectionIntervalSeconds: 10,
 	detectionAutoStop: false,
 	maxRecordingHours: 6,
+	silenceAutoStopMinutes: 10,
 	agendaLookAheadDays: 7,
 	agendaLookBackDays: 7,
 	agendaPlacement: "main",
@@ -1448,6 +1457,21 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                         const n = Number.parseInt(value, 10);
                         this.plugin.settings.maxRecordingHours =
                             Number.isFinite(n) && n >= 0 ? Math.min(n, 24) : 6;
+                        await this.plugin.saveSettings();
+                    });
+            });
+
+        new Setting(containerEl)
+            .setName(s.settings.silenceAutoStopMinutes.name)
+            .setDesc(s.settings.silenceAutoStopMinutes.desc)
+            .addText((text) => {
+                text.inputEl.type = "number";
+                text
+                    .setValue(String(this.plugin.settings.silenceAutoStopMinutes))
+                    .onChange(async (value) => {
+                        const n = Number.parseInt(value, 10);
+                        this.plugin.settings.silenceAutoStopMinutes =
+                            Number.isFinite(n) && n >= 0 ? Math.min(n, 120) : 10;
                         await this.plugin.saveSettings();
                     });
             });

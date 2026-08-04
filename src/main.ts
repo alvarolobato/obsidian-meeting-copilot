@@ -159,6 +159,7 @@ import {
 	PeopleApiRateLimiter,
 } from "./calendar/directoryCache";
 import { maxRecordingAction } from "./recordings/maxRecordingLength";
+import { silenceAutoStopAction } from "./recordings/silenceAutoStop";
 import { findExpiredRecordings, underFolder } from "./recordings/retention";
 
 /** Note section that holds personal action-item checkboxes (obsidian-tasks compatible). */
@@ -299,10 +300,12 @@ type TranscribeTakeResult =
 const FVAD_PROVISION_TIMEOUT_MS = 15_000;
 
 /**
- * How long before the `maxRecordingHours` cutoff to warn, with a chance to
- * cancel, before force-stopping. See `checkMaxRecordingLength`.
+ * How long before an auto-stop cutoff to warn, with a chance to cancel,
+ * before force-stopping. Shared by both recording safety nets: the absolute
+ * `maxRecordingHours` cap (`checkMaxRecordingLength`) and the
+ * `silenceAutoStopMinutes` cap (`checkSilenceAutoStop`).
  */
-const MAX_RECORDING_WARNING_SECONDS = 30;
+const AUTO_STOP_WARNING_SECONDS = 30;
 
 export default class SystemRecordingPlugin extends Plugin {
     settings: SystemRecordingSettings;
@@ -326,6 +329,16 @@ export default class SystemRecordingPlugin extends Plugin {
      * re-litigated every second. Reset when a new recording starts.
      */
     private maxRecordingCancelled = false;
+    /** Live "recording will stop soon" prompt from `checkSilenceAutoStop`, if any. */
+    private silenceWarningNotice: DualChannelController | null = null;
+    /** Same as `maxRecordingCancelled`, for the silence-based auto-stop warning. */
+    private silenceCancelled = false;
+    /**
+     * Seconds of continuous silence last reported by the recorder's status
+     * heartbeat (see `handleStatus`'s `"recording"` branch). `0` until the
+     * first heartbeat arrives after a recording starts.
+     */
+    private lastSilentSeconds = 0;
     /** Hover popover listing the task queue (running + next few waiting), with per-item cancel. */
     private queuePopoverEl: HTMLElement | null = null;
     /** True while the pointer is over the status bar item or the popover (keeps it shown). */
@@ -803,6 +816,10 @@ export default class SystemRecordingPlugin extends Plugin {
 		this.meetingNotices.clear();
 		this.stopPromptNotice?.dispose();
 		this.stopPromptNotice = null;
+		this.maxRecordingWarningNotice?.dispose();
+		this.maxRecordingWarningNotice = null;
+		this.silenceWarningNotice?.dispose();
+		this.silenceWarningNotice = null;
 		// Settle any in-flight auto-transcribe waits so their listeners/timers
 		// don't outlive the plugin.
 		for (const ac of this.pendingAutoTranscribe.values()) ac.abort();
@@ -1158,6 +1175,8 @@ export default class SystemRecordingPlugin extends Plugin {
         // suppression for an earlier handoff still in flight.
         if (replace) {
             this.dismissStopPrompt();
+            this.dismissMaxRecordingWarning();
+            this.dismissSilenceWarning();
             this.replacingDepth++;
         }
         try {
@@ -1256,6 +1275,8 @@ export default class SystemRecordingPlugin extends Plugin {
                 });
                 this.recordingStartTime = Date.now();
                 this.maxRecordingCancelled = false;
+                this.silenceCancelled = false;
+                this.lastSilentSeconds = 0;
                 this.startDurationTimer();
                 this.updateRibbonIcon(true);
                 this.agendaEvents.emit("changed", undefined);
@@ -1281,6 +1302,7 @@ export default class SystemRecordingPlugin extends Plugin {
 
         this.dismissStopPrompt();
         this.dismissMaxRecordingWarning();
+        this.dismissSilenceWarning();
         if (this.recorder.hasStopBeenSignaled) {
             if (showNotice) new Notice(t().notices.stoppingRecording);
             return;
@@ -1820,6 +1842,8 @@ export default class SystemRecordingPlugin extends Plugin {
 	 */
 	private onPromptWindowFocused(): void {
 		this.stopPromptNotice?.onBecameFocused();
+		this.maxRecordingWarningNotice?.onBecameFocused();
+		this.silenceWarningNotice?.onBecameFocused();
 		for (const controller of this.meetingNotices.values()) {
 			controller.onBecameFocused();
 		}
@@ -2123,7 +2147,7 @@ export default class SystemRecordingPlugin extends Plugin {
 	/**
 	 * Safety net against a forgotten/stuck recording (a real ~15h accidental
 	 * recording OOM-crashed transcription once — see `vadWindows.ts`'s duration
-	 * guard). Warns `MAX_RECORDING_WARNING_SECONDS` before `maxRecordingHours`
+	 * guard). Warns `AUTO_STOP_WARNING_SECONDS` before `maxRecordingHours`
 	 * with a chance to cancel, then force-stops. Driven by the 1s duration-timer
 	 * tick rather than its own `setTimeout`, so it naturally tracks wall-clock
 	 * elapsed time (including any sleep gap the tick's own sleep-detection
@@ -2135,7 +2159,7 @@ export default class SystemRecordingPlugin extends Plugin {
 		const action = maxRecordingAction({
 			elapsedSeconds,
 			maxHours,
-			warningSeconds: MAX_RECORDING_WARNING_SECONDS,
+			warningSeconds: AUTO_STOP_WARNING_SECONDS,
 			warningAlreadyShown: this.maxRecordingWarningNotice !== null,
 			cancelled: this.maxRecordingCancelled,
 		});
@@ -2153,6 +2177,72 @@ export default class SystemRecordingPlugin extends Plugin {
 		}
 	}
 
+	/** Drops the live silence-based auto-stop warning prompt, if any. */
+	private dismissSilenceWarning(): void {
+		this.silenceWarningNotice?.dispose();
+		this.silenceWarningNotice = null;
+	}
+
+	/**
+	 * Warns that the recording has seen no speech for `silenceAutoStopMinutes`
+	 * and will be force-stopped, with a "Keep recording" action to cancel. Same
+	 * single-channel dual-prompt pattern as {@link promptMaxRecordingWarning}.
+	 */
+	private promptSilenceWarning(thresholdMinutes: number): void {
+		const title = t().event.silenceWarningTitle;
+		const body = t().event.silenceWarning(thresholdMinutes);
+		const keepRecording = (): void => {
+			this.dismissSilenceWarning();
+			this.silenceCancelled = true;
+		};
+		this.silenceWarningNotice = this.startOsPrompt({
+			title,
+			body,
+			webHint: t().event.notificationWebHint,
+			onClick: () => {},
+			actions: [{ text: t().event.maxRecordingWarningCancel, run: keepRecording }],
+			showInApp: () =>
+				actionNotice(
+					`${title} — ${body}`,
+					t().event.maxRecordingWarningCancel,
+					keepRecording
+				),
+		});
+	}
+
+	/**
+	 * Earlier, more targeted safety net than {@link checkMaxRecordingLength}:
+	 * stops a recording that's had no detected speech on either stream for
+	 * `silenceAutoStopMinutes` — the common real shape of a forgotten
+	 * recording (an empty room, not necessarily an open meeting app). Reads
+	 * `lastSilentSeconds`, kept fresh by `handleStatus`'s `"recording"` branch
+	 * from the helper's live status heartbeat (roughly every 0.5s), rather than
+	 * anything computed from the duration-timer tick itself.
+	 */
+	private checkSilenceAutoStop(): void {
+		if (!this.recorder.isRecording) return;
+		const thresholdMinutes = this.settings.silenceAutoStopMinutes;
+		const action = silenceAutoStopAction({
+			silentSeconds: this.lastSilentSeconds,
+			thresholdMinutes,
+			warningSeconds: AUTO_STOP_WARNING_SECONDS,
+			warningAlreadyShown: this.silenceWarningNotice !== null,
+			cancelled: this.silenceCancelled,
+		});
+		switch (action) {
+			case "stop":
+				this.dismissSilenceWarning();
+				new Notice(t().event.silenceStopped(thresholdMinutes));
+				this.stopRecording({ notice: false });
+				break;
+			case "warn":
+				this.promptSilenceWarning(thresholdMinutes);
+				break;
+			case "none":
+				break;
+		}
+	}
+
 	/**
 	 * Drops every live meeting + stop prompt (closes OS unless a caller already
 	 * disposed with keepOs). Used when starting a recording or posting a new
@@ -2164,6 +2254,8 @@ export default class SystemRecordingPlugin extends Plugin {
 		}
 		this.meetingNotices.clear();
 		this.dismissStopPrompt();
+		this.dismissMaxRecordingWarning();
+		this.dismissSilenceWarning();
 	}
 
 	/**
@@ -6690,6 +6782,13 @@ export default class SystemRecordingPlugin extends Plugin {
                 this.lastWarningAt = now;
                 new Notice(msg);
             }
+        } else if (status.status === "recording") {
+            // Live silence signal for checkSilenceAutoStop, read on the next
+            // duration-timer tick. The helper heartbeats roughly every 0.5s,
+            // well under the minutes-scale threshold this feeds.
+            if (typeof status.silentSeconds === "number") {
+                this.lastSilentSeconds = status.silentSeconds;
+            }
         }
     }
 
@@ -6789,6 +6888,8 @@ export default class SystemRecordingPlugin extends Plugin {
             );
             this.checkMaxRecordingLength(elapsed);
             if (!this.recorder.isRecording) return;
+            this.checkSilenceAutoStop();
+            if (!this.recorder.isRecording) return;
             const h = String(Math.floor(elapsed / 3600)).padStart(2, "0");
             const m = String(Math.floor((elapsed % 3600) / 60)).padStart(2, "0");
             const s = String(elapsed % 60).padStart(2, "0");
@@ -6832,9 +6933,10 @@ export default class SystemRecordingPlugin extends Plugin {
         this.currentRecordingEventId = null;
         this.currentRecordingEventEnd = null;
         // Recording has ended, so any "meeting ended — stop recording?" prompt or
-        // max-length warning is moot; drop them.
+        // max-length/silence warning is moot; drop them.
         this.dismissStopPrompt();
         this.dismissMaxRecordingWarning();
+        this.dismissSilenceWarning();
         this.agendaEvents.emit("changed", undefined);
         // A stop that ends without going through attachRecording (no file, or an
         // error) must still release any back-to-back waiter.

@@ -123,6 +123,50 @@ final class AudioMixer: @unchecked Sendable {
     private let speechWindowSeconds = 0.5
     private let speechMergeGapSeconds = 1.0
 
+    // MARK: - Live silence tracking (silence-based auto-stop safety net)
+
+    /// Wall-clock time either stream last had audio above `speechRMSThreshold`.
+    /// Touched from whichever capture thread's `append()` is running, so it
+    /// gets its own lock rather than a per-stream one — a mic buffer's touch
+    /// must be visible to `secondsSinceLoudAudio` even while the system-audio
+    /// thread holds its own stream lock, and vice versa. Starts at `init` time,
+    /// so a meeting that's silent from the very first buffer already counts.
+    private let silenceLock = NSLock()
+    private var lastLoudAt = Date()
+
+    /// Seconds since either stream last had audio above the RMS speech
+    /// threshold — the live counterpart to the finalize-time speech-window
+    /// analysis below, used by the plugin's silence-based auto-stop (a
+    /// TS-side warn/cancel/stop flow, mirroring `maxRecordingHours`; see
+    /// `main.swift`'s periodic status heartbeat and the plugin's
+    /// `silenceAutoStop.ts`). A coarse heuristic, not real VAD — same
+    /// tradeoff the finalize-time RMS gate already makes.
+    var secondsSinceLoudAudio: Int {
+        silenceLock.lock()
+        defer { silenceLock.unlock() }
+        return Int(Date().timeIntervalSince(lastLoudAt))
+    }
+
+    /// Checks a just-converted buffer's RMS and, if above threshold, marks
+    /// "not silent right now". Called from `append()` for both streams —
+    /// one pass over samples already in hand, cheap next to the
+    /// resampling/writing happening in the same callback.
+    private func noteActivity(_ buffer: AVAudioPCMBuffer) {
+        guard let channelData = buffer.floatChannelData?[0] else { return }
+        let frameCount = Int(buffer.frameLength)
+        guard frameCount > 0 else { return }
+        var sumSquares: Float = 0
+        for i in 0..<frameCount {
+            let sample = channelData[i]
+            sumSquares += sample * sample
+        }
+        let rms = (sumSquares / Float(frameCount)).squareRoot()
+        guard rms > speechRMSThreshold else { return }
+        silenceLock.lock()
+        lastLoudAt = Date()
+        silenceLock.unlock()
+    }
+
     struct SidecarURLs {
         let me: URL
         let them: URL
@@ -253,6 +297,7 @@ final class AudioMixer: @unchecked Sendable {
             do {
                 try stream.file?.write(from: buffer)
                 stream.framesWritten += AVAudioFramePosition(buffer.frameLength)
+                noteActivity(buffer)
             } catch {
                 latchCaptureError(error, on: stream)
             }
@@ -292,6 +337,7 @@ final class AudioMixer: @unchecked Sendable {
         do {
             try stream.file?.write(from: converted)
             stream.framesWritten += AVAudioFramePosition(converted.frameLength)
+            noteActivity(converted)
         } catch {
             latchCaptureError(error, on: stream)
         }

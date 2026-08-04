@@ -233,6 +233,13 @@ export const en = {
 		maxRecordingWarningCancel: "Keep recording",
 		maxRecordingStopped: (hours: number) =>
 			`Recording auto-stopped after ${hours}h (safety limit)`,
+		// Silence-based auto-stop (checkSilenceAutoStop). Reuses
+		// maxRecordingWarningCancel for the "Keep recording" action.
+		silenceWarningTitle: "Recording will stop soon",
+		silenceWarning: (minutes: number) =>
+			`No speech detected for ${minutes} min — recording will stop automatically in 30s.`,
+		silenceStopped: (minutes: number) =>
+			`Recording auto-stopped after ${minutes} min of silence`,
 	},
 	agenda: {
 		title: "Meetings",
@@ -610,6 +617,10 @@ export const en = {
 		maxRecordingHours: {
 			name: "Max recording length (hours)",
 			desc: "Force-stop any recording that runs this long, as a safety net against a forgotten or stuck recording. You'll get a warning with a \"Keep recording\" option 30 seconds before it stops. 0 disables the cap (0–24).",
+		},
+		silenceAutoStopMinutes: {
+			name: "Auto-stop after silence (minutes)",
+			desc: "Force-stop a recording after this many minutes with no detected speech on either the mic or system audio — an earlier, more targeted safety net than the max recording length, for the common case of a forgotten recording in an empty room. Same 30-second warning with a \"Keep recording\" option. 0 disables it (0–120).",
 		},
 		endpointHeading: "AI endpoint",
 		apiBaseUrl: {
