@@ -13,7 +13,8 @@
  * the merge stays aligned. Windows are absolute seconds in the original stream.
  *
  * Everything degrades gracefully: if the WASM is missing (e.g. a BRAT install
- * that didn't fetch the asset) or decoding fails, we return undefined and the
+ * that didn't fetch the asset), a stream is too long to safely decode (see
+ * `MAX_VAD_DURATION_SECONDS`), or decoding fails, we return undefined and the
  * caller falls back to the recorder's speech.json (or no filtering at all).
  */
 import { TFile } from "obsidian";
@@ -48,6 +49,77 @@ const VAD_CONFIG: VADConfig = {
 /** WebRTC VAD's native rate; decode straight to it to skip a second resample. */
 const VAD_SAMPLE_RATE = 16000;
 
+/**
+ * Longest per-stream duration local VAD will attempt to decode. Generous
+ * headroom above any real meeting, decisively below "recording left running
+ * by mistake" (a real 15h recording OOM-crashed the renderer inside
+ * `decodeMono16k` — see the memory note below). Streams longer than this
+ * skip local VAD entirely and fall back to the recorder's RMS `speech.json`
+ * gate, the same quality path already used when `fvad.wasm` is missing.
+ *
+ * Deliberately a duration cap, not a file-size cap: `decodeMono16k`'s memory
+ * cost scales with decoded PCM duration, not encoded bytes, and this
+ * recorder's AAC encoder compression ratio varies a lot with content (a real
+ * 15h recording encoded to just ~1.5 MB/hour, ~20x smaller than its nominal
+ * 64 kbps bitrate target — see `AudioMixer.aacBitRate` — so a byte-size cutoff
+ * sized for "2h of audio" would have let that exact file through).
+ */
+const MAX_VAD_DURATION_SECONDS = 3 * 60 * 60;
+
+/**
+ * How long to wait for a duration probe before giving up on it. Best-effort:
+ * a stuck or unsupported probe must never stall transcription, so a timeout
+ * just means "treat as too long to be safe" (see `probeDurationSeconds`).
+ */
+const DURATION_PROBE_TIMEOUT_MS = 5000;
+
+/**
+ * Cheap metadata-only duration probe: loads just enough of the container to
+ * read its duration (the `mvhd`/`mdhd` atom for m4a), never decoding audio
+ * samples, so it can't hit the same OOM as `decodeMono16k`. Returns null if
+ * the duration can't be determined (missing/corrupt metadata, or the probe
+ * timed out) — callers must treat null as "unknown, assume unsafe."
+ */
+async function probeDurationSeconds(app: App, file: TFile): Promise<number | null> {
+	return new Promise((resolve) => {
+		const audio = new Audio();
+		let settled = false;
+		const finish = (result: number | null): void => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			audio.removeEventListener("loadedmetadata", onLoaded);
+			audio.removeEventListener("error", onError);
+			audio.src = "";
+			resolve(result);
+		};
+		const onLoaded = (): void => {
+			const d = audio.duration;
+			finish(Number.isFinite(d) ? d : null);
+		};
+		const onError = (): void => finish(null);
+		const timer = setTimeout(() => finish(null), DURATION_PROBE_TIMEOUT_MS);
+		audio.addEventListener("loadedmetadata", onLoaded);
+		audio.addEventListener("error", onError);
+		audio.preload = "metadata";
+		audio.src = app.vault.getResourcePath(file);
+	});
+}
+
+/**
+ * Whether either stream is too long (or of unknown duration) for local VAD to
+ * safely decode. Pure so the threshold logic is unit-testable without mocking
+ * `Audio`/Obsidian.
+ */
+export function exceedsVadDurationLimit(
+	meDurationSeconds: number | null,
+	themDurationSeconds: number | null
+): boolean {
+	const tooLong = (d: number | null): boolean =>
+		d === null || d > MAX_VAD_DURATION_SECONDS;
+	return tooLong(meDurationSeconds) || tooLong(themDurationSeconds);
+}
+
 /** Downmix an AudioBuffer to a single Float32 channel. */
 function toMono(buffer: AudioBuffer): Float32Array {
 	if (buffer.numberOfChannels === 1) {
@@ -72,10 +144,12 @@ function toMono(buffer: AudioBuffer): Float32Array {
  *
  * Memory note: this still materializes the full mono stream (~115 MB/hour at
  * 16 kHz Float32) plus the VAD's internal Int16 copy. The two streams are
- * processed serially so only one is resident at a time; for very long
- * meetings (2h+) a streaming/frame-based decode is the proper fix (tracked as
- * a follow-up). If decoding OOMs, computeSpeechWindows swallows it and the
- * caller falls back to the recorder's RMS windows.
+ * processed serially so only one is resident at a time. `computeSpeechWindows`
+ * gates every call here behind `MAX_VAD_DURATION_SECONDS`, which is the real
+ * protection: a genuine renderer OOM aborts the process rather than throwing a
+ * catchable error (confirmed via a crash-report analysis of a real incident),
+ * so the try/catch around this call can only save the caller from ordinary
+ * decode failures, not from an OOM that's already underway.
  */
 export async function decodeMono16k(
 	app: App,
@@ -153,6 +227,16 @@ export async function computeSpeechWindows(
 		if (!(await fvadWasmAvailable(app))) {
 			console.debug(
 				"[Meeting Copilot][vad] fvad.wasm not found; using recorder RMS windows"
+			);
+			return undefined;
+		}
+		const [meDuration, themDuration] = await Promise.all([
+			probeDurationSeconds(app, meFile),
+			probeDurationSeconds(app, themFile),
+		]);
+		if (exceedsVadDurationLimit(meDuration, themDuration)) {
+			console.debug(
+				`[Meeting Copilot][vad] stream too long for local VAD (me=${meDuration ?? "unknown"}s, them=${themDuration ?? "unknown"}s, limit=${MAX_VAD_DURATION_SECONDS}s); using recorder RMS windows`
 			);
 			return undefined;
 		}
