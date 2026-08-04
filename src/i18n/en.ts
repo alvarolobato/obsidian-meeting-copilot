@@ -612,15 +612,15 @@ export const en = {
 		},
 		detectionAutoStop: {
 			name: "Auto-stop when meeting ends",
-			desc: "Stop the recording automatically when a detected Zoom/Google Meet call ends, instead of only prompting. Separate from calendar auto-stop, which can cut off a meeting that's simply running long — this only reacts to the meeting itself ending.",
+			desc: "Stop recording automatically when the detected meeting ends. Separate from calendar auto-stop.",
 		},
 		maxRecordingHours: {
 			name: "Max recording length (hours)",
-			desc: "Force-stop any recording that runs this long, as a safety net against a forgotten or stuck recording. You'll get a warning with a \"Keep recording\" option 30 seconds before it stops. 0 disables the cap (0–24).",
+			desc: "Stop recording automatically after this long. 0 disables it (0–24).",
 		},
 		silenceAutoStopMinutes: {
 			name: "Auto-stop after silence (minutes)",
-			desc: "Force-stop a recording after this many minutes with no detected speech on either the mic or system audio — an earlier, more targeted safety net than the max recording length, for the common case of a forgotten recording in an empty room. Same 30-second warning with a \"Keep recording\" option. 0 disables it (0–120).",
+			desc: "Stop recording after this many minutes of silence. 0 disables it (0–120).",
 		},
 		endpointHeading: "AI endpoint",
 		apiBaseUrl: {
