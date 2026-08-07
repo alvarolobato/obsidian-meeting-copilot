@@ -1,7 +1,7 @@
 {
 	"id": "meeting-copilot",
 	"name": "Meeting Copilot",
-	"version": "0.7.1",
+	"version": "0.7.2",
 	"minAppVersion": "1.8.7",
 	"description": "Integrated meeting transcription, note-taking, and summarization for Obsidian on macOS: Google Calendar sync, dual-channel recording, transcription, and AI summaries.",
 	"author": "Alvaro Lobato",
