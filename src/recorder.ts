@@ -14,6 +14,13 @@ export interface RecorderStatus {
     duration?: number;
     file?: string;
     message?: string;
+    /**
+     * Seconds since either capture stream last had audio above the helper's
+     * RMS speech threshold (`"recording"` heartbeats only). Live counterpart
+     * to the finalize-time `speech.json` gate, driving the plugin's
+     * silence-based auto-stop (see `recordings/silenceAutoStop.ts`).
+     */
+    silentSeconds?: number;
 }
 
 export interface RecorderStartOptions {

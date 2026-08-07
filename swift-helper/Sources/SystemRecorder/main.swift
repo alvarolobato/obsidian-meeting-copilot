@@ -220,7 +220,7 @@ if #available(macOS 13.0, *) {
     _ = Task {
         do {
             try await captureManager.startCapture()
-            emitJSON(["status": "recording", "duration": 0])
+            emitJSON(["status": "recording", "duration": 0, "silentSeconds": 0])
             DispatchQueue.global().asyncAfter(
                 deadline: .now() + watchdogSeconds, execute: watchdog
             )
@@ -295,7 +295,11 @@ if #available(macOS 13.0, *) {
         }
 
         let elapsed = Int(Date().timeIntervalSince(startDate))
-        emitJSON(["status": "recording", "duration": elapsed])
+        emitJSON([
+            "status": "recording",
+            "duration": elapsed,
+            "silentSeconds": mixer.secondsSinceLoudAudio,
+        ])
     }
     ticker.resume()
 

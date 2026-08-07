@@ -4,11 +4,32 @@ import { PassThrough } from "stream";
 import { TFile } from "obsidian";
 import {
 	WhisperCppBackend,
+	computeTrimStartSeconds,
 	type WhisperCppConfig,
 	type WhisperCppDeps,
 	type WhisperChildProcess,
 } from "./WhisperCppBackend";
 import type { TranscribeJob, TranscribeRequest } from "./backend";
+
+describe("computeTrimStartSeconds", () => {
+	it("returns undefined with no windows", () => {
+		expect(computeTrimStartSeconds(undefined)).toBeUndefined();
+		expect(computeTrimStartSeconds([])).toBeUndefined();
+	});
+
+	it("returns undefined when the lead-in is too short to bother trimming", () => {
+		// First window at 10s; padding (30s) would trim to a negative offset.
+		expect(computeTrimStartSeconds([[10, 20]])).toBeUndefined();
+	});
+
+	it("trims to padding before the earliest window", () => {
+		expect(computeTrimStartSeconds([[955, 960], [1000, 1010]])).toBe(925);
+	});
+
+	it("uses the earliest window regardless of array order", () => {
+		expect(computeTrimStartSeconds([[1000, 1010], [955, 960]])).toBe(925);
+	});
+});
 
 // A fake `child_process` the backend drives through its NDJSON contract, so the
 // line protocol / progress mapping / abort / ordering can be tested without a
@@ -104,6 +125,37 @@ describe("WhisperCppBackend", () => {
 			translate: false,
 			jobs: [
 				{ id: "me", audio: "/vault/Recordings/me.wav", segments: true },
+				{ id: "them", audio: "/vault/Recordings/them.wav", segments: true },
+			],
+		});
+		h.proc().stdout.write('{"type":"result","id":"me","text":"a"}\n');
+		h.proc().stdout.write('{"type":"result","id":"them","text":"b"}\n');
+		h.proc().stdout.write('{"type":"done"}\n');
+		await flush();
+		h.proc().emit("close", 0, null);
+		await p;
+	});
+
+	it("forwards trimStartSeconds computed from a job's speechWindows", async () => {
+		const h = makeHarness();
+		const withWindows: TranscribeJob = {
+			...job("me", true),
+			speechWindows: [[955, 960]],
+		};
+		const p = h.backend.transcribe({ jobs: [withWindows, job("them", true)] });
+		await flush();
+		const manifest: unknown = JSON.parse(h.manifests[0]!);
+		expect(manifest).toEqual({
+			model: "/models/ggml.bin",
+			language: "en",
+			translate: false,
+			jobs: [
+				{
+					id: "me",
+					audio: "/vault/Recordings/me.wav",
+					segments: true,
+					trimStartSeconds: 925,
+				},
 				{ id: "them", audio: "/vault/Recordings/them.wav", segments: true },
 			],
 		});

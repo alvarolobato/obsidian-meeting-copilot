@@ -226,6 +226,20 @@ export const en = {
 		dismiss: "Dismiss",
 		autoStarted: (title: string) => `Recording "${title}"`,
 		autoStopped: (title: string) => `"${title}" ended — recording stopped`,
+		// Max-recording-length safety cap (checkMaxRecordingLength).
+		maxRecordingWarningTitle: "Recording will stop soon",
+		maxRecordingWarning: (hours: number) =>
+			`This recording has run for ${hours}h and will stop automatically in 30s.`,
+		maxRecordingWarningCancel: "Keep recording",
+		maxRecordingStopped: (hours: number) =>
+			`Recording auto-stopped after ${hours}h (safety limit)`,
+		// Silence-based auto-stop (checkSilenceAutoStop). Reuses
+		// maxRecordingWarningCancel for the "Keep recording" action.
+		silenceWarningTitle: "Recording will stop soon",
+		silenceWarning: (minutes: number) =>
+			`No speech detected for ${minutes} min — recording will stop automatically in 30s.`,
+		silenceStopped: (minutes: number) =>
+			`Recording auto-stopped after ${minutes} min of silence`,
 	},
 	agenda: {
 		title: "Meetings",
@@ -595,6 +609,18 @@ export const en = {
 		detectionInterval: {
 			name: "Detection interval (seconds)",
 			desc: "How often to check for a meeting in progress (3–120).",
+		},
+		detectionAutoStop: {
+			name: "Auto-stop when meeting ends",
+			desc: "Stop recording automatically when the detected meeting ends. Separate from calendar auto-stop.",
+		},
+		maxRecordingHours: {
+			name: "Max recording length (hours)",
+			desc: "Stop recording automatically after this long. 0 disables it (0–24).",
+		},
+		silenceAutoStopMinutes: {
+			name: "Auto-stop after silence (minutes)",
+			desc: "Stop recording after this many minutes of silence. 0 disables it (0–120).",
 		},
 		endpointHeading: "AI endpoint",
 		apiBaseUrl: {

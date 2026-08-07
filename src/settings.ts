@@ -153,6 +153,31 @@ export interface SystemRecordingSettings {
 	detectZoom: boolean;
 	detectGoogleMeet: boolean;
 	detectionIntervalSeconds: number;
+	/**
+	 * Automatically stop the recording when a detected meeting (Zoom/Google
+	 * Meet) ends, instead of only prompting. Separate from `calendarAutoStop`:
+	 * a meeting running past its scheduled calendar slot shouldn't be cut off
+	 * just because the *calendar* event ended — this only fires off the
+	 * detector's own "the meeting actually ended" signal. Opt-in, default off.
+	 */
+	detectionAutoStop: boolean;
+	/**
+	 * Hard safety cap (hours) on recording length: force-stops a recording
+	 * that's run this long, regardless of calendar/detection state — a guard
+	 * against a forgotten/stuck recording (a real ~15h accidental recording
+	 * OOM-crashed transcription; see `vadWindows.ts`'s duration guard). A
+	 * warning notice with a "Keep recording" action fires
+	 * `MAX_RECORDING_WARNING_SECONDS` before the cutoff. `0` disables the cap.
+	 */
+	maxRecordingHours: number;
+	/**
+	 * Earlier, more targeted safety net than `maxRecordingHours`: force-stops
+	 * a recording after this many minutes with no detected speech on either
+	 * stream (the common real shape of a forgotten recording — an empty room,
+	 * not necessarily an open meeting app). Same warning-then-stop UX as the
+	 * max-length cap. `0` disables it.
+	 */
+	silenceAutoStopMinutes: number;
 	agendaLookAheadDays: number;
 	agendaLookBackDays: number;
 	/** Where the "Coming up" agenda opens: a main-panel tab or the right sidebar. */
@@ -309,6 +334,9 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	detectZoom: true,
 	detectGoogleMeet: false,
 	detectionIntervalSeconds: 10,
+	detectionAutoStop: false,
+	maxRecordingHours: 6,
+	silenceAutoStopMinutes: 10,
 	agendaLookAheadDays: 7,
 	agendaLookBackDays: 7,
 	agendaPlacement: "main",
@@ -1403,6 +1431,48 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                             Number.isFinite(n) && n >= 3 ? Math.min(n, 120) : 10;
                         await this.plugin.saveSettings();
                         this.plugin.updateDetector();
+                    });
+            });
+
+        new Setting(containerEl)
+            .setName(s.settings.detectionAutoStop.name)
+            .setDesc(s.settings.detectionAutoStop.desc)
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.detectionAutoStop)
+                    .onChange(async (value) => {
+                        this.plugin.settings.detectionAutoStop = value;
+                        await this.plugin.saveSettings();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName(s.settings.maxRecordingHours.name)
+            .setDesc(s.settings.maxRecordingHours.desc)
+            .addText((text) => {
+                text.inputEl.type = "number";
+                text
+                    .setValue(String(this.plugin.settings.maxRecordingHours))
+                    .onChange(async (value) => {
+                        const n = Number.parseInt(value, 10);
+                        this.plugin.settings.maxRecordingHours =
+                            Number.isFinite(n) && n >= 0 ? Math.min(n, 24) : 6;
+                        await this.plugin.saveSettings();
+                    });
+            });
+
+        new Setting(containerEl)
+            .setName(s.settings.silenceAutoStopMinutes.name)
+            .setDesc(s.settings.silenceAutoStopMinutes.desc)
+            .addText((text) => {
+                text.inputEl.type = "number";
+                text
+                    .setValue(String(this.plugin.settings.silenceAutoStopMinutes))
+                    .onChange(async (value) => {
+                        const n = Number.parseInt(value, 10);
+                        this.plugin.settings.silenceAutoStopMinutes =
+                            Number.isFinite(n) && n >= 0 ? Math.min(n, 120) : 10;
+                        await this.plugin.saveSettings();
                     });
             });
     }

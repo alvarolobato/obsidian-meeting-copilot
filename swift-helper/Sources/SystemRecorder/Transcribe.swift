@@ -91,7 +91,12 @@ private final class ProgressReporter {
 /// streamed chunk-by-chunk, but the decoded samples for the whole file are
 /// returned in one array — whisper_full needs the entire PCM buffer at once.
 /// Returns an empty array for a zero-length file.
-private func decodePCM16kMono(_ url: URL) throws -> [Float] {
+///
+/// `startSeconds` seeks the source reader before decoding starts, rather than
+/// decoding-then-discarding — skipped audio costs nothing. See `runTranscribe`
+/// for why this exists: a long silent lead-in (`trimStartSeconds` in the
+/// manifest) gets whisper.cpp's decoder stuck.
+private func decodePCM16kMono(_ url: URL, startSeconds: Double = 0) throws -> [Float] {
     let file: AVAudioFile
     do {
         file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
@@ -100,7 +105,17 @@ private func decodePCM16kMono(_ url: URL) throws -> [Float] {
     }
 
     let srcFormat = file.processingFormat
-    let frameCount = file.length
+    if startSeconds > 0 {
+        // Clamp in Double space before the Int64 conversion below: a bogus or
+        // corrupted `startSeconds` (well outside the file's actual length)
+        // would otherwise trap ("Double value cannot be converted to Int64")
+        // instead of failing gracefully — AVAudioFramePosition's init is a
+        // narrowing conversion, not a throwing one.
+        let rawFrame = (startSeconds * srcFormat.sampleRate).rounded()
+        let clampedFrame = min(max(rawFrame, 0), Double(file.length))
+        file.framePosition = AVAudioFramePosition(clampedFrame)
+    }
+    let frameCount = file.length - file.framePosition
     guard frameCount > 0 else { return [] }
 
     guard let dstFormat = AVAudioFormat(
@@ -201,8 +216,14 @@ private func runJob(
     language: String,
     translate: Bool,
     threads: Int,
-    wantSegments: Bool
+    wantSegments: Bool,
+    startOffsetSec: Double = 0
 ) throws {
+    // Symmetric with decodePCM16kMono's `startSeconds > 0` seek guard: a
+    // non-positive offset means "nothing was trimmed," so segment timestamps
+    // must not be shifted either — a negative offset here would silently
+    // desync them from the un-seeked decode.
+    let offsetSec = max(startOffsetSec, 0)
     // whisper_full takes the sample count as an Int32; guard against wrap on an
     // absurdly long recording (> ~37 h at 16 kHz) rather than passing a negative
     // count into the C API.
@@ -269,8 +290,11 @@ private func runJob(
         let text = cText != nil ? String(cString: cText!) : ""
         fullText += text
         if wantSegments {
-            let start = Double(whisper_full_get_segment_t0(ctx, i)) / 100.0
-            let end = Double(whisper_full_get_segment_t1(ctx, i)) / 100.0
+            // whisper's t0/t1 are relative to the (possibly trimmed) samples we
+            // handed it; add back the seek offset so segments stay on the same
+            // absolute original-file clock the VAD/RMS windows use.
+            let start = Double(whisper_full_get_segment_t0(ctx, i)) / 100.0 + offsetSec
+            let end = Double(whisper_full_get_segment_t1(ctx, i)) / 100.0 + offsetSec
             segments.append([
                 "start": start,
                 "end": end,
@@ -297,7 +321,8 @@ private func runJob(
 ///     "translate": false,
 ///     "threads": 8,               // optional
 ///     "gpu": true,                // optional; false forces CPU
-///     "jobs": [ { "id": "me", "audio": "/abs/x.me.wav", "segments": true }, … ] }
+///     "jobs": [ { "id": "me", "audio": "/abs/x.me.wav", "segments": true,
+///                 "trimStartSeconds": 12.3 }, … ] }   // optional, see decodePCM16kMono
 ///
 /// The model is loaded once and reused across jobs. Never returns — it exits 0
 /// on success, 1 on error (after an `error` line), or 130 on cancellation.
@@ -367,10 +392,18 @@ func runTranscribe(_ args: [String]) -> Never {
             failTranscribe("a transcribe job is missing a non-empty \"id\" or \"audio\"")
         }
         let wantSegments = job["segments"] as? Bool ?? false
+        // Skip a long silent lead-in before it ever reaches whisper.cpp: fed one
+        // continuous decode spanning many minutes of silence before real speech,
+        // its internal decoder state gets stuck emitting near-empty output and
+        // never recovers for the rest of the file (a real ~16-minute lead-in
+        // reproduced this). The plugin computes this from the VAD/RMS windows it
+        // already has (generously padded) and only sets it when those windows
+        // are trustworthy for this stream — see `WhisperCppBackend.ts`.
+        let trimStartSeconds = (job["trimStartSeconds"] as? NSNumber)?.doubleValue ?? 0
 
         let samples: [Float]
         do {
-            samples = try decodePCM16kMono(URL(fileURLWithPath: audioPath))
+            samples = try decodePCM16kMono(URL(fileURLWithPath: audioPath), startSeconds: trimStartSeconds)
         } catch {
             failTranscribe("failed to decode \(audioPath): \(error.localizedDescription)")
         }
@@ -392,7 +425,8 @@ func runTranscribe(_ args: [String]) -> Never {
                 language: language,
                 translate: translate,
                 threads: threads,
-                wantSegments: wantSegments
+                wantSegments: wantSegments,
+                startOffsetSec: trimStartSeconds
             )
         } catch {
             failTranscribe("transcription failed for \"\(id)\": \(error.localizedDescription)")
