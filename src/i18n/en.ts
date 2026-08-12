@@ -859,7 +859,7 @@ export const en = {
 		},
 		enrichBackend: {
 			name: "Enrichment backend",
-			desc: "How to call the LLM for enrichment. 'API endpoint' uses the configured OpenAI-compatible endpoint (requires API key). CLI options use a locally installed tool under your subscription — no API key needed for enrichment.",
+			desc: "Use an API endpoint or a locally installed CLI.",
 			options: {
 				api: "API endpoint",
 				"claude-cli": "Claude Code CLI",
@@ -879,7 +879,7 @@ export const en = {
 		},
 		enrichCliModel: {
 			name: "Model",
-			desc: "Model to use with this CLI. Leave empty to use the CLI's default. For OpenCode and Pi, use provider/model format (e.g. anthropic/claude-sonnet-5).",
+			desc: "Model to use. Leave empty for the CLI default.",
 			placeholderClaude: "sonnet",
 			placeholderCodex: "gpt-5.5",
 			placeholderOpencode: "anthropic/claude-sonnet-5",

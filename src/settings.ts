@@ -41,7 +41,7 @@ import { t, type Messages } from "./i18n";
 import { describeVersion } from "./buildInfo";
 import { mcLog } from "./util/logLine";
 import { ModelIdSuggest, type ModelOption } from "./ui/modelSuggest";
-import { loadCLIModels, type CLIModelResult, type EnrichCLI } from "./enrich/cliBridge";
+import { loadCLIModels, CLAUDE_CLI_MODELS, CODEX_CLI_MODELS, type CLIModelResult, type EnrichCLI } from "./enrich/cliBridge";
 
 export interface SystemRecordingSettings {
 	/** `{{placeholder}}` folder template for one-off meetings, e.g. "Meetings/{{year}}". */
@@ -1144,74 +1144,86 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                         })
                 );
 
-            // "Load models" button — appears BEFORE the model selector.
-            new Setting(el)
-                .setName(s.settings.loadCliModels.button)
-                .setDesc(
-                    backend === "claude-cli" || backend === "codex-cli"
-                        ? s.settings.loadCliModels.descHardcoded
-                        : s.settings.loadCliModels.descLive
-                )
-                .addButton((btn) => {
-                    btn.setButtonText(s.settings.loadCliModels.button)
-                        .onClick(async () => {
-                            btn.setButtonText(s.settings.loadCliModels.loading);
-                            btn.setDisabled(true);
-                            try {
-                                const result: CLIModelResult = await loadCLIModels(
-                                    backend,
-                                    this.plugin.settings.enrichCliPaths[backend]
-                                );
-                                if (result.errorKey === "notFound") {
-                                    new Notice(t().settings.loadCliModels.notFound(result.errorArg ?? backend));
-                                    return;
+            if (backend === "claude-cli" || backend === "codex-cli") {
+                // Hardcoded lists — no need to load; always show a plain dropdown.
+                const models = [...(backend === "claude-cli" ? CLAUDE_CLI_MODELS : CODEX_CLI_MODELS)];
+                const currentModel = this.plugin.settings.enrichCliModels[backend];
+                new Setting(el)
+                    .setName(s.settings.enrichCliModel.name)
+                    .setDesc(s.settings.enrichCliModel.desc)
+                    .addDropdown((dd) => {
+                        dd.addOption("", "— default —");
+                        for (const m of models) dd.addOption(m, m);
+                        dd.setValue(currentModel || "")
+                            .onChange(async (value) => {
+                                this.plugin.settings.enrichCliModels[backend] = value;
+                                await this.plugin.saveSettings();
+                            });
+                    });
+            } else {
+                // Live-fetched lists (OpenCode, Pi) — Load models button + combo box.
+                new Setting(el)
+                    .setName(s.settings.loadCliModels.button)
+                    .setDesc(s.settings.loadCliModels.descLive)
+                    .addButton((btn) => {
+                        btn.setButtonText(s.settings.loadCliModels.button)
+                            .onClick(async () => {
+                                btn.setButtonText(s.settings.loadCliModels.loading);
+                                btn.setDisabled(true);
+                                try {
+                                    const result: CLIModelResult = await loadCLIModels(
+                                        backend,
+                                        this.plugin.settings.enrichCliPaths[backend]
+                                    );
+                                    if (result.errorKey === "notFound") {
+                                        new Notice(t().settings.loadCliModels.notFound(result.errorArg ?? backend));
+                                        return;
+                                    }
+                                    if (result.errorKey === "failed") {
+                                        new Notice(t().settings.loadCliModels.failed(result.errorArg ?? ""));
+                                        return;
+                                    }
+                                    if (!result.models.length) {
+                                        new Notice(s.settings.loadCliModels.noModels);
+                                        return;
+                                    }
+                                    this.cliModels = result.models;
+                                    this.cliModelsLoaded = true;
+                                    this.renderEnrichBackendBody();
+                                } finally {
+                                    btn.setButtonText(s.settings.loadCliModels.button);
+                                    btn.setDisabled(false);
                                 }
-                                if (result.errorKey === "failed") {
-                                    new Notice(t().settings.loadCliModels.failed(result.errorArg ?? ""));
-                                    return;
-                                }
-                                if (!result.models.length) {
-                                    new Notice(s.settings.loadCliModels.noModels);
-                                    return;
-                                }
-                                this.cliModels = result.models;
-                                this.cliModelsLoaded = true;
-                                // Rebuild body to show the dropdown.
-                                this.renderEnrichBackendBody();
-                            } finally {
-                                btn.setButtonText(s.settings.loadCliModels.button);
-                                btn.setDisabled(false);
-                            }
-                        });
-                });
+                            });
+                    });
 
-            // Model selector: combo box (text + datalist) — allows free-typing
-            // and picking from the loaded list when available.
-            new Setting(el)
-                .setName(s.settings.enrichCliModel.name)
-                .setDesc(s.settings.enrichCliModel.desc)
-                .addText((text) => {
-                    text
-                        .setPlaceholder(cliModelPlaceholder(backend, s))
-                        .setValue(this.plugin.settings.enrichCliModels[backend])
-                        .onChange(async (value) => {
-                            this.plugin.settings.enrichCliModels[backend] = value.trim();
-                            await this.plugin.saveSettings();
-                        });
-                    if (this.cliModelsLoaded && this.cliModels.length > 0) {
-                        const input = text.inputEl;
-                        const listId = `mc-cli-models-${backend}`;
-                        const dl = input.ownerDocument.createElement("datalist");
-                        dl.id = listId;
-                        for (const m of this.cliModels) {
-                            const opt = input.ownerDocument.createElement("option");
-                            opt.value = m;
-                            dl.appendChild(opt);
+                // Combo box — free-type or pick from loaded list.
+                new Setting(el)
+                    .setName(s.settings.enrichCliModel.name)
+                    .setDesc(s.settings.enrichCliModel.desc)
+                    .addText((text) => {
+                        text
+                            .setPlaceholder(cliModelPlaceholder(backend, s))
+                            .setValue(this.plugin.settings.enrichCliModels[backend])
+                            .onChange(async (value) => {
+                                this.plugin.settings.enrichCliModels[backend] = value.trim();
+                                await this.plugin.saveSettings();
+                            });
+                        if (this.cliModelsLoaded && this.cliModels.length > 0) {
+                            const input = text.inputEl;
+                            const listId = `mc-cli-models-${backend}`;
+                            const dl = input.ownerDocument.createElement("datalist");
+                            dl.id = listId;
+                            for (const m of this.cliModels) {
+                                const opt = input.ownerDocument.createElement("option");
+                                opt.value = m;
+                                dl.appendChild(opt);
+                            }
+                            input.parentElement?.appendChild(dl);
+                            input.setAttribute("list", listId);
                         }
-                        input.parentElement?.appendChild(dl);
-                        input.setAttribute("list", listId);
-                    }
-                });
+                    });
+            }
         }
     }
 

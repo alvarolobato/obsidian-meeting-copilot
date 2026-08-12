@@ -579,6 +579,9 @@ export interface CLIChatParams {
 // Model listing
 // ---------------------------------------------------------------------------
 
+export const CLAUDE_CLI_MODELS = ["haiku", "sonnet", "opus", "claude-fable-5"] as const;
+export const CODEX_CLI_MODELS = ["gpt-5.4-mini", "gpt-5.5"] as const;
+
 export interface CLIModelResult {
 	models: string[];
 	errorKey?: "notFound" | "failed";
@@ -601,16 +604,10 @@ export async function loadCLIModels(
 
 	switch (cli) {
 		case "claude-cli":
-			return {
-				models: ["haiku", "sonnet", "opus", "claude-fable-5"],
-				isHardcoded: true,
-			};
+			return { models: [...CLAUDE_CLI_MODELS], isHardcoded: true };
 
 		case "codex-cli":
-			return {
-				models: ["gpt-5.4-mini", "gpt-5.5"],
-				isHardcoded: true,
-			};
+			return { models: [...CODEX_CLI_MODELS], isHardcoded: true };
 
 		case "opencode-cli":
 			return new Promise((resolve) => {
