@@ -602,22 +602,13 @@ export async function loadCLIModels(
 	switch (cli) {
 		case "claude-cli":
 			return {
-				models: [
-					"claude-opus-5",
-					"claude-sonnet-5",
-					"claude-haiku-4-5",
-					"claude-fable-5",
-					"claude-opus-4-5",
-					"claude-sonnet-4-6",
-					"claude-sonnet-4-5",
-					"claude-haiku-4-5-20251001",
-				],
+				models: ["haiku", "sonnet", "opus", "claude-fable-5"],
 				isHardcoded: true,
 			};
 
 		case "codex-cli":
 			return {
-				models: ["codex-mini-latest", "o4-mini", "o3", "o3-mini", "o4"],
+				models: ["gpt-5.4-mini", "gpt-5.5"],
 				isHardcoded: true,
 			};
 

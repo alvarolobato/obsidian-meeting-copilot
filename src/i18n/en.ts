@@ -880,8 +880,8 @@ export const en = {
 		enrichCliModel: {
 			name: "Model",
 			desc: "Model to use with this CLI. Leave empty to use the CLI's default. For OpenCode and Pi, use provider/model format (e.g. anthropic/claude-sonnet-5).",
-			placeholderClaude: "claude-sonnet-5",
-			placeholderCodex: "codex-mini-latest",
+			placeholderClaude: "sonnet",
+			placeholderCodex: "gpt-5.5",
 			placeholderOpencode: "anthropic/claude-sonnet-5",
 			placeholderPi: "anthropic/claude-sonnet-5",
 		},
