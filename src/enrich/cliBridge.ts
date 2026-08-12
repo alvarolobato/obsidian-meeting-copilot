@@ -5,7 +5,7 @@
  * Pure Node.js — no Obsidian imports — so it's unit-testable in isolation.
  */
 
-import { spawn, execSync } from "child_process";
+import { spawn, execSync, execFile } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -574,6 +574,121 @@ export interface CLIChatParams {
 	signal?: AbortSignal;
 	timeoutMs?: number;
 }
+
+// ---------------------------------------------------------------------------
+// Model listing
+// ---------------------------------------------------------------------------
+
+export interface CLIModelResult {
+	models: string[];
+	errorKey?: "notFound" | "failed";
+	errorArg?: string;
+	/** True when the list is curated, not fetched live from the CLI. */
+	isHardcoded?: boolean;
+}
+
+/**
+ * List the models available for a given CLI backend.
+ * For Claude and Codex (which have no listing command), returns a curated
+ * hardcoded list. For OpenCode and Pi, runs the CLI to fetch live models.
+ */
+export async function loadCLIModels(
+	cli: EnrichCLI,
+	configuredPath?: string
+): Promise<CLIModelResult> {
+	const bin = findBinary(cli, configuredPath);
+	const env = { ...process.env, PATH: buildEnhancedPath(configuredPath) };
+
+	switch (cli) {
+		case "claude-cli":
+			return {
+				models: [
+					"claude-opus-5",
+					"claude-sonnet-5",
+					"claude-haiku-4-5",
+					"claude-fable-5",
+					"claude-opus-4-5",
+					"claude-sonnet-4-6",
+					"claude-sonnet-4-5",
+					"claude-haiku-4-5-20251001",
+				],
+				isHardcoded: true,
+			};
+
+		case "codex-cli":
+			return {
+				models: ["codex-mini-latest", "o4-mini", "o3", "o3-mini", "o4"],
+				isHardcoded: true,
+			};
+
+		case "opencode-cli":
+			return new Promise((resolve) => {
+				execFile(
+					bin,
+					["models"],
+					{ timeout: 10000, env, cwd: os.tmpdir(), encoding: "utf8" },
+					(err: (Error & { code?: string }) | null, stdout: string, stderr: string) => {
+						if (err) {
+							const key = err.code === "ENOENT" ? "notFound" : "failed";
+							resolve({
+								models: [],
+								errorKey: key,
+								errorArg: err.code === "ENOENT" ? bin : stderr.slice(0, 200),
+							});
+							return;
+						}
+						const models = stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+						resolve({ models });
+					}
+				);
+			});
+
+		case "pi-cli":
+			return new Promise((resolve) => {
+				execFile(
+					bin,
+					["--list-models"],
+					{ timeout: 10000, env, cwd: os.tmpdir(), encoding: "utf8" },
+					(err: (Error & { code?: string }) | null, stdout: string, stderr: string) => {
+						if (err) {
+							const key = err.code === "ENOENT" ? "notFound" : "failed";
+							resolve({
+								models: [],
+								errorKey: key,
+								errorArg: err.code === "ENOENT" ? bin : stderr.slice(0, 200),
+							});
+							return;
+						}
+						const models = stdout
+							.split("\n")
+							.filter((line) => {
+								const cols = line.trim().split(/\s+/);
+								return (
+									cols.length >= 2 &&
+									cols[0] !== "provider" &&
+									/^[a-z0-9_-]+$/i.test(cols[0] ?? "") &&
+									/^[a-z0-9._-]+$/i.test(cols[1] ?? "")
+								);
+							})
+							.map((line) => {
+								const cols = line.trim().split(/\s+/);
+								return `${cols[0] ?? ""}/${cols[1] ?? ""}`;
+							});
+						resolve({ models });
+					}
+				);
+			});
+
+		default: {
+			const _: never = cli;
+			return { models: [], errorKey: "failed", errorArg: `Unknown CLI: ${String(_)}` };
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Chat completion
+// ---------------------------------------------------------------------------
 
 /**
  * One-shot enrichment via a locally installed CLI tool.

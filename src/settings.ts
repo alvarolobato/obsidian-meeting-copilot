@@ -41,7 +41,7 @@ import { t, type Messages } from "./i18n";
 import { describeVersion } from "./buildInfo";
 import { mcLog } from "./util/logLine";
 import { ModelIdSuggest, type ModelOption } from "./ui/modelSuggest";
-import type { EnrichCLI } from "./enrich/cliBridge";
+import { loadCLIModels, type CLIModelResult, type EnrichCLI } from "./enrich/cliBridge";
 
 export interface SystemRecordingSettings {
 	/** `{{placeholder}}` folder template for one-off meetings, e.g. "Meetings/{{year}}". */
@@ -555,70 +555,6 @@ export function migrateSettings(
 	return migrated;
 }
 
-/**
- * Runs `pi --list-models` and returns an array of "provider/model" strings.
- * Uses the configured CLI path and enhanced PATH so it works for non-standard
- * install locations and GUI-launched Obsidian (which may lack a full PATH).
- */
-async function loadPiModels(
-    configuredPath: string
-): Promise<{ models: string[]; errorKey?: "notFound" | "failed"; errorArg?: string }> {
-    const { findBinary, buildEnhancedPath } = await import("./enrich/cliBridge");
-    const { execFile } = await import("child_process");
-    const { default: os } = await import("os");
-
-    const bin = findBinary("pi-cli", configuredPath || undefined);
-    const enhancedPath = buildEnhancedPath(configuredPath || undefined);
-
-    return new Promise((resolve) => {
-        execFile(
-            bin,
-            ["--list-models"],
-            {
-                timeout: 10000,
-                env: { ...process.env, PATH: enhancedPath },
-                cwd: os.tmpdir(),
-                encoding: "utf8",
-            } as Parameters<typeof execFile>[2],
-            (err, stdout, stderr) => {
-                if (err) {
-                    const code = (err as Error & { code?: string }).code;
-                    if (code === "ENOENT") {
-                        resolve({ models: [], errorKey: "notFound", errorArg: bin });
-                    } else {
-                        resolve({
-                            models: [],
-                            errorKey: "failed",
-                            errorArg: (stderr as string)?.slice(0, 200) || err.message,
-                        });
-                    }
-                    return;
-                }
-                // Format: "provider   model   context  max-out  thinking  images"
-                // Skip the header row and separator lines; extract "provider/model".
-                const lines = (stdout as string).split("\n");
-                const models = lines
-                    .flatMap((line) => {
-                        const cols = line.trim().split(/\s+/);
-                        const provider = cols[0];
-                        const model = cols[1];
-                        if (
-                            cols.length >= 2 &&
-                            provider !== undefined &&
-                            model !== undefined &&
-                            provider !== "provider" &&
-                            /^[a-z0-9_-]+$/i.test(provider) &&
-                            /^[a-z0-9._-]+$/i.test(model)
-                        ) {
-                            return [`${provider}/${model}`];
-                        }
-                        return [];
-                    });
-                resolve({ models });
-            }
-        );
-    });
-}
 
 export class SystemRecordingSettingTab extends PluginSettingTab {
     plugin: SystemRecordingPlugin;
@@ -684,6 +620,10 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
     private modelDownloadRow: Setting | null = null;
     /** Host for the enrichment-backend body rows — rebuilt in place on backend change. */
     private enrichBackendBodyEl: HTMLElement | null = null;
+    /** Models loaded via the CLI "Load models" button; empty until the user clicks it. */
+    private cliModels: string[] = [];
+    /** True once the user has successfully loaded CLI models for the current backend. */
+    private cliModelsLoaded = false;
 
     constructor(app: App, plugin: SystemRecordingPlugin) {
         super(app, plugin);
@@ -1051,6 +991,8 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     .onChange(async (value) => {
                         this.plugin.settings.enrichBackend = value as "api" | EnrichCLI;
                         await this.plugin.saveSettings();
+                        this.cliModelsLoaded = false;
+                        this.cliModels = [];
                         this.renderEnrichBackendBody();
                     });
             });
@@ -1187,66 +1129,96 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
             });
         } else {
             // === CLI backend ===
-            const cli = this.plugin.settings.enrichBackend;
+            const backend = this.plugin.settings.enrichBackend;
 
             new Setting(el)
                 .setName(s.settings.enrichCliPath.name)
                 .setDesc(s.settings.enrichCliPath.desc)
                 .addText((text) =>
                     text
-                        .setPlaceholder(cliPathPlaceholder(cli, s))
-                        .setValue(this.plugin.settings.enrichCliPaths[cli])
+                        .setPlaceholder(cliPathPlaceholder(backend, s))
+                        .setValue(this.plugin.settings.enrichCliPaths[backend])
                         .onChange(async (value) => {
-                            this.plugin.settings.enrichCliPaths[cli] = value.trim();
+                            this.plugin.settings.enrichCliPaths[backend] = value.trim();
                             await this.plugin.saveSettings();
                         })
                 );
 
+            // "Load models" button — appears BEFORE the model selector.
             new Setting(el)
-                .setName(s.settings.enrichCliModel.name)
-                .setDesc(s.settings.enrichCliModel.desc)
-                .addText((text) =>
-                    text
-                        .setPlaceholder(cliModelPlaceholder(cli, s))
-                        .setValue(this.plugin.settings.enrichCliModels[cli])
-                        .onChange(async (value) => {
-                            this.plugin.settings.enrichCliModels[cli] = value.trim();
-                            await this.plugin.saveSettings();
-                        })
-                );
-
-            // Pi CLI: "List models" button.
-            if (cli === "pi-cli") {
-                new Setting(el)
-                    .setName("")
-                    .addButton((btn) => {
-                        btn.setButtonText(s.settings.loadCliModels.button)
-                            .onClick(async () => {
-                                btn.setButtonText(s.settings.loadCliModels.loading);
-                                btn.setDisabled(true);
-                                try {
-                                    const result = await loadPiModels(
-                                        this.plugin.settings.enrichCliPaths["pi-cli"]
-                                    );
-                                    if (result.errorKey === "notFound") {
-                                        new Notice(t().settings.loadCliModels.notFound(result.errorArg ?? "pi"));
-                                    } else if (result.errorKey === "failed") {
-                                        new Notice(t().settings.loadCliModels.failed(result.errorArg ?? ""));
-                                    } else if (!result.models.length) {
-                                        new Notice(s.settings.loadCliModels.noModels);
-                                    } else {
-                                        new Notice(
-                                            t().settings.loadCliModels.available +
-                                                "\n" +
-                                                result.models.join("\n")
-                                        );
-                                    }
-                                } finally {
-                                    btn.setButtonText(s.settings.loadCliModels.button);
-                                    btn.setDisabled(false);
+                .setName(s.settings.loadCliModels.button)
+                .setDesc(
+                    backend === "claude-cli" || backend === "codex-cli"
+                        ? s.settings.loadCliModels.descHardcoded
+                        : s.settings.loadCliModels.descLive
+                )
+                .addButton((btn) => {
+                    btn.setButtonText(s.settings.loadCliModels.button)
+                        .onClick(async () => {
+                            btn.setButtonText(s.settings.loadCliModels.loading);
+                            btn.setDisabled(true);
+                            try {
+                                const result: CLIModelResult = await loadCLIModels(
+                                    backend,
+                                    this.plugin.settings.enrichCliPaths[backend]
+                                );
+                                if (result.errorKey === "notFound") {
+                                    new Notice(t().settings.loadCliModels.notFound(result.errorArg ?? backend));
+                                    return;
                                 }
+                                if (result.errorKey === "failed") {
+                                    new Notice(t().settings.loadCliModels.failed(result.errorArg ?? ""));
+                                    return;
+                                }
+                                if (!result.models.length) {
+                                    new Notice(s.settings.loadCliModels.noModels);
+                                    return;
+                                }
+                                this.cliModels = result.models;
+                                this.cliModelsLoaded = true;
+                                // Rebuild body to show the dropdown.
+                                this.renderEnrichBackendBody();
+                            } finally {
+                                btn.setButtonText(s.settings.loadCliModels.button);
+                                btn.setDisabled(false);
+                            }
+                        });
+                });
+
+            // Model selector: dropdown when models have been loaded, text field otherwise.
+            if (this.cliModelsLoaded && this.cliModels.length > 0) {
+                const currentModel = this.plugin.settings.enrichCliModels[backend];
+                const options = [...this.cliModels];
+                // If the saved model isn't in the fetched list, prepend it so it remains selectable.
+                if (currentModel && !options.includes(currentModel)) {
+                    options.unshift(currentModel);
+                }
+                new Setting(el)
+                    .setName(s.settings.enrichCliModel.name)
+                    .setDesc(s.settings.enrichCliModel.desc)
+                    .addDropdown((dd) => {
+                        for (const m of options) {
+                            dd.addOption(m, m);
+                        }
+                        dd.setValue(currentModel || (options[0] ?? ""))
+                            .onChange(async (value) => {
+                                this.plugin.settings.enrichCliModels[backend] = value;
+                                await this.plugin.saveSettings();
                             });
                     });
+            } else {
+                new Setting(el)
+                    .setName(s.settings.enrichCliModel.name)
+                    .setDesc(s.settings.enrichCliModel.desc)
+                    .addText((text) =>
+                        text
+                            .setPlaceholder(cliModelPlaceholder(backend, s))
+                            .setValue(this.plugin.settings.enrichCliModels[backend])
+                            .onChange(async (value) => {
+                                this.plugin.settings.enrichCliModels[backend] = value.trim();
+                                await this.plugin.saveSettings();
+                            })
+                    );
             }
         }
     }

@@ -665,12 +665,14 @@ export const en = {
 			desc: "Key for the fallback transcription endpoint.",
 		},
 		loadCliModels: {
-			button: "List models",
+			button: "Load models",
 			loading: "Loading…",
 			noModels: "No models returned",
-			available: "Available Pi models:",
-			notFound: (bin: string) => `Pi not found at "${bin}". Check the CLI path in AI backend settings.`,
-			failed: (msg: string) => `Pi model listing failed: ${msg}`,
+			available: "Available models:",
+			descHardcoded: "Built-in list for this CLI",
+			descLive: "Fetched from your local CLI install",
+			notFound: (bin: string) => `CLI not found at "${bin}". Check the path in AI backend settings.`,
+			failed: (msg: string) => `Failed to load models: ${msg}`,
 		},
 		fallbackModel: {
 			summary: "Fallback model",
