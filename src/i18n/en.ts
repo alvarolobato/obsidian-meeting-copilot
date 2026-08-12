@@ -648,12 +648,12 @@ export const en = {
 		},
 		sttApiBaseUrl: {
 			name: "Transcription API URL",
-			desc: "OpenAI-compatible endpoint for transcription. Leave empty to use the enrichment endpoint.",
-			placeholder: "https://api.openai.com/v1",
+			desc: "Endpoint for transcription. Leave empty to use the enrichment endpoint.",
+			placeholder: "Same as enrichment endpoint",
 		},
 		sttApiKey: {
 			name: "Transcription API key",
-			desc: "API key for the transcription endpoint. Leave empty to use the enrichment key.",
+			desc: "API key for the transcription endpoint. Leave empty when the endpoint shares the enrichment key or needs no key.",
 		},
 		sttFallbackApiBaseUrl: {
 			name: "Fallback URL",
@@ -668,6 +668,7 @@ export const en = {
 			button: "List models",
 			loading: "Loading…",
 			noModels: "No models returned",
+			available: "Available Pi models:",
 		},
 		fallbackModel: {
 			summary: "Fallback model",

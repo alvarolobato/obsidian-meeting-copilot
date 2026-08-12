@@ -543,25 +543,61 @@ export function migrateSettings(
 
 /**
  * Runs `pi --list-models` and returns an array of "provider/model" strings.
- * Returns an empty array on any error (binary not found, non-zero exit, etc.).
+ * Uses the configured CLI path and enhanced PATH so it works for non-standard
+ * install locations and GUI-launched Obsidian (which may lack a full PATH).
  */
-async function loadPiModels(): Promise<string[]> {
+async function loadPiModels(
+    configuredPath: string
+): Promise<{ models: string[]; error?: string }> {
+    const { findBinary, buildEnhancedPath } = await import("./enrich/cliBridge");
     const { execFile } = await import("child_process");
+    const { default: os } = await import("os");
+
+    const bin = findBinary("pi-cli", configuredPath || undefined);
+    const enhancedPath = buildEnhancedPath(configuredPath || undefined);
+
     return new Promise((resolve) => {
-        execFile("pi", ["--list-models"], { timeout: 10000 }, (err, stdout) => {
-            if (err) { resolve([]); return; }
-            // Output: "provider   model   context  max-out  thinking  images"
-            // Skip header line; extract "provider/model" from first two columns.
-            const models = stdout.split("\n")
-                .slice(1)
-                .map((line) => {
-                    const parts = line.trim().split(/\s+/);
-                    if (parts.length >= 2) return `${parts[0]}/${parts[1]}`;
-                    return null;
-                })
-                .filter((m): m is string => !!m);
-            resolve(models);
-        });
+        execFile(
+            bin,
+            ["--list-models"],
+            {
+                timeout: 10000,
+                env: { ...process.env, PATH: enhancedPath },
+                cwd: os.tmpdir(),
+                encoding: "utf8",
+            } as Parameters<typeof execFile>[2],
+            (err, stdout, stderr) => {
+                if (err) {
+                    const code = (err as Error & { code?: string }).code;
+                    const msg = code === "ENOENT"
+                        ? `pi not found at "${bin}"`
+                        : `pi --list-models failed: ${(stderr as string)?.slice(0, 200) || err.message}`;
+                    resolve({ models: [], error: msg });
+                    return;
+                }
+                // Format: "provider   model   context  max-out  thinking  images"
+                // Skip the header row and separator lines; extract "provider/model".
+                const lines = (stdout as string).split("\n");
+                const models = lines
+                    .flatMap((line) => {
+                        const cols = line.trim().split(/\s+/);
+                        const provider = cols[0];
+                        const model = cols[1];
+                        if (
+                            cols.length >= 2 &&
+                            provider !== undefined &&
+                            model !== undefined &&
+                            provider !== "provider" &&
+                            /^[a-z0-9_-]+$/i.test(provider) &&
+                            /^[a-z0-9._-]+$/i.test(model)
+                        ) {
+                            return [`${provider}/${model}`];
+                        }
+                        return [];
+                    });
+                resolve({ models });
+            }
+        );
     });
 }
 
@@ -635,24 +671,36 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         this.plugin = plugin;
     }
 
-    /** Effective STT base URL: falls back to enrichment endpoint when empty. */
-    private effectiveSttBaseUrl(): string {
-        return this.plugin.settings.sttApiBaseUrl.trim() || this.plugin.settings.apiBaseUrl;
+    /**
+     * Returns the effective STT base URL and API key as a pair.
+     * If `sttApiBaseUrl` is set, uses it with `sttApiKey` (even if empty),
+     * so the enrichment key is never sent to an unrelated third-party host.
+     * When `sttApiBaseUrl` is empty, falls back to the enrichment endpoint pair.
+     */
+    private effectiveSttCredentials(): { baseUrl: string; apiKey: string } {
+        const url = this.plugin.settings.sttApiBaseUrl.trim();
+        if (url) {
+            return { baseUrl: url, apiKey: this.plugin.settings.sttApiKey.trim() };
+        }
+        return { baseUrl: this.plugin.settings.apiBaseUrl, apiKey: this.plugin.settings.apiKey };
     }
 
-    /** Effective STT API key: falls back to enrichment key when empty. */
-    private effectiveSttApiKey(): string {
-        return this.plugin.settings.sttApiKey.trim() || this.plugin.settings.apiKey;
-    }
-
-    /** Effective STT fallback base URL: falls back to enrichment fallback when empty. */
-    private effectiveSttFallbackBaseUrl(): string {
-        return this.plugin.settings.sttFallbackApiBaseUrl.trim() || this.plugin.settings.fallbackApiBaseUrl;
-    }
-
-    /** Effective STT fallback API key: falls back to enrichment fallback key when empty. */
-    private effectiveSttFallbackApiKey(): string {
-        return this.plugin.settings.sttFallbackApiKey.trim() || this.plugin.settings.fallbackApiKey;
+    /**
+     * Returns the effective STT fallback credentials as a pair, or null when no
+     * fallback is configured. If `sttFallbackApiBaseUrl` is set, uses it with
+     * `sttFallbackApiKey`. Otherwise falls through to the enrichment fallback pair.
+     * Returns null when neither STT-specific nor enrichment fallback URL is set.
+     */
+    private effectiveSttFallbackCredentials(): { baseUrl: string; apiKey: string } | null {
+        const url = this.plugin.settings.sttFallbackApiBaseUrl.trim();
+        if (url) {
+            return { baseUrl: url, apiKey: this.plugin.settings.sttFallbackApiKey.trim() };
+        }
+        const fbUrl = this.plugin.settings.fallbackApiBaseUrl.trim();
+        if (fbUrl) {
+            return { baseUrl: fbUrl, apiKey: this.plugin.settings.fallbackApiKey };
+        }
+        return null;
     }
 
     display(): void {
@@ -1160,15 +1208,20 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                                 btn.setButtonText(s.settings.loadCliModels.loading);
                                 btn.setDisabled(true);
                                 try {
-                                    const models = await loadPiModels();
-                                    if (!models.length) {
-                                        new Notice(s.settings.loadCliModels.noModels);
-                                        return;
-                                    }
-                                    new Notice(
-                                        "Available Pi models:\n" +
-                                            models.slice(0, 10).join("\n")
+                                    const result = await loadPiModels(
+                                        this.plugin.settings.enrichCliPaths["pi-cli"]
                                     );
+                                    if (result.error) {
+                                        new Notice(result.error);
+                                    } else if (!result.models.length) {
+                                        new Notice(s.settings.loadCliModels.noModels);
+                                    } else {
+                                        new Notice(
+                                            t().settings.loadCliModels.available +
+                                                "\n" +
+                                                result.models.join("\n")
+                                        );
+                                    }
                                 } finally {
                                     btn.setButtonText(s.settings.loadCliModels.button);
                                     btn.setDisabled(false);
@@ -1362,11 +1415,6 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         );
     }
 
-    /** Keep the old name as an alias for backward compatibility within this class. */
-    private loadEndpointModels(): Promise<void> {
-        return this.loadEnrichModels();
-    }
-
     /**
      * Fetch primary (+ optional fallback) STT `/models` lists and capabilities.
      * Uses the effective STT base URL (falling back to enrichment endpoint when
@@ -1374,10 +1422,10 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
      */
     private async loadSttModels(): Promise<void> {
         const s = t();
-        const baseUrl = this.effectiveSttBaseUrl();
-        const apiKey = this.effectiveSttApiKey();
-        const fbUrl = this.effectiveSttFallbackBaseUrl();
-        const fbKey = this.effectiveSttFallbackApiKey();
+        const { baseUrl, apiKey } = this.effectiveSttCredentials();
+        const sttFb = this.effectiveSttFallbackCredentials();
+        const fbUrl = sttFb?.baseUrl ?? "";
+        const fbKey = sttFb?.apiKey ?? "";
         const hasFallback = fbUrl.length > 0;
 
         type LoadOk = {
@@ -2032,7 +2080,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     .setButtonText(s.settings.testConnection.button)
                     .setCta()
                     .onClick(async () => {
-                        if (!this.effectiveSttBaseUrl()) {
+                        if (!this.effectiveSttCredentials().baseUrl) {
                             new Notice(s.settings.testConnection.noBaseUrl);
                             return;
                         }
@@ -2646,7 +2694,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
     private transcriptionBadgeText(s: Messages): string {
         const { sttModel, sttTranscriptionSupported, sttTimestampsProbeKey } =
             this.plugin.settings;
-        const currentKey = probeKey(this.effectiveSttBaseUrl(), sttModel);
+        const currentKey = probeKey(this.effectiveSttCredentials().baseUrl, sttModel);
         if (this.probingKey === currentKey) {
             return s.settings.transcriptionBadge.checking;
         }
@@ -2675,7 +2723,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         if (!isTimestampCapableFamily(sttApiType)) {
             return s.settings.timestampBadge.notApplicable;
         }
-        const currentKey = probeKey(this.effectiveSttBaseUrl(), sttModel);
+        const currentKey = probeKey(this.effectiveSttCredentials().baseUrl, sttModel);
         if (this.probingKey === currentKey) {
             return s.settings.timestampBadge.checking;
         }
@@ -2703,7 +2751,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 
     /** Force-reruns the assessment for the current model (used by the "Recheck" button), clearing the once-per-session guard and reporting the outcome. */
     private recheckSttSupport(): void {
-        const sttBaseUrl = this.effectiveSttBaseUrl();
+        const { baseUrl: sttBaseUrl } = this.effectiveSttCredentials();
         const { sttModel } = this.plugin.settings;
         if (!sttBaseUrl || !sttModel) {
             new Notice(t().settings.testConnection.noBaseUrl);
@@ -2728,8 +2776,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
      * Notice.
      */
     private maybeAssessSttModel(notify = false): void {
-        const sttBaseUrl = this.effectiveSttBaseUrl();
-        const sttApiKey = this.effectiveSttApiKey();
+        const { baseUrl: sttBaseUrl, apiKey: sttApiKey } = this.effectiveSttCredentials();
         const { sttModel, sttApiType } = this.plugin.settings;
         if (!sttBaseUrl || !sttModel) return;
         const key = probeKey(sttBaseUrl, sttModel);

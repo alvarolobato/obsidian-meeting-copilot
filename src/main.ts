@@ -5313,24 +5313,36 @@ export default class SystemRecordingPlugin extends Plugin {
      * on-device. For the remote backend the probe gate still applies, so a
      * doomed diarized pass never runs against an endpoint that ignores it.
      */
-    /** Effective STT base URL: falls back to enrichment endpoint when empty. */
-    private effectiveSttBaseUrl(): string {
-        return this.settings.sttApiBaseUrl.trim() || this.settings.apiBaseUrl;
+    /**
+     * Returns the effective STT base URL and API key as a pair.
+     * If `sttApiBaseUrl` is set, uses it with `sttApiKey` (even if empty),
+     * so the enrichment key is never sent to an unrelated third-party host.
+     * When `sttApiBaseUrl` is empty, falls back to the enrichment endpoint pair.
+     */
+    private effectiveSttCredentials(): { baseUrl: string; apiKey: string } {
+        const url = this.settings.sttApiBaseUrl.trim();
+        if (url) {
+            return { baseUrl: url, apiKey: this.settings.sttApiKey.trim() };
+        }
+        return { baseUrl: this.settings.apiBaseUrl, apiKey: this.settings.apiKey };
     }
 
-    /** Effective STT API key: falls back to enrichment key when empty. */
-    private effectiveSttApiKey(): string {
-        return this.settings.sttApiKey.trim() || this.settings.apiKey;
-    }
-
-    /** Effective STT fallback base URL: falls back to enrichment fallback when empty. */
-    private effectiveSttFallbackBaseUrl(): string {
-        return this.settings.sttFallbackApiBaseUrl.trim() || this.settings.fallbackApiBaseUrl;
-    }
-
-    /** Effective STT fallback API key: falls back to enrichment fallback key when empty. */
-    private effectiveSttFallbackApiKey(): string {
-        return this.settings.sttFallbackApiKey.trim() || this.settings.fallbackApiKey;
+    /**
+     * Returns the effective STT fallback credentials as a pair, or null when no
+     * fallback is configured. If `sttFallbackApiBaseUrl` is set, uses it with
+     * `sttFallbackApiKey`. Otherwise falls through to the enrichment fallback pair.
+     * Returns null when neither STT-specific nor enrichment fallback URL is set.
+     */
+    private effectiveSttFallbackCredentials(): { baseUrl: string; apiKey: string } | null {
+        const url = this.settings.sttFallbackApiBaseUrl.trim();
+        if (url) {
+            return { baseUrl: url, apiKey: this.settings.sttFallbackApiKey.trim() };
+        }
+        const fbUrl = this.settings.fallbackApiBaseUrl.trim();
+        if (fbUrl) {
+            return { baseUrl: fbUrl, apiKey: this.settings.fallbackApiKey };
+        }
+        return null;
     }
 
     private shouldSeparateSpeakers(): boolean {
@@ -5339,7 +5351,7 @@ export default class SystemRecordingPlugin extends Plugin {
         }
         return canSeparateSpeakers(
             this.settings,
-            probeKey(this.effectiveSttBaseUrl(), this.settings.sttModel)
+            probeKey(this.effectiveSttCredentials().baseUrl, this.settings.sttModel)
         );
     }
 
@@ -5411,7 +5423,7 @@ export default class SystemRecordingPlugin extends Plugin {
     private resolveEngineFamily(): SttApiType {
         const s = this.settings;
         if (s.sttApiType !== "whisper-1-ts") return s.sttApiType;
-        const key = probeKey(this.effectiveSttBaseUrl(), s.sttModel);
+        const key = probeKey(this.effectiveSttCredentials().baseUrl, s.sttModel);
         const timestampsConfirmed =
             s.sttTimestampsProbeKey === key && s.sttTimestampsSupported === true;
         return timestampsConfirmed ? "whisper-1-ts" : "whisper-1";
@@ -5424,11 +5436,10 @@ export default class SystemRecordingPlugin extends Plugin {
         const s = this.settings;
         if (which === "fallback") {
             const fb = fallbackEndpoint(s);
-            // Determine effective STT fallback credentials: use STT-specific
-            // fallback if set, otherwise fall through to the enrichment fallback.
-            const effectiveFbUrl = this.effectiveSttFallbackBaseUrl();
-            const effectiveFbKey = this.effectiveSttFallbackApiKey();
-            if (!fb && !effectiveFbUrl) {
+            // Determine effective STT fallback credentials as a pair so the
+            // enrichment key is never sent to an STT-specific host accidentally.
+            const sttFb = this.effectiveSttFallbackCredentials();
+            if (!fb && !sttFb) {
                 // No fallback configured at all; degrade to primary.
                 return this.buildTranscribeConfig("primary");
             }
@@ -5437,10 +5448,21 @@ export default class SystemRecordingPlugin extends Plugin {
             const baseFamily = (fb?.sttApiType ?? s.sttApiType);
             const family =
                 baseFamily === "whisper-1-ts" ? "whisper-1" : baseFamily;
-            const sttModel = (fb?.sttModel || s.sttModel).trim();
+            // Prefer fallbackSttModel, then the enrichment-fallback model, then
+            // the primary STT model — ensuring STT-specific fallback settings
+            // are honoured even when only the STT fallback fields are set.
+            const sttModel = (
+                s.fallbackSttModel.trim() ||
+                fb?.sttModel ||
+                s.sttModel
+            ).trim();
+            // Use the STT-specific fallback URL+key pair when available;
+            // otherwise fall through to the enrichment fallback endpoint.
+            const fallbackBaseUrl = sttFb?.baseUrl ?? (fb?.baseUrl ?? s.apiBaseUrl);
+            const fallbackApiKey = sttFb?.apiKey ?? (fb?.apiKey ?? "");
             return {
-                baseUrl: effectiveFbUrl || (fb?.baseUrl ?? s.apiBaseUrl),
-                apiKey: effectiveFbKey || (fb?.apiKey ?? ""),
+                baseUrl: fallbackBaseUrl,
+                apiKey: fallbackApiKey,
                 model: family as TranscriptionModel,
                 modelOverride: sttModel,
                 chatModel: (fb?.enrichModel ?? s.enrichModel).trim(),
@@ -5451,9 +5473,10 @@ export default class SystemRecordingPlugin extends Plugin {
                 debugMode: s.debugLogging,
             };
         }
+        const { baseUrl, apiKey } = this.effectiveSttCredentials();
         return {
-            baseUrl: this.effectiveSttBaseUrl(),
-            apiKey: this.effectiveSttApiKey(),
+            baseUrl,
+            apiKey,
             // The engine family selects routing/chunking/timestamps; sttModel is
             // the actual name sent on the wire (may be a gateway id). Whisper
             // downgrades to no-timestamps when the endpoint can't emit them.
@@ -5608,11 +5631,12 @@ export default class SystemRecordingPlugin extends Plugin {
      * gates on the intended backend actually being local.
      */
     private canFallbackToRemote(error: unknown, signal: AbortSignal): boolean {
+        const { baseUrl, apiKey } = this.effectiveSttCredentials();
         return (
             this.settings.localFallbackToRemote &&
             !isDiarizationCancelled(error, signal) &&
-            !!this.effectiveSttBaseUrl() &&
-            !!this.effectiveSttApiKey()
+            !!baseUrl &&
+            !!apiKey
         );
     }
 
@@ -5754,12 +5778,12 @@ export default class SystemRecordingPlugin extends Plugin {
         this.cancelPendingAutoTranscribe(recording.path);
         // The remote backend needs an endpoint; the local one provisions its own
         // model/helper, so it can transcribe with no endpoint configured.
-        if (
-            this.settings.transcriptionBackend !== "local" &&
-            (!this.effectiveSttBaseUrl() || !this.effectiveSttApiKey())
-        ) {
-            new Notice(t().notices.transcribeNoEndpoint);
-            return;
+        if (this.settings.transcriptionBackend !== "local") {
+            const { baseUrl: sttUrl, apiKey: sttKey } = this.effectiveSttCredentials();
+            if (!sttUrl || !sttKey) {
+                new Notice(t().notices.transcribeNoEndpoint);
+                return;
+            }
         }
         // Dedupe overlapping runs (double-click, or auto-transcribe racing a
         // manual trigger) — each would cost an API call and write.
@@ -5936,11 +5960,14 @@ export default class SystemRecordingPlugin extends Plugin {
                 const tryEndpointFallback = async (
                     fromError: unknown
                 ): Promise<string | null> => {
+                    const canSttFallback =
+                        !!this.effectiveSttFallbackCredentials() ||
+                        isFallbackEndpointConfigured(this.settings);
                     if (
                         isDiarizationCancelled(fromError, signal) ||
                         signal.aborted ||
                         !isServiceFailure(fromError) ||
-                        !isFallbackEndpointConfigured(this.settings)
+                        !canSttFallback
                     ) {
                         return null;
                     }
@@ -6151,7 +6178,8 @@ export default class SystemRecordingPlugin extends Plugin {
         expectedTakes: number,
         mode: TranscribeMode
     ): Promise<void> {
-        if (!this.effectiveSttBaseUrl() || !this.effectiveSttApiKey()) {
+        const { baseUrl: sttUrl, apiKey: sttKey } = this.effectiveSttCredentials();
+        if (!sttUrl || !sttKey) {
             new Notice(t().notices.transcribeNoEndpoint);
             return;
         }
