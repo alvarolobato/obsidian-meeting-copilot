@@ -41,6 +41,7 @@ import { t, type Messages } from "./i18n";
 import { describeVersion } from "./buildInfo";
 import { mcLog } from "./util/logLine";
 import { ModelIdSuggest, type ModelOption } from "./ui/modelSuggest";
+import type { EnrichCLI } from "./enrich/cliBridge";
 
 export interface SystemRecordingSettings {
 	/** `{{placeholder}}` folder template for one-off meetings, e.g. "Meetings/{{year}}". */
@@ -252,6 +253,12 @@ export interface SystemRecordingSettings {
 	 * Clamped to 60–600 in settings. One automatic retry on timeout (#128).
 	 */
 	enrichTimeoutSeconds: number;
+	/** Which backend to use for enrichment LLM calls. */
+	enrichBackend: "api" | EnrichCLI;
+	/** Per-CLI binary path overrides; empty string = auto-detect. */
+	enrichCliPaths: Record<EnrichCLI, string>;
+	/** Per-CLI model overrides; empty string = use the CLI's default. */
+	enrichCliModels: Record<EnrichCLI, string>;
 	enrichOnTranscribe: boolean;
 	hideAiNotes: boolean;
 	/** After enriching an ad-hoc meeting, ask the LLM for a title and offer to rename. */
@@ -278,6 +285,7 @@ const OPTIONAL_SCOPES_DEFAULT = true;
 /** Settings panes shown as horizontal tabs inside the plugin settings view. */
 type SettingsTabId =
 	| "general"
+	| "aiBackend"
 	| "calendar"
 	| "detection"
 	| "recording"
@@ -286,12 +294,27 @@ type SettingsTabId =
 
 const SETTINGS_TABS: readonly SettingsTabId[] = [
 	"general",
+	"aiBackend",
 	"calendar",
 	"detection",
 	"recording",
 	"transcription",
 	"enrichment",
 ] as const;
+
+/** Return the appropriate placeholder string for a per-CLI model text field. */
+function cliModelPlaceholder(cli: EnrichCLI, s: ReturnType<typeof t>): string {
+	switch (cli) {
+		case "claude-cli":
+			return s.settings.enrichCliModel.placeholderClaude;
+		case "codex-cli":
+			return s.settings.enrichCliModel.placeholderCodex;
+		case "opencode-cli":
+			return s.settings.enrichCliModel.placeholderOpencode;
+		case "pi-cli":
+			return s.settings.enrichCliModel.placeholderPi;
+	}
+}
 
 export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	oneOffFolderTemplate: "Meetings/{{year}}",
@@ -373,6 +396,9 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	enrichPrompt: "",
 	enrichMaxTranscriptTokens: 400_000,
 	enrichTimeoutSeconds: 120,
+	enrichBackend: "api",
+	enrichCliPaths: { "claude-cli": "", "codex-cli": "", "opencode-cli": "", "pi-cli": "" },
+	enrichCliModels: { "claude-cli": "", "codex-cli": "", "opencode-cli": "", "pi-cli": "" },
 	enrichOnTranscribe: true,
 	hideAiNotes: false,
 	suggestAdhocTitle: true,
@@ -470,6 +496,36 @@ export function migrateSettings(
 	if (migrated.enrichMaxTranscriptTokens === 12_000) {
 		delete migrated.enrichMaxTranscriptTokens;
 	}
+	// Migrate legacy single enrichCliPath → per-CLI map.
+	// Only act when the legacy key is present; don't inject enrichCliPaths /
+	// enrichCliModels unconditionally — DEFAULT_SETTINGS supplies those for
+	// fresh installs via Object.assign in the caller.
+	const legacyPath = (migrated as Record<string, unknown>).enrichCliPath;
+	if (typeof legacyPath === "string") {
+		const backend = migrated.enrichBackend;
+		if (legacyPath && backend && backend !== "api") {
+			const paths: Record<string, string> = migrated.enrichCliPaths
+				? { ...(migrated.enrichCliPaths as Record<string, string>) }
+				: { "claude-cli": "", "codex-cli": "", "opencode-cli": "", "pi-cli": "" };
+			paths[backend] = legacyPath;
+			migrated.enrichCliPaths = paths as Record<EnrichCLI, string>;
+		}
+		delete (migrated as Record<string, unknown>).enrichCliPath;
+	}
+	// If enrichCliPaths or enrichCliModels are present but missing some CLI
+	// keys (e.g. pi-cli was added in a later version), fill them in.
+	if (migrated.enrichCliPaths) {
+		const cliKeys: EnrichCLI[] = ["claude-cli", "codex-cli", "opencode-cli", "pi-cli"];
+		for (const k of cliKeys) {
+			if (migrated.enrichCliPaths[k] === undefined) migrated.enrichCliPaths[k] = "";
+		}
+	}
+	if (migrated.enrichCliModels) {
+		const cliKeys: EnrichCLI[] = ["claude-cli", "codex-cli", "opencode-cli", "pi-cli"];
+		for (const k of cliKeys) {
+			if (migrated.enrichCliModels[k] === undefined) migrated.enrichCliModels[k] = "";
+		}
+	}
 	return migrated;
 }
 
@@ -523,6 +579,8 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
     private downloadProgress = 0;
     /** The on-screen local-model download/status row, updated in place during a download. */
     private modelDownloadRow: Setting | null = null;
+    /** Host for the enrichment-backend body rows — rebuilt in place on backend change. */
+    private enrichBackendBodyEl: HTMLElement | null = null;
 
     constructor(app: App, plugin: SystemRecordingPlugin) {
         super(app, plugin);
@@ -561,6 +619,9 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         switch (this.activeTab) {
             case "general":
                 this.renderGeneralTab(pane);
+                break;
+            case "aiBackend":
+                this.renderAiBackendTab(pane);
                 break;
             case "calendar":
                 this.renderCalendarTab(pane);
@@ -790,6 +851,14 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     .setButtonText(s.settings.notificationStyle.button)
                     .onClick(() => this.plugin.openMacNotificationSettings())
             );
+    }
+
+    /**
+     * AI Backend tab: API endpoint credentials and model pickers, plus the
+     * enrichment backend selector (API vs CLI tools).
+     */
+    private renderAiBackendTab(containerEl: HTMLElement): void {
+        const s = t();
 
         new Setting(containerEl).setName(s.settings.endpointHeading).setHeading();
 
@@ -939,25 +1008,91 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         });
         this.renderTranscriptionEngineBody();
 
-        this.addModelPicker(
-            new Setting(containerEl)
-                .setName(s.settings.enrichModel.name)
-                .setDesc(s.settings.enrichModel.desc),
-            this.plugin.settings.enrichModel,
-            async (value) => {
-                this.plugin.settings.enrichModel = value;
-                await this.plugin.saveSettings();
-            }
-        );
-        this.addFallbackModelDetails(containerEl, {
-            detailsKey: "fallback-enrich",
-            desc: s.settings.fallbackModel.descEnrich,
-            current: this.plugin.settings.fallbackEnrichModel,
-            onChange: async (value) => {
-                this.plugin.settings.fallbackEnrichModel = value;
-                await this.plugin.saveSettings();
-            },
-        });
+        // Enrichment model is only relevant when the API backend is selected
+        if (this.plugin.settings.enrichBackend === "api") {
+            this.addModelPicker(
+                new Setting(containerEl)
+                    .setName(s.settings.enrichModel.name)
+                    .setDesc(s.settings.enrichModel.desc),
+                this.plugin.settings.enrichModel,
+                async (value) => {
+                    this.plugin.settings.enrichModel = value;
+                    await this.plugin.saveSettings();
+                }
+            );
+            this.addFallbackModelDetails(containerEl, {
+                detailsKey: "fallback-enrich",
+                desc: s.settings.fallbackModel.descEnrich,
+                current: this.plugin.settings.fallbackEnrichModel,
+                onChange: async (value) => {
+                    this.plugin.settings.fallbackEnrichModel = value;
+                    await this.plugin.saveSettings();
+                },
+            });
+        }
+
+        // Enrichment backend section
+        new Setting(containerEl).setName(s.settings.enrichBackendHeading).setHeading();
+
+        this.enrichBackendBodyEl = containerEl.createDiv({ cls: "mc-enrich-backend-body" });
+        this.renderEnrichBackendBody();
+    }
+
+    /** Render (or re-render in place) the enrichment-backend body rows. */
+    private renderEnrichBackendBody(): void {
+        const el = this.enrichBackendBodyEl;
+        if (!el) return;
+        el.empty();
+        const s = t();
+
+        new Setting(el)
+            .setName(s.settings.enrichBackend.name)
+            .setDesc(s.settings.enrichBackend.desc)
+            .addDropdown((dd) => {
+                dd
+                    .addOption("api", s.settings.enrichBackend.options.api)
+                    .addOption("claude-cli", s.settings.enrichBackend.options["claude-cli"])
+                    .addOption("codex-cli", s.settings.enrichBackend.options["codex-cli"])
+                    .addOption("opencode-cli", s.settings.enrichBackend.options["opencode-cli"])
+                    .addOption("pi-cli", s.settings.enrichBackend.options["pi-cli"])
+                    .setValue(this.plugin.settings.enrichBackend)
+                    .onChange(async (value) => {
+                        this.plugin.settings.enrichBackend = value as "api" | EnrichCLI;
+                        await this.plugin.saveSettings();
+                        this.display();
+                    });
+            });
+
+        // Per-CLI path + model fields — only shown when a CLI backend is selected
+        if (this.plugin.settings.enrichBackend !== "api") {
+            const cli = this.plugin.settings.enrichBackend;
+
+            new Setting(el)
+                .setName(s.settings.enrichCliPath.name)
+                .setDesc(s.settings.enrichCliPath.desc)
+                .addText((text) =>
+                    text
+                        .setPlaceholder(s.settings.enrichCliPath.placeholder)
+                        .setValue(this.plugin.settings.enrichCliPaths[cli])
+                        .onChange(async (value) => {
+                            this.plugin.settings.enrichCliPaths[cli] = value.trim();
+                            await this.plugin.saveSettings();
+                        })
+                );
+
+            new Setting(el)
+                .setName(s.settings.enrichCliModel.name)
+                .setDesc(s.settings.enrichCliModel.desc)
+                .addText((text) =>
+                    text
+                        .setPlaceholder(cliModelPlaceholder(cli, s))
+                        .setValue(this.plugin.settings.enrichCliModels[cli])
+                        .onChange(async (value) => {
+                            this.plugin.settings.enrichCliModels[cli] = value.trim();
+                            await this.plugin.saveSettings();
+                        })
+                );
+        }
     }
 
     /**

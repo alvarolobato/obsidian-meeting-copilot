@@ -174,6 +174,11 @@ const FOLLOW_UPS_HEADING = "## Follow-ups";
  */
 const PAST_WINDOW_DAYS = 2;
 import { chatComplete, ChatAbortError, EnrichTimeoutError } from "./enrich/llm";
+import {
+    cliChatComplete,
+    CLIAbortError,
+    CLINotFoundError,
+} from "./enrich/cliBridge";
 import { isPartialTranscript } from "./transcribe/partial";
 import { stripHallucinatedLines } from "./transcribe/hallucination";
 import {
@@ -840,6 +845,9 @@ export default class SystemRecordingPlugin extends Plugin {
             DEFAULT_SETTINGS,
             migrateSettings(raw as Record<string, unknown> | null)
         );
+        // Ensure per-CLI maps are independent copies, not shared with DEFAULT_SETTINGS
+        this.settings.enrichCliPaths = { ...DEFAULT_SETTINGS.enrichCliPaths, ...this.settings.enrichCliPaths };
+        this.settings.enrichCliModels = { ...DEFAULT_SETTINGS.enrichCliModels, ...this.settings.enrichCliModels };
         // Normalize the shared endpoint (tolerate hand-edited data.json).
         this.settings.apiBaseUrl = (this.settings.apiBaseUrl ?? "").trim();
         this.settings.apiKey = (this.settings.apiKey ?? "").trim();
@@ -875,6 +883,10 @@ export default class SystemRecordingPlugin extends Plugin {
             this.settings.enrichTimeoutSeconds = Number.isFinite(n)
                 ? Math.min(600, Math.max(60, Math.round(n)))
                 : DEFAULT_SETTINGS.enrichTimeoutSeconds;
+        }
+        const VALID_ENRICH_BACKENDS = ["api", "claude-cli", "codex-cli", "opencode-cli", "pi-cli"] as const;
+        if (!VALID_ENRICH_BACKENDS.includes(this.settings.enrichBackend as typeof VALID_ENRICH_BACKENDS[number])) {
+            this.settings.enrichBackend = "api";
         }
         // Migrate the previously enrichment-only endpoint into the shared fields
         // when the shared ones are still unset or at the default.
@@ -6280,7 +6292,7 @@ export default class SystemRecordingPlugin extends Plugin {
             return "";
         }
         const { apiBaseUrl, apiKey, enrichModel } = this.settings;
-        if (!apiBaseUrl || !apiKey || !enrichModel) {
+        if (this.settings.enrichBackend === "api" && (!apiBaseUrl || !apiKey || !enrichModel)) {
             new Notice(t().notices.transcriptImportNoEndpoint);
             return "";
         }
@@ -6298,6 +6310,18 @@ export default class SystemRecordingPlugin extends Plugin {
             Math.max(60_000, (this.settings.enrichTimeoutSeconds || 120) * 1000)
         );
         try {
+            if (this.settings.enrichBackend !== "api") {
+                const backend = this.settings.enrichBackend;
+                return await cliChatComplete({
+                    cli: backend,
+                    cliPath: this.settings.enrichCliPaths[backend] || undefined,
+                    model: this.settings.enrichCliModels[backend] || undefined,
+                    system: TRANSCRIPT_CLEANUP_SYSTEM_PROMPT,
+                    user: buildTranscriptCleanupPrompt(budgeted),
+                    signal,
+                    timeoutMs,
+                });
+            }
             return await chatComplete({
                 baseUrl: apiBaseUrl,
                 apiKey,
@@ -6308,7 +6332,7 @@ export default class SystemRecordingPlugin extends Plugin {
                 timeoutMs,
             });
         } catch (e) {
-            if (e instanceof ChatAbortError) return "";
+            if (e instanceof ChatAbortError || e instanceof CLIAbortError) return "";
             new Notice(
                 t().notices.transcriptImportError(
                     e instanceof Error ? e.message : String(e)
@@ -7272,10 +7296,12 @@ export default class SystemRecordingPlugin extends Plugin {
             new Notice(t().notices.enrichDisabled);
             return;
         }
-        const { apiBaseUrl, apiKey, enrichModel } = this.settings;
-        if (!apiBaseUrl || !apiKey || !enrichModel) {
-            new Notice(t().notices.enrichNotConfigured);
-            return;
+        if (this.settings.enrichBackend === "api") {
+            const { apiBaseUrl, apiKey, enrichModel } = this.settings;
+            if (!apiBaseUrl || !apiKey || !enrichModel) {
+                new Notice(t().notices.enrichNotConfigured);
+                return;
+            }
         }
         // No transcript yet but a recording exists → transcribe first, then
         // enrich as a dependent task once it lands.
@@ -7366,12 +7392,8 @@ export default class SystemRecordingPlugin extends Plugin {
     ): Promise<void> {
         const { apiBaseUrl, apiKey, enrichModel } = this.settings;
         // Config can change between enqueue and run; re-check and bail quietly.
-        if (
-            !this.settings.enableEnrichment ||
-            !apiBaseUrl ||
-            !apiKey ||
-            !enrichModel
-        ) {
+        if (!this.settings.enableEnrichment) return;
+        if (this.settings.enrichBackend === "api" && (!apiBaseUrl || !apiKey || !enrichModel)) {
             return;
         }
         let enrichedOk = false;
@@ -7482,6 +7504,21 @@ export default class SystemRecordingPlugin extends Plugin {
                 key: string,
                 model: string
             ): Promise<string> => {
+                // Dispatch to the CLI backend; CLI backends don't use the endpoint
+                // args but the signature is kept consistent for the fallback logic below.
+                if (this.settings.enrichBackend !== "api") {
+                    const backend = this.settings.enrichBackend;
+                    const cliModel = this.settings.enrichCliModels[backend] || undefined;
+                    return cliChatComplete({
+                        cli: backend,
+                        cliPath: this.settings.enrichCliPaths[backend] || undefined,
+                        model: cliModel,
+                        system: ENRICH_SYSTEM_PROMPT,
+                        user: userPrompt,
+                        signal,
+                        timeoutMs,
+                    });
+                }
                 let attempt = 0;
                 for (;;) {
                     try {
@@ -7521,6 +7558,10 @@ export default class SystemRecordingPlugin extends Plugin {
                     enrichModel
                 );
             } catch (e) {
+                // CLI backends don't support fallback endpoints; re-throw immediately
+                if (this.settings.enrichBackend !== "api") {
+                    throw e;
+                }
                 const fb = fallbackEndpoint(this.settings);
                 if (
                     !fb ||
@@ -7631,6 +7672,20 @@ export default class SystemRecordingPlugin extends Plugin {
                     elapsedMs,
                 });
                 new Notice(t().notices.enrichTimeout(file.basename, secs));
+            } else if (e instanceof CLINotFoundError) {
+                mcLog("enrich", "fail", {
+                    note: file.basename,
+                    outcome: "cli-not-found",
+                    error: e.message,
+                    elapsedMs,
+                });
+                {
+                    const backendOpts = t().settings.enrichBackend.options;
+                    const backendKey = this.settings.enrichBackend as keyof typeof backendOpts;
+                    new Notice(
+                        t().notices.enrichCliNotFound(backendOpts[backendKey] ?? this.settings.enrichBackend)
+                    );
+                }
             } else {
                 mcLog("enrich", "fail", {
                     note: file.basename,
@@ -7668,7 +7723,7 @@ export default class SystemRecordingPlugin extends Plugin {
 
     /** Whether an error from an enrichment LLM call is a user cancellation (queue abort). */
     private isEnrichCancelled(error: unknown, signal: AbortSignal): boolean {
-        return signal.aborted || error instanceof ChatAbortError;
+        return signal.aborted || error instanceof ChatAbortError || error instanceof CLIAbortError;
     }
 
     /**

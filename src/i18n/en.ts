@@ -150,6 +150,8 @@ export const en = {
 			"Set the AI endpoint (base URL + API key) and an enrichment model in settings before importing a non-Zoom transcript.",
 		transcriptImportNotApplied:
 			"Transcript imported, but not written to the note or enriched — check the \"Insert transcript\" and enrichment settings.",
+		enrichCliNotFound: (cli: string) =>
+			`Enrichment CLI not found: ${cli}. Install it or set the path in AI backend settings.`,
 	},
 	transcript: {
 		// Prepended to a speaker-separated transcript. Tells the enrichment model
@@ -490,6 +492,7 @@ export const en = {
 		},
 		tabs: {
 			general: "General",
+			aiBackend: "AI backend",
 			calendar: "Calendar",
 			detection: "Detection",
 			recording: "Recording & notes",
@@ -825,6 +828,31 @@ export const en = {
 		enrichTimeoutSeconds: {
 			name: "Enrichment timeout (seconds)",
 			desc: "How long to wait for the enrichment model before failing (and retrying once). Raise this for slow local/proxy LLMs. Range 60–600; default 120.",
+		},
+		enrichBackend: {
+			name: "Enrichment backend",
+			desc: "How to call the LLM for enrichment. 'API endpoint' uses the configured OpenAI-compatible endpoint (requires API key). CLI options use a locally installed tool under your subscription — no API key needed for enrichment.",
+			options: {
+				api: "API endpoint",
+				"claude-cli": "Claude Code CLI",
+				"codex-cli": "Codex CLI (OpenAI)",
+				"opencode-cli": "OpenCode CLI",
+				"pi-cli": "Pi CLI",
+			},
+		},
+		enrichBackendHeading: "Enrichment backend",
+		enrichCliPath: {
+			name: "CLI path",
+			desc: "Path to the CLI binary. Leave empty to auto-detect from PATH and common install locations (npm global, Homebrew, Volta, fnm).",
+			placeholder: "/usr/local/bin/claude",
+		},
+		enrichCliModel: {
+			name: "Model",
+			desc: "Model to use with this CLI. Leave empty to use the CLI's default. For OpenCode and Pi, use provider/model format (e.g. anthropic/claude-sonnet-5).",
+			placeholderClaude: "claude-sonnet-5",
+			placeholderCodex: "codex-mini-latest",
+			placeholderOpencode: "anthropic/claude-sonnet-5",
+			placeholderPi: "anthropic/claude-sonnet-5",
 		},
 	},
 	oauth: {
