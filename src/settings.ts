@@ -1185,41 +1185,33 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                         });
                 });
 
-            // Model selector: dropdown when models have been loaded, text field otherwise.
-            if (this.cliModelsLoaded && this.cliModels.length > 0) {
-                const currentModel = this.plugin.settings.enrichCliModels[backend];
-                const options = [...this.cliModels];
-                // If the saved model isn't in the fetched list, prepend it so it remains selectable.
-                if (currentModel && !options.includes(currentModel)) {
-                    options.unshift(currentModel);
-                }
-                new Setting(el)
-                    .setName(s.settings.enrichCliModel.name)
-                    .setDesc(s.settings.enrichCliModel.desc)
-                    .addDropdown((dd) => {
-                        for (const m of options) {
-                            dd.addOption(m, m);
+            // Model selector: combo box (text + datalist) — allows free-typing
+            // and picking from the loaded list when available.
+            new Setting(el)
+                .setName(s.settings.enrichCliModel.name)
+                .setDesc(s.settings.enrichCliModel.desc)
+                .addText((text) => {
+                    text
+                        .setPlaceholder(cliModelPlaceholder(backend, s))
+                        .setValue(this.plugin.settings.enrichCliModels[backend])
+                        .onChange(async (value) => {
+                            this.plugin.settings.enrichCliModels[backend] = value.trim();
+                            await this.plugin.saveSettings();
+                        });
+                    if (this.cliModelsLoaded && this.cliModels.length > 0) {
+                        const input = text.inputEl;
+                        const listId = `mc-cli-models-${backend}`;
+                        const dl = input.ownerDocument.createElement("datalist");
+                        dl.id = listId;
+                        for (const m of this.cliModels) {
+                            const opt = input.ownerDocument.createElement("option");
+                            opt.value = m;
+                            dl.appendChild(opt);
                         }
-                        dd.setValue(currentModel || (options[0] ?? ""))
-                            .onChange(async (value) => {
-                                this.plugin.settings.enrichCliModels[backend] = value;
-                                await this.plugin.saveSettings();
-                            });
-                    });
-            } else {
-                new Setting(el)
-                    .setName(s.settings.enrichCliModel.name)
-                    .setDesc(s.settings.enrichCliModel.desc)
-                    .addText((text) =>
-                        text
-                            .setPlaceholder(cliModelPlaceholder(backend, s))
-                            .setValue(this.plugin.settings.enrichCliModels[backend])
-                            .onChange(async (value) => {
-                                this.plugin.settings.enrichCliModels[backend] = value.trim();
-                                await this.plugin.saveSettings();
-                            })
-                    );
-            }
+                        input.parentElement?.appendChild(dl);
+                        input.setAttribute("list", listId);
+                    }
+                });
         }
     }
 
