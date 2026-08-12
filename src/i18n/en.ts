@@ -150,6 +150,8 @@ export const en = {
 			"Set the AI endpoint (base URL + API key) and an enrichment model in settings before importing a non-Zoom transcript.",
 		transcriptImportNotApplied:
 			"Transcript imported, but not written to the note or enriched — check the \"Insert transcript\" and enrichment settings.",
+		enrichCliNotFound: (cli: string) =>
+			`Enrichment CLI not found: ${cli}. Install it or set the path in AI backend settings.`,
 	},
 	transcript: {
 		// Prepended to a speaker-separated transcript. Tells the enrichment model
@@ -490,6 +492,7 @@ export const en = {
 		},
 		tabs: {
 			general: "General",
+			aiBackend: "AI backend",
 			calendar: "Calendar",
 			detection: "Detection",
 			recording: "Recording & notes",
@@ -642,6 +645,34 @@ export const en = {
 		fallbackApiKey: {
 			name: "API key",
 			desc: "Optional. Leave empty for local servers that ignore keys; set it when the fallback gateway requires auth.",
+		},
+		sttApiBaseUrl: {
+			name: "Transcription API URL",
+			desc: "Endpoint for transcription. Leave empty to use the enrichment API endpoint. If you're using a CLI enrichment backend, set this explicitly.",
+			placeholder: "Same as enrichment endpoint",
+		},
+		sttApiKey: {
+			name: "Transcription API key",
+			desc: "API key for the transcription endpoint. Only applies when a Transcription API URL is set above.",
+		},
+		sttFallbackApiBaseUrl: {
+			name: "Fallback URL",
+			desc: "Fallback transcription endpoint. Leave empty to use the enrichment fallback.",
+			placeholder: "https://api.example.com/v1",
+		},
+		sttFallbackApiKey: {
+			name: "Fallback API key",
+			desc: "Key for the fallback transcription endpoint.",
+		},
+		loadCliModels: {
+			button: "Load models",
+			loading: "Loading…",
+			noModels: "No models returned",
+			available: "Available models:",
+			descHardcoded: "Built-in list for this CLI",
+			descLive: "Fetched from your local CLI install",
+			notFound: (bin: string) => `CLI not found at "${bin}". Check the path in AI backend settings.`,
+			failed: (msg: string) => `Failed to load models: ${msg}`,
 		},
 		fallbackModel: {
 			summary: "Fallback model",
@@ -825,6 +856,34 @@ export const en = {
 		enrichTimeoutSeconds: {
 			name: "Enrichment timeout (seconds)",
 			desc: "How long to wait for the enrichment model before failing (and retrying once). Raise this for slow local/proxy LLMs. Range 60–600; default 120.",
+		},
+		enrichBackend: {
+			name: "Enrichment backend",
+			desc: "Use an API endpoint or a locally installed CLI.",
+			options: {
+				api: "API endpoint",
+				"claude-cli": "Claude Code CLI",
+				"codex-cli": "Codex CLI (OpenAI)",
+				"opencode-cli": "OpenCode CLI",
+				"pi-cli": "Pi CLI",
+			},
+		},
+		enrichBackendHeading: "Enrichment backend",
+		enrichCliPath: {
+			name: "CLI path",
+			desc: "Path to the CLI binary. Leave empty to auto-detect from PATH and common install locations (npm global, Homebrew, Volta, fnm).",
+			placeholderClaude: "/usr/local/bin/claude",
+			placeholderCodex: "/usr/local/bin/codex",
+			placeholderOpencode: "/usr/local/bin/opencode",
+			placeholderPi: "/usr/local/bin/pi",
+		},
+		enrichCliModel: {
+			name: "Model",
+			desc: "Model to use. Leave empty for the CLI default.",
+			placeholderClaude: "sonnet",
+			placeholderCodex: "gpt-5.5",
+			placeholderOpencode: "anthropic/claude-sonnet-5",
+			placeholderPi: "anthropic/claude-sonnet-5",
 		},
 	},
 	oauth: {

@@ -174,6 +174,11 @@ const FOLLOW_UPS_HEADING = "## Follow-ups";
  */
 const PAST_WINDOW_DAYS = 2;
 import { chatComplete, ChatAbortError, EnrichTimeoutError } from "./enrich/llm";
+import {
+    cliChatComplete,
+    CLIAbortError,
+    CLINotFoundError,
+} from "./enrich/cliBridge";
 import { isPartialTranscript } from "./transcribe/partial";
 import { stripHallucinatedLines } from "./transcribe/hallucination";
 import {
@@ -840,6 +845,9 @@ export default class SystemRecordingPlugin extends Plugin {
             DEFAULT_SETTINGS,
             migrateSettings(raw as Record<string, unknown> | null)
         );
+        // Ensure per-CLI maps are independent copies, not shared with DEFAULT_SETTINGS
+        this.settings.enrichCliPaths = { ...DEFAULT_SETTINGS.enrichCliPaths, ...this.settings.enrichCliPaths };
+        this.settings.enrichCliModels = { ...DEFAULT_SETTINGS.enrichCliModels, ...this.settings.enrichCliModels };
         // Normalize the shared endpoint (tolerate hand-edited data.json).
         this.settings.apiBaseUrl = (this.settings.apiBaseUrl ?? "").trim();
         this.settings.apiKey = (this.settings.apiKey ?? "").trim();
@@ -847,6 +855,10 @@ export default class SystemRecordingPlugin extends Plugin {
             this.settings.fallbackApiBaseUrl ?? ""
         ).trim();
         this.settings.fallbackApiKey = (this.settings.fallbackApiKey ?? "").trim();
+        this.settings.sttApiBaseUrl = (this.settings.sttApiBaseUrl ?? "").trim();
+        this.settings.sttApiKey = (this.settings.sttApiKey ?? "").trim();
+        this.settings.sttFallbackApiBaseUrl = (this.settings.sttFallbackApiBaseUrl ?? "").trim();
+        this.settings.sttFallbackApiKey = (this.settings.sttFallbackApiKey ?? "").trim();
         this.settings.fallbackSttModel = (
             this.settings.fallbackSttModel ?? ""
         ).trim();
@@ -875,6 +887,10 @@ export default class SystemRecordingPlugin extends Plugin {
             this.settings.enrichTimeoutSeconds = Number.isFinite(n)
                 ? Math.min(600, Math.max(60, Math.round(n)))
                 : DEFAULT_SETTINGS.enrichTimeoutSeconds;
+        }
+        const VALID_ENRICH_BACKENDS = ["api", "claude-cli", "codex-cli", "opencode-cli", "pi-cli"] as const;
+        if (!VALID_ENRICH_BACKENDS.includes(this.settings.enrichBackend as typeof VALID_ENRICH_BACKENDS[number])) {
+            this.settings.enrichBackend = "api";
         }
         // Migrate the previously enrichment-only endpoint into the shared fields
         // when the shared ones are still unset or at the default.
@@ -5297,13 +5313,45 @@ export default class SystemRecordingPlugin extends Plugin {
      * on-device. For the remote backend the probe gate still applies, so a
      * doomed diarized pass never runs against an endpoint that ignores it.
      */
+    /**
+     * Returns the effective STT base URL and API key as a pair.
+     * If `sttApiBaseUrl` is set, uses it with `sttApiKey` (even if empty),
+     * so the enrichment key is never sent to an unrelated third-party host.
+     * When `sttApiBaseUrl` is empty, falls back to the enrichment endpoint pair.
+     */
+    private effectiveSttCredentials(): { baseUrl: string; apiKey: string } {
+        const url = this.settings.sttApiBaseUrl.trim();
+        if (url) {
+            return { baseUrl: url, apiKey: this.settings.sttApiKey.trim() };
+        }
+        return { baseUrl: this.settings.apiBaseUrl, apiKey: this.settings.apiKey };
+    }
+
+    /**
+     * Returns the effective STT fallback credentials as a pair, or null when no
+     * fallback is configured. If `sttFallbackApiBaseUrl` is set, uses it with
+     * `sttFallbackApiKey`. Otherwise falls through to the enrichment fallback pair.
+     * Returns null when neither STT-specific nor enrichment fallback URL is set.
+     */
+    private effectiveSttFallbackCredentials(): { baseUrl: string; apiKey: string } | null {
+        const url = this.settings.sttFallbackApiBaseUrl.trim();
+        if (url) {
+            return { baseUrl: url, apiKey: this.settings.sttFallbackApiKey.trim() };
+        }
+        const fbUrl = this.settings.fallbackApiBaseUrl.trim();
+        if (fbUrl) {
+            return { baseUrl: fbUrl, apiKey: this.settings.fallbackApiKey };
+        }
+        return null;
+    }
+
     private shouldSeparateSpeakers(): boolean {
         if (this.settings.transcriptionBackend === "local") {
             return this.settings.diarizationEnabled;
         }
         return canSeparateSpeakers(
             this.settings,
-            probeKey(this.settings.apiBaseUrl, this.settings.sttModel)
+            probeKey(this.effectiveSttCredentials().baseUrl, this.settings.sttModel)
         );
     }
 
@@ -5375,7 +5423,7 @@ export default class SystemRecordingPlugin extends Plugin {
     private resolveEngineFamily(): SttApiType {
         const s = this.settings;
         if (s.sttApiType !== "whisper-1-ts") return s.sttApiType;
-        const key = probeKey(s.apiBaseUrl, s.sttModel);
+        const key = probeKey(this.effectiveSttCredentials().baseUrl, s.sttModel);
         const timestampsConfirmed =
             s.sttTimestampsProbeKey === key && s.sttTimestampsSupported === true;
         return timestampsConfirmed ? "whisper-1-ts" : "whisper-1";
@@ -5388,20 +5436,36 @@ export default class SystemRecordingPlugin extends Plugin {
         const s = this.settings;
         if (which === "fallback") {
             const fb = fallbackEndpoint(s);
-            if (!fb) {
-                // Caller should have checked; degrade to primary rather than throw.
+            // Determine effective STT fallback credentials as a pair so the
+            // enrichment key is never sent to an STT-specific host accidentally.
+            const sttFb = this.effectiveSttFallbackCredentials();
+            if (!fb && !sttFb) {
+                // No fallback configured at all; degrade to primary.
                 return this.buildTranscribeConfig("primary");
             }
             // Fallback STT is mixed-only: we never probed timestamps on that
             // gateway, so never advertise whisper-1-ts here.
+            const baseFamily = (fb?.sttApiType ?? s.sttApiType);
             const family =
-                fb.sttApiType === "whisper-1-ts" ? "whisper-1" : fb.sttApiType;
+                baseFamily === "whisper-1-ts" ? "whisper-1" : baseFamily;
+            // Prefer fallbackSttModel, then the enrichment-fallback model, then
+            // the primary STT model — ensuring STT-specific fallback settings
+            // are honoured even when only the STT fallback fields are set.
+            const sttModel = (
+                s.fallbackSttModel.trim() ||
+                fb?.sttModel ||
+                s.sttModel
+            ).trim();
+            // Use the STT-specific fallback URL+key pair when available;
+            // otherwise fall through to the enrichment fallback endpoint.
+            const fallbackBaseUrl = sttFb?.baseUrl ?? (fb?.baseUrl ?? s.apiBaseUrl);
+            const fallbackApiKey = sttFb?.apiKey ?? (fb?.apiKey ?? "");
             return {
-                baseUrl: fb.baseUrl,
-                apiKey: fb.apiKey,
+                baseUrl: fallbackBaseUrl,
+                apiKey: fallbackApiKey,
                 model: family as TranscriptionModel,
-                modelOverride: fb.sttModel,
-                chatModel: fb.enrichModel,
+                modelOverride: sttModel,
+                chatModel: (fb?.enrichModel ?? s.enrichModel).trim(),
                 language: s.sttLanguage || "auto",
                 postProcessingEnabled: s.postProcessingEnabled,
                 dictionaryCorrectionEnabled: s.dictionaryCorrectionEnabled,
@@ -5409,9 +5473,10 @@ export default class SystemRecordingPlugin extends Plugin {
                 debugMode: s.debugLogging,
             };
         }
+        const { baseUrl, apiKey } = this.effectiveSttCredentials();
         return {
-            baseUrl: s.apiBaseUrl,
-            apiKey: s.apiKey,
+            baseUrl,
+            apiKey,
             // The engine family selects routing/chunking/timestamps; sttModel is
             // the actual name sent on the wire (may be a gateway id). Whisper
             // downgrades to no-timestamps when the endpoint can't emit them.
@@ -5566,11 +5631,12 @@ export default class SystemRecordingPlugin extends Plugin {
      * gates on the intended backend actually being local.
      */
     private canFallbackToRemote(error: unknown, signal: AbortSignal): boolean {
+        const { baseUrl, apiKey } = this.effectiveSttCredentials();
         return (
             this.settings.localFallbackToRemote &&
             !isDiarizationCancelled(error, signal) &&
-            !!this.settings.apiBaseUrl &&
-            !!this.settings.apiKey
+            !!baseUrl &&
+            !!apiKey
         );
     }
 
@@ -5712,12 +5778,12 @@ export default class SystemRecordingPlugin extends Plugin {
         this.cancelPendingAutoTranscribe(recording.path);
         // The remote backend needs an endpoint; the local one provisions its own
         // model/helper, so it can transcribe with no endpoint configured.
-        if (
-            this.settings.transcriptionBackend !== "local" &&
-            (!this.settings.apiBaseUrl || !this.settings.apiKey)
-        ) {
-            new Notice(t().notices.transcribeNoEndpoint);
-            return;
+        if (this.settings.transcriptionBackend !== "local") {
+            const { baseUrl: sttUrl, apiKey: sttKey } = this.effectiveSttCredentials();
+            if (!sttUrl || !sttKey) {
+                new Notice(t().notices.transcribeNoEndpoint);
+                return;
+            }
         }
         // Dedupe overlapping runs (double-click, or auto-transcribe racing a
         // manual trigger) — each would cost an API call and write.
@@ -5894,11 +5960,14 @@ export default class SystemRecordingPlugin extends Plugin {
                 const tryEndpointFallback = async (
                     fromError: unknown
                 ): Promise<string | null> => {
+                    const canSttFallback =
+                        !!this.effectiveSttFallbackCredentials() ||
+                        isFallbackEndpointConfigured(this.settings);
                     if (
                         isDiarizationCancelled(fromError, signal) ||
                         signal.aborted ||
                         !isServiceFailure(fromError) ||
-                        !isFallbackEndpointConfigured(this.settings)
+                        !canSttFallback
                     ) {
                         return null;
                     }
@@ -6109,7 +6178,8 @@ export default class SystemRecordingPlugin extends Plugin {
         expectedTakes: number,
         mode: TranscribeMode
     ): Promise<void> {
-        if (!this.settings.apiBaseUrl || !this.settings.apiKey) {
+        const { baseUrl: sttUrl, apiKey: sttKey } = this.effectiveSttCredentials();
+        if (!sttUrl || !sttKey) {
             new Notice(t().notices.transcribeNoEndpoint);
             return;
         }
@@ -6280,7 +6350,7 @@ export default class SystemRecordingPlugin extends Plugin {
             return "";
         }
         const { apiBaseUrl, apiKey, enrichModel } = this.settings;
-        if (!apiBaseUrl || !apiKey || !enrichModel) {
+        if (this.settings.enrichBackend === "api" && (!apiBaseUrl || !apiKey || !enrichModel)) {
             new Notice(t().notices.transcriptImportNoEndpoint);
             return "";
         }
@@ -6298,6 +6368,18 @@ export default class SystemRecordingPlugin extends Plugin {
             Math.max(60_000, (this.settings.enrichTimeoutSeconds || 120) * 1000)
         );
         try {
+            if (this.settings.enrichBackend !== "api") {
+                const backend = this.settings.enrichBackend;
+                return await cliChatComplete({
+                    cli: backend,
+                    cliPath: this.settings.enrichCliPaths[backend] || undefined,
+                    model: this.settings.enrichCliModels[backend] || undefined,
+                    system: TRANSCRIPT_CLEANUP_SYSTEM_PROMPT,
+                    user: buildTranscriptCleanupPrompt(budgeted),
+                    signal,
+                    timeoutMs,
+                });
+            }
             return await chatComplete({
                 baseUrl: apiBaseUrl,
                 apiKey,
@@ -6308,7 +6390,7 @@ export default class SystemRecordingPlugin extends Plugin {
                 timeoutMs,
             });
         } catch (e) {
-            if (e instanceof ChatAbortError) return "";
+            if (e instanceof ChatAbortError || e instanceof CLIAbortError) return "";
             new Notice(
                 t().notices.transcriptImportError(
                     e instanceof Error ? e.message : String(e)
@@ -7272,10 +7354,12 @@ export default class SystemRecordingPlugin extends Plugin {
             new Notice(t().notices.enrichDisabled);
             return;
         }
-        const { apiBaseUrl, apiKey, enrichModel } = this.settings;
-        if (!apiBaseUrl || !apiKey || !enrichModel) {
-            new Notice(t().notices.enrichNotConfigured);
-            return;
+        if (this.settings.enrichBackend === "api") {
+            const { apiBaseUrl, apiKey, enrichModel } = this.settings;
+            if (!apiBaseUrl || !apiKey || !enrichModel) {
+                new Notice(t().notices.enrichNotConfigured);
+                return;
+            }
         }
         // No transcript yet but a recording exists → transcribe first, then
         // enrich as a dependent task once it lands.
@@ -7366,12 +7450,8 @@ export default class SystemRecordingPlugin extends Plugin {
     ): Promise<void> {
         const { apiBaseUrl, apiKey, enrichModel } = this.settings;
         // Config can change between enqueue and run; re-check and bail quietly.
-        if (
-            !this.settings.enableEnrichment ||
-            !apiBaseUrl ||
-            !apiKey ||
-            !enrichModel
-        ) {
+        if (!this.settings.enableEnrichment) return;
+        if (this.settings.enrichBackend === "api" && (!apiBaseUrl || !apiKey || !enrichModel)) {
             return;
         }
         let enrichedOk = false;
@@ -7482,6 +7562,21 @@ export default class SystemRecordingPlugin extends Plugin {
                 key: string,
                 model: string
             ): Promise<string> => {
+                // Dispatch to the CLI backend; CLI backends don't use the endpoint
+                // args but the signature is kept consistent for the fallback logic below.
+                if (this.settings.enrichBackend !== "api") {
+                    const backend = this.settings.enrichBackend;
+                    const cliModel = this.settings.enrichCliModels[backend] || undefined;
+                    return cliChatComplete({
+                        cli: backend,
+                        cliPath: this.settings.enrichCliPaths[backend] || undefined,
+                        model: cliModel,
+                        system: ENRICH_SYSTEM_PROMPT,
+                        user: userPrompt,
+                        signal,
+                        timeoutMs,
+                    });
+                }
                 let attempt = 0;
                 for (;;) {
                     try {
@@ -7521,6 +7616,10 @@ export default class SystemRecordingPlugin extends Plugin {
                     enrichModel
                 );
             } catch (e) {
+                // CLI backends don't support fallback endpoints; re-throw immediately
+                if (this.settings.enrichBackend !== "api") {
+                    throw e;
+                }
                 const fb = fallbackEndpoint(this.settings);
                 if (
                     !fb ||
@@ -7631,6 +7730,20 @@ export default class SystemRecordingPlugin extends Plugin {
                     elapsedMs,
                 });
                 new Notice(t().notices.enrichTimeout(file.basename, secs));
+            } else if (e instanceof CLINotFoundError) {
+                mcLog("enrich", "fail", {
+                    note: file.basename,
+                    outcome: "cli-not-found",
+                    error: e.message,
+                    elapsedMs,
+                });
+                {
+                    const backendOpts = t().settings.enrichBackend.options;
+                    const backendKey = this.settings.enrichBackend as keyof typeof backendOpts;
+                    new Notice(
+                        t().notices.enrichCliNotFound(backendOpts[backendKey] ?? this.settings.enrichBackend)
+                    );
+                }
             } else {
                 mcLog("enrich", "fail", {
                     note: file.basename,
@@ -7668,7 +7781,7 @@ export default class SystemRecordingPlugin extends Plugin {
 
     /** Whether an error from an enrichment LLM call is a user cancellation (queue abort). */
     private isEnrichCancelled(error: unknown, signal: AbortSignal): boolean {
-        return signal.aborted || error instanceof ChatAbortError;
+        return signal.aborted || error instanceof ChatAbortError || error instanceof CLIAbortError;
     }
 
     /**
