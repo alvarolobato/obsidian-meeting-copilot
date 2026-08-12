@@ -324,6 +324,20 @@ function cliModelPlaceholder(cli: EnrichCLI, s: ReturnType<typeof t>): string {
 	}
 }
 
+/** Return the appropriate placeholder string for a per-CLI path text field. */
+function cliPathPlaceholder(cli: EnrichCLI, s: ReturnType<typeof t>): string {
+	switch (cli) {
+		case "claude-cli":
+			return s.settings.enrichCliPath.placeholderClaude;
+		case "codex-cli":
+			return s.settings.enrichCliPath.placeholderCodex;
+		case "opencode-cli":
+			return s.settings.enrichCliPath.placeholderOpencode;
+		case "pi-cli":
+			return s.settings.enrichCliPath.placeholderPi;
+	}
+}
+
 export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	oneOffFolderTemplate: "Meetings/{{year}}",
 	seriesFolderTemplate: "Meetings/{{series}}",
@@ -548,7 +562,7 @@ export function migrateSettings(
  */
 async function loadPiModels(
     configuredPath: string
-): Promise<{ models: string[]; error?: string }> {
+): Promise<{ models: string[]; errorKey?: "notFound" | "failed"; errorArg?: string }> {
     const { findBinary, buildEnhancedPath } = await import("./enrich/cliBridge");
     const { execFile } = await import("child_process");
     const { default: os } = await import("os");
@@ -569,10 +583,15 @@ async function loadPiModels(
             (err, stdout, stderr) => {
                 if (err) {
                     const code = (err as Error & { code?: string }).code;
-                    const msg = code === "ENOENT"
-                        ? `pi not found at "${bin}"`
-                        : `pi --list-models failed: ${(stderr as string)?.slice(0, 200) || err.message}`;
-                    resolve({ models: [], error: msg });
+                    if (code === "ENOENT") {
+                        resolve({ models: [], errorKey: "notFound", errorArg: bin });
+                    } else {
+                        resolve({
+                            models: [],
+                            errorKey: "failed",
+                            errorArg: (stderr as string)?.slice(0, 200) || err.message,
+                        });
+                    }
                     return;
                 }
                 // Format: "provider   model   context  max-out  thinking  images"
@@ -979,8 +998,6 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         const s = t();
 
         // === Enrichment section ===
-        new Setting(containerEl).setName(s.settings.enrichBackendHeading).setHeading();
-
         this.enrichBackendBodyEl = containerEl.createDiv({ cls: "mc-enrich-backend-body" });
         this.renderEnrichBackendBody();
 
@@ -1177,7 +1194,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                 .setDesc(s.settings.enrichCliPath.desc)
                 .addText((text) =>
                     text
-                        .setPlaceholder(s.settings.enrichCliPath.placeholder)
+                        .setPlaceholder(cliPathPlaceholder(cli, s))
                         .setValue(this.plugin.settings.enrichCliPaths[cli])
                         .onChange(async (value) => {
                             this.plugin.settings.enrichCliPaths[cli] = value.trim();
@@ -1211,8 +1228,10 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                                     const result = await loadPiModels(
                                         this.plugin.settings.enrichCliPaths["pi-cli"]
                                     );
-                                    if (result.error) {
-                                        new Notice(result.error);
+                                    if (result.errorKey === "notFound") {
+                                        new Notice(t().settings.loadCliModels.notFound(result.errorArg ?? "pi"));
+                                    } else if (result.errorKey === "failed") {
+                                        new Notice(t().settings.loadCliModels.failed(result.errorArg ?? ""));
                                     } else if (!result.models.length) {
                                         new Notice(s.settings.loadCliModels.noModels);
                                     } else {
@@ -2329,9 +2348,10 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                 this.plugin.settings.sttApiType = inferSttApiType(value);
                 await this.plugin.saveSettings();
             },
-            this.capabilities
-                ? (id) => this.capabilities?.get(id)?.transcription === true
-                : undefined
+            this.sttCapabilities
+                ? (id) => this.sttCapabilities?.get(id)?.transcription === true
+                : undefined,
+            this.sttModels
         );
         this.addModelPicker(
             new Setting(el)
@@ -2342,11 +2362,11 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                 this.plugin.settings.fallbackSttModel = value;
                 await this.plugin.saveSettings();
             },
-            this.fallbackCapabilities
+            this.sttFallbackCapabilities
                 ? (id) =>
-                      this.fallbackCapabilities?.get(id)?.transcription === true
+                      this.sttFallbackCapabilities?.get(id)?.transcription === true
                 : undefined,
-            this.fallbackModels,
+            this.sttFallbackModels,
             { label: s.settings.fallbackModel.usePrimary }
         );
     }

@@ -648,12 +648,12 @@ export const en = {
 		},
 		sttApiBaseUrl: {
 			name: "Transcription API URL",
-			desc: "Endpoint for transcription. Leave empty to use the enrichment endpoint.",
+			desc: "Endpoint for transcription. Leave empty to use the enrichment API endpoint. If you're using a CLI enrichment backend, set this explicitly.",
 			placeholder: "Same as enrichment endpoint",
 		},
 		sttApiKey: {
 			name: "Transcription API key",
-			desc: "API key for the transcription endpoint. Leave empty when the endpoint shares the enrichment key or needs no key.",
+			desc: "API key for the transcription endpoint. Only applies when a Transcription API URL is set above.",
 		},
 		sttFallbackApiBaseUrl: {
 			name: "Fallback URL",
@@ -669,6 +669,8 @@ export const en = {
 			loading: "Loading…",
 			noModels: "No models returned",
 			available: "Available Pi models:",
+			notFound: (bin: string) => `Pi not found at "${bin}". Check the CLI path in AI backend settings.`,
+			failed: (msg: string) => `Pi model listing failed: ${msg}`,
 		},
 		fallbackModel: {
 			summary: "Fallback model",
@@ -868,7 +870,10 @@ export const en = {
 		enrichCliPath: {
 			name: "CLI path",
 			desc: "Path to the CLI binary. Leave empty to auto-detect from PATH and common install locations (npm global, Homebrew, Volta, fnm).",
-			placeholder: "/usr/local/bin/claude",
+			placeholderClaude: "/usr/local/bin/claude",
+			placeholderCodex: "/usr/local/bin/codex",
+			placeholderOpencode: "/usr/local/bin/opencode",
+			placeholderPi: "/usr/local/bin/pi",
 		},
 		enrichCliModel: {
 			name: "Model",
