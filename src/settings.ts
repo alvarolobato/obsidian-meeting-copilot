@@ -203,6 +203,14 @@ export interface SystemRecordingSettings {
 	fallbackSttModel: string;
 	/** Fallback enrich chat model; empty inherits primary `enrichModel`. */
 	fallbackEnrichModel: string;
+	/** Transcription-specific API base URL. Empty = use enrichment apiBaseUrl. */
+	sttApiBaseUrl: string;
+	/** Transcription-specific API key. Empty = use enrichment apiKey. */
+	sttApiKey: string;
+	/** Transcription-specific fallback API base URL. Empty = use enrichment fallbackApiBaseUrl. */
+	sttFallbackApiBaseUrl: string;
+	/** Transcription-specific fallback API key. Empty = use enrichment fallbackApiKey. */
+	sttFallbackApiKey: string;
 	// Transcription backend selection (issue #34).
 	/** Where audio is transcribed: the remote OpenAI-compatible endpoint, or a local on-device Whisper model. */
 	transcriptionBackend: "remote" | "local";
@@ -372,6 +380,10 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	fallbackApiKey: "",
 	fallbackSttModel: "",
 	fallbackEnrichModel: "",
+	sttApiBaseUrl: "",
+	sttApiKey: "",
+	sttFallbackApiBaseUrl: "",
+	sttFallbackApiKey: "",
 	transcriptionBackend: "local",
 	localWhisperModel: DEFAULT_LOCAL_MODEL_ID,
 	localFallbackToRemote: false,
@@ -529,22 +541,58 @@ export function migrateSettings(
 	return migrated;
 }
 
+/**
+ * Runs `pi --list-models` and returns an array of "provider/model" strings.
+ * Returns an empty array on any error (binary not found, non-zero exit, etc.).
+ */
+async function loadPiModels(): Promise<string[]> {
+    const { execFile } = await import("child_process");
+    return new Promise((resolve) => {
+        execFile("pi", ["--list-models"], { timeout: 10000 }, (err, stdout) => {
+            if (err) { resolve([]); return; }
+            // Output: "provider   model   context  max-out  thinking  images"
+            // Skip header line; extract "provider/model" from first two columns.
+            const models = stdout.split("\n")
+                .slice(1)
+                .map((line) => {
+                    const parts = line.trim().split(/\s+/);
+                    if (parts.length >= 2) return `${parts[0]}/${parts[1]}`;
+                    return null;
+                })
+                .filter((m): m is string => !!m);
+            resolve(models);
+        });
+    });
+}
+
 export class SystemRecordingSettingTab extends PluginSettingTab {
     plugin: SystemRecordingPlugin;
     /** Which settings pane is currently shown; preserved across `display()` re-renders. */
     private activeTab: SettingsTabId = "general";
-    /** Model ids fetched from the primary endpoint (populated by "Load models"). */
+    /** Model ids fetched from the primary enrichment endpoint (populated by "Load models"). */
     private models: string[] = [];
-    /** Model ids from the fallback endpoint (when configured + loaded). */
+    /** Model ids from the fallback enrichment endpoint (when configured + loaded). */
     private fallbackModels: string[] = [];
-    /** Per-model capabilities from the primary endpoint (LiteLLM), or null when unavailable. */
+    /** Per-model capabilities from the primary enrichment endpoint (LiteLLM), or null when unavailable. */
     private capabilities: Map<string, ModelCapability> | null = null;
-    /** Capabilities from the fallback endpoint, or null. */
+    /** Capabilities from the fallback enrichment endpoint, or null. */
     private fallbackCapabilities: Map<string, ModelCapability> | null = null;
-    /** Last Load-models result for the primary URL (session only). */
+    /** Model ids fetched from the effective STT endpoint. */
+    private sttModels: string[] = [];
+    /** Model ids from the effective STT fallback endpoint. */
+    private sttFallbackModels: string[] = [];
+    /** Per-model capabilities from the STT endpoint, or null. */
+    private sttCapabilities: Map<string, ModelCapability> | null = null;
+    /** Capabilities from the STT fallback endpoint, or null. */
+    private sttFallbackCapabilities: Map<string, ModelCapability> | null = null;
+    /** Last Load-models result for the primary enrichment URL (session only). */
     private primaryEndpointStatus: "idle" | "ok" | "error" = "idle";
-    /** Last Load-models result for the fallback URL (session only). */
+    /** Last Load-models result for the fallback enrichment URL (session only). */
     private fallbackEndpointStatus: "idle" | "ok" | "error" = "idle";
+    /** Last Load-models result for the primary STT URL (session only). */
+    private sttEndpointStatus: "idle" | "ok" | "error" = "idle";
+    /** Last Load-models result for the fallback STT URL (session only). */
+    private sttFallbackEndpointStatus: "idle" | "ok" | "error" = "idle";
     /** The `${baseUrl}::${model}` key currently being auto-assessed, so the badges can show "checking…". */
     private probingKey: string | null = null;
     /** Endpoint+model keys already auto-assessed this session, so re-renders don't re-fire the probe (even after an "unknown" result). */
@@ -585,6 +633,26 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
     constructor(app: App, plugin: SystemRecordingPlugin) {
         super(app, plugin);
         this.plugin = plugin;
+    }
+
+    /** Effective STT base URL: falls back to enrichment endpoint when empty. */
+    private effectiveSttBaseUrl(): string {
+        return this.plugin.settings.sttApiBaseUrl.trim() || this.plugin.settings.apiBaseUrl;
+    }
+
+    /** Effective STT API key: falls back to enrichment key when empty. */
+    private effectiveSttApiKey(): string {
+        return this.plugin.settings.sttApiKey.trim() || this.plugin.settings.apiKey;
+    }
+
+    /** Effective STT fallback base URL: falls back to enrichment fallback when empty. */
+    private effectiveSttFallbackBaseUrl(): string {
+        return this.plugin.settings.sttFallbackApiBaseUrl.trim() || this.plugin.settings.fallbackApiBaseUrl;
+    }
+
+    /** Effective STT fallback API key: falls back to enrichment fallback key when empty. */
+    private effectiveSttFallbackApiKey(): string {
+        return this.plugin.settings.sttFallbackApiKey.trim() || this.plugin.settings.fallbackApiKey;
     }
 
     display(): void {
@@ -854,135 +922,23 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
     }
 
     /**
-     * AI Backend tab: API endpoint credentials and model pickers, plus the
-     * enrichment backend selector (API vs CLI tools).
+     * AI Backend tab: self-contained Enrichment section (backend selector →
+     * credentials/model) followed by a self-contained Transcription section
+     * (engine selector → credentials/model). Each section's body is rebuilt
+     * in place when its dropdown changes so the tab doesn't scroll-jump.
      */
     private renderAiBackendTab(containerEl: HTMLElement): void {
         const s = t();
 
-        new Setting(containerEl).setName(s.settings.endpointHeading).setHeading();
+        // === Enrichment section ===
+        new Setting(containerEl).setName(s.settings.enrichBackendHeading).setHeading();
 
-        this.addEndpointUrlSetting(
-            containerEl,
-            s.settings.apiBaseUrl.name,
-            s.settings.apiBaseUrl.desc,
-            this.plugin.settings.apiBaseUrl,
-            "https://api.openai.com/v1",
-            this.primaryEndpointStatus,
-            async (value) => {
-                this.plugin.settings.apiBaseUrl = value.trim();
-                await this.plugin.saveSettings();
-                this.primaryEndpointStatus = "idle";
-                // The stored verdict is keyed on the old base URL, so the
-                // badges now read "not checked yet"; repaint them and let
-                // a re-probe run on the next model change / tab reopen.
-                this.probedKeys.clear();
-                this.refreshSttBadges();
-            }
-        );
+        this.enrichBackendBodyEl = containerEl.createDiv({ cls: "mc-enrich-backend-body" });
+        this.renderEnrichBackendBody();
 
-        new Setting(containerEl)
-            .setName(s.settings.apiKey.name)
-            .setDesc(s.settings.apiKey.desc)
-            .addText((text) => {
-                text.inputEl.type = "password";
-                text
-                    .setValue(this.plugin.settings.apiKey)
-                    .onChange(async (value) => {
-                        this.plugin.settings.apiKey = value.trim();
-                        // probeKey ignores the key, so a stored verdict would
-                        // otherwise stay falsely "fresh" after a key change.
-                        // Reset it so transcription/timestamp support is
-                        // re-probed against the new credential.
-                        this.plugin.settings.sttTimestampsProbeKey = "";
-                        await this.plugin.saveSettings();
-                        this.primaryEndpointStatus = "idle";
-                        this.probedKeys.clear();
-                        this.refreshSttBadges();
-                    });
-            });
+        // === Transcription section ===
+        new Setting(containerEl).setName(s.settings.transcriptionHeading).setHeading();
 
-        // Optional failover endpoint — collapsed so the common single-service
-        // setup stays short. Model pickers live under each primary model below.
-        const fallbackDetails = containerEl.createEl("details", {
-            cls: "mc-fallback-endpoint",
-            attr: { "data-mc-details": "endpoint" },
-        });
-        fallbackDetails.createEl("summary", {
-            text: s.settings.fallbackEndpoint.summary,
-            cls: "mc-fallback-endpoint-summary",
-        });
-        const fallbackDesc = fallbackDetails.createEl("p", {
-            cls: "mc-fallback-endpoint-desc",
-        });
-        fallbackDesc.setText(s.settings.fallbackEndpoint.desc);
-
-        this.addEndpointUrlSetting(
-            fallbackDetails,
-            s.settings.fallbackApiBaseUrl.name,
-            s.settings.fallbackApiBaseUrl.desc,
-            this.plugin.settings.fallbackApiBaseUrl,
-            "https://api.example.com/v1",
-            this.fallbackEndpointStatus,
-            async (value) => {
-                this.plugin.settings.fallbackApiBaseUrl = value.trim();
-                await this.plugin.saveSettings();
-                this.fallbackEndpointStatus = "idle";
-            }
-        );
-
-        new Setting(fallbackDetails)
-            .setName(s.settings.fallbackApiKey.name)
-            .setDesc(s.settings.fallbackApiKey.desc)
-            .addText((text) => {
-                text.inputEl.type = "password";
-                text
-                    .setValue(this.plugin.settings.fallbackApiKey)
-                    .onChange(async (value) => {
-                        this.plugin.settings.fallbackApiKey = value.trim();
-                        await this.plugin.saveSettings();
-                        this.fallbackEndpointStatus = "idle";
-                    });
-            });
-
-        // Endpoint actions: one button that verifies primary (+ fallback when
-        // set) and loads model lists for both. Kept as the last row of the
-        // endpoint section so the credentials sit above it.
-        new Setting(containerEl)
-            .setName(s.settings.endpointActions.name)
-            .setDesc(s.settings.endpointActions.desc)
-            .addButton((button) =>
-                button
-                    .setButtonText(s.settings.testConnection.button)
-                    .setCta()
-                    .onClick(async () => {
-                        if (!this.plugin.settings.apiBaseUrl) {
-                            new Notice(s.settings.testConnection.noBaseUrl);
-                            return;
-                        }
-                        button.setButtonText(s.settings.testConnection.testing);
-                        button.setDisabled(true);
-                        try {
-                            await this.loadEndpointModels();
-                            this.display();
-                        } catch (e) {
-                            new Notice(
-                                s.settings.testConnection.failure(
-                                    e instanceof Error ? e.message : String(e)
-                                )
-                            );
-                            button.setButtonText(
-                                s.settings.testConnection.button
-                            );
-                            button.setDisabled(false);
-                        }
-                    })
-            );
-
-        new Setting(containerEl).setName(s.settings.modelsHeading).setHeading();
-
-        // Engine selector: remote OpenAI-compatible endpoint vs. on-device Whisper.
-        // Switching rebuilds only the engine body below so the tab doesn't jump.
         new Setting(containerEl)
             .setName(s.settings.transcriptionEngine.name)
             .setDesc(s.settings.transcriptionEngine.desc)
@@ -1007,35 +963,6 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
             cls: "mc-transcription-engine-body",
         });
         this.renderTranscriptionEngineBody();
-
-        // Enrichment model is only relevant when the API backend is selected
-        if (this.plugin.settings.enrichBackend === "api") {
-            this.addModelPicker(
-                new Setting(containerEl)
-                    .setName(s.settings.enrichModel.name)
-                    .setDesc(s.settings.enrichModel.desc),
-                this.plugin.settings.enrichModel,
-                async (value) => {
-                    this.plugin.settings.enrichModel = value;
-                    await this.plugin.saveSettings();
-                }
-            );
-            this.addFallbackModelDetails(containerEl, {
-                detailsKey: "fallback-enrich",
-                desc: s.settings.fallbackModel.descEnrich,
-                current: this.plugin.settings.fallbackEnrichModel,
-                onChange: async (value) => {
-                    this.plugin.settings.fallbackEnrichModel = value;
-                    await this.plugin.saveSettings();
-                },
-            });
-        }
-
-        // Enrichment backend section
-        new Setting(containerEl).setName(s.settings.enrichBackendHeading).setHeading();
-
-        this.enrichBackendBodyEl = containerEl.createDiv({ cls: "mc-enrich-backend-body" });
-        this.renderEnrichBackendBody();
     }
 
     /** Render (or re-render in place) the enrichment-backend body rows. */
@@ -1059,12 +986,142 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     .onChange(async (value) => {
                         this.plugin.settings.enrichBackend = value as "api" | EnrichCLI;
                         await this.plugin.saveSettings();
-                        this.display();
+                        this.renderEnrichBackendBody();
                     });
             });
 
-        // Per-CLI path + model fields — only shown when a CLI backend is selected
-        if (this.plugin.settings.enrichBackend !== "api") {
+        if (this.plugin.settings.enrichBackend === "api") {
+            // === API credentials ===
+            this.addEndpointUrlSetting(
+                el,
+                s.settings.apiBaseUrl.name,
+                s.settings.apiBaseUrl.desc,
+                this.plugin.settings.apiBaseUrl,
+                "https://api.openai.com/v1",
+                this.primaryEndpointStatus,
+                async (value) => {
+                    this.plugin.settings.apiBaseUrl = value.trim();
+                    await this.plugin.saveSettings();
+                    this.primaryEndpointStatus = "idle";
+                    // The stored verdict is keyed on the old base URL, so
+                    // badges now read "not checked yet"; repaint them.
+                    this.probedKeys.clear();
+                    this.refreshSttBadges();
+                }
+            );
+
+            new Setting(el)
+                .setName(s.settings.apiKey.name)
+                .setDesc(s.settings.apiKey.desc)
+                .addText((text) => {
+                    text.inputEl.type = "password";
+                    text
+                        .setValue(this.plugin.settings.apiKey)
+                        .onChange(async (value) => {
+                            this.plugin.settings.apiKey = value.trim();
+                            // probeKey ignores the key value; reset the stored
+                            // verdict so the badge re-probes after a key change.
+                            this.plugin.settings.sttTimestampsProbeKey = "";
+                            await this.plugin.saveSettings();
+                            this.primaryEndpointStatus = "idle";
+                            this.probedKeys.clear();
+                            this.refreshSttBadges();
+                        });
+                });
+
+            // Optional fallback endpoint — collapsed by default.
+            const fallbackDetails = el.createEl("details", {
+                cls: "mc-fallback-endpoint",
+                attr: { "data-mc-details": "endpoint" },
+            });
+            fallbackDetails.createEl("summary", {
+                text: s.settings.fallbackEndpoint.summary,
+                cls: "mc-fallback-endpoint-summary",
+            });
+            fallbackDetails.createEl("p", {
+                cls: "mc-fallback-endpoint-desc",
+            }).setText(s.settings.fallbackEndpoint.desc);
+
+            this.addEndpointUrlSetting(
+                fallbackDetails,
+                s.settings.fallbackApiBaseUrl.name,
+                s.settings.fallbackApiBaseUrl.desc,
+                this.plugin.settings.fallbackApiBaseUrl,
+                "https://api.example.com/v1",
+                this.fallbackEndpointStatus,
+                async (value) => {
+                    this.plugin.settings.fallbackApiBaseUrl = value.trim();
+                    await this.plugin.saveSettings();
+                    this.fallbackEndpointStatus = "idle";
+                }
+            );
+
+            new Setting(fallbackDetails)
+                .setName(s.settings.fallbackApiKey.name)
+                .setDesc(s.settings.fallbackApiKey.desc)
+                .addText((text) => {
+                    text.inputEl.type = "password";
+                    text
+                        .setValue(this.plugin.settings.fallbackApiKey)
+                        .onChange(async (value) => {
+                            this.plugin.settings.fallbackApiKey = value.trim();
+                            await this.plugin.saveSettings();
+                            this.fallbackEndpointStatus = "idle";
+                        });
+                });
+
+            // Load models button.
+            new Setting(el)
+                .setName(s.settings.endpointActions.name)
+                .setDesc(s.settings.endpointActions.desc)
+                .addButton((button) =>
+                    button
+                        .setButtonText(s.settings.testConnection.button)
+                        .setCta()
+                        .onClick(async () => {
+                            if (!this.plugin.settings.apiBaseUrl) {
+                                new Notice(s.settings.testConnection.noBaseUrl);
+                                return;
+                            }
+                            button.setButtonText(s.settings.testConnection.testing);
+                            button.setDisabled(true);
+                            try {
+                                await this.loadEnrichModels();
+                                this.renderEnrichBackendBody();
+                            } catch (e) {
+                                new Notice(
+                                    s.settings.testConnection.failure(
+                                        e instanceof Error ? e.message : String(e)
+                                    )
+                                );
+                                button.setButtonText(s.settings.testConnection.button);
+                                button.setDisabled(false);
+                            }
+                        })
+                );
+
+            // Enrichment model picker.
+            this.addModelPicker(
+                new Setting(el)
+                    .setName(s.settings.enrichModel.name)
+                    .setDesc(s.settings.enrichModel.desc),
+                this.plugin.settings.enrichModel,
+                async (value) => {
+                    this.plugin.settings.enrichModel = value;
+                    await this.plugin.saveSettings();
+                }
+            );
+            this.addFallbackModelDetails(el, {
+                detailsKey: "fallback-enrich",
+                desc: s.settings.fallbackModel.descEnrich,
+                current: this.plugin.settings.fallbackEnrichModel,
+                onChange: async (value) => {
+                    this.plugin.settings.fallbackEnrichModel = value;
+                    await this.plugin.saveSettings();
+                },
+            });
+        } else {
+            // === CLI backend ===
             const cli = this.plugin.settings.enrichBackend;
 
             new Setting(el)
@@ -1092,6 +1149,33 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                             await this.plugin.saveSettings();
                         })
                 );
+
+            // Pi CLI: "List models" button.
+            if (cli === "pi-cli") {
+                new Setting(el)
+                    .setName("")
+                    .addButton((btn) => {
+                        btn.setButtonText(s.settings.loadCliModels.button)
+                            .onClick(async () => {
+                                btn.setButtonText(s.settings.loadCliModels.loading);
+                                btn.setDisabled(true);
+                                try {
+                                    const models = await loadPiModels();
+                                    if (!models.length) {
+                                        new Notice(s.settings.loadCliModels.noModels);
+                                        return;
+                                    }
+                                    new Notice(
+                                        "Available Pi models:\n" +
+                                            models.slice(0, 10).join("\n")
+                                    );
+                                } finally {
+                                    btn.setButtonText(s.settings.loadCliModels.button);
+                                    btn.setDisabled(false);
+                                }
+                            });
+                    });
+            }
         }
     }
 
@@ -1153,13 +1237,13 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
     }
 
     /**
-     * Fetch primary (+ optional fallback) `/models` lists and capabilities.
+     * Fetch primary (+ optional fallback) enrichment `/models` lists and capabilities.
      * Both endpoints are probed in parallel so a down primary (e.g. 503) cannot
      * block or abort the fallback load — that is a primary use case. Throws
      * only when every attempted endpoint fails (or primary fails and no
      * fallback URL is set).
      */
-    private async loadEndpointModels(): Promise<void> {
+    private async loadEnrichModels(): Promise<void> {
         const s = t();
         const { apiBaseUrl, apiKey } = this.plugin.settings;
         const fbUrl = this.plugin.settings.fallbackApiBaseUrl.trim();
@@ -1275,6 +1359,123 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
             this.models.length === 0
                 ? s.settings.testConnection.empty
                 : s.settings.testConnection.success(this.models.length)
+        );
+    }
+
+    /** Keep the old name as an alias for backward compatibility within this class. */
+    private loadEndpointModels(): Promise<void> {
+        return this.loadEnrichModels();
+    }
+
+    /**
+     * Fetch primary (+ optional fallback) STT `/models` lists and capabilities.
+     * Uses the effective STT base URL (falling back to enrichment endpoint when
+     * `sttApiBaseUrl` is empty). Throws only when every attempted endpoint fails.
+     */
+    private async loadSttModels(): Promise<void> {
+        const s = t();
+        const baseUrl = this.effectiveSttBaseUrl();
+        const apiKey = this.effectiveSttApiKey();
+        const fbUrl = this.effectiveSttFallbackBaseUrl();
+        const fbKey = this.effectiveSttFallbackApiKey();
+        const hasFallback = fbUrl.length > 0;
+
+        type LoadOk = {
+            ok: true;
+            models: string[];
+            caps: Map<string, ModelCapability> | null;
+        };
+        type LoadErr = { ok: false; error: string };
+        type LoadResult = LoadOk | LoadErr;
+
+        const loadOne = async (
+            url: string,
+            key: string
+        ): Promise<LoadResult> => {
+            try {
+                const models = await listModels(url, key);
+                const caps = await fetchModelCapabilities(url, key);
+                return { ok: true, models, caps };
+            } catch (e) {
+                return {
+                    ok: false,
+                    error: e instanceof Error ? e.message : String(e),
+                };
+            }
+        };
+
+        const [primary, fallback] = await Promise.all([
+            loadOne(baseUrl, apiKey),
+            hasFallback
+                ? loadOne(fbUrl, fbKey)
+                : Promise.resolve<LoadResult | null>(null),
+        ]);
+
+        if (primary.ok) {
+            this.sttModels = primary.models;
+            this.sttCapabilities = primary.caps;
+            this.sttEndpointStatus = "ok";
+        } else {
+            this.sttModels = [];
+            this.sttCapabilities = null;
+            this.sttEndpointStatus = "error";
+        }
+
+        let fallbackError: string | null = null;
+        if (fallback === null) {
+            this.sttFallbackModels = [];
+            this.sttFallbackCapabilities = null;
+            this.sttFallbackEndpointStatus = "idle";
+        } else if (fallback.ok) {
+            this.sttFallbackModels = fallback.models;
+            this.sttFallbackCapabilities = fallback.caps;
+            this.sttFallbackEndpointStatus = "ok";
+        } else {
+            this.sttFallbackModels = [];
+            this.sttFallbackCapabilities = null;
+            this.sttFallbackEndpointStatus = "error";
+            fallbackError = fallback.error;
+        }
+
+        if (!primary.ok && !hasFallback) {
+            throw new Error(primary.error);
+        }
+        if (!primary.ok && fallbackError) {
+            throw new Error(
+                s.settings.testConnection.primaryFailedNoFallback(
+                    primary.error,
+                    fallbackError
+                )
+            );
+        }
+        if (!primary.ok) {
+            new Notice(
+                s.settings.testConnection.primaryFailedFallbackOk(
+                    primary.error,
+                    this.sttFallbackModels.length
+                )
+            );
+            return;
+        }
+        if (fallbackError) {
+            new Notice(s.settings.testConnection.fallbackFailed(fallbackError));
+            return;
+        }
+        if (hasFallback) {
+            new Notice(
+                this.sttModels.length === 0 && this.sttFallbackModels.length === 0
+                    ? s.settings.testConnection.empty
+                    : s.settings.testConnection.successWithFallback(
+                          this.sttModels.length,
+                          this.sttFallbackModels.length
+                      )
+            );
+            return;
+        }
+        new Notice(
+            this.sttModels.length === 0
+                ? s.settings.testConnection.empty
+                : s.settings.testConnection.success(this.sttModels.length)
         );
     }
 
@@ -1739,14 +1940,121 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 
     /**
      * The remote (OpenAI-compatible endpoint) transcription identity rows:
-     * model picker, optional fallback model, support badges, and engine-family
-     * override. Shown on the General tab as part of setup.
+     * STT-specific endpoint credentials (falling back to enrichment when empty),
+     * a "Load models" button, model picker with support badges, and engine-family
+     * override. The body is rebuilt in place when the engine dropdown changes.
      */
     private renderRemoteTranscription(containerEl: HTMLElement): void {
         const s = t();
-        // Model id sent on the wire (dropdown once models are loaded, else free
-        // text). Use "Load models" in the AI endpoint section above to
-        // populate the list.
+
+        // STT-specific endpoint URL — empty = use enrichment endpoint silently.
+        this.addEndpointUrlSetting(
+            containerEl,
+            s.settings.sttApiBaseUrl.name,
+            s.settings.sttApiBaseUrl.desc,
+            this.plugin.settings.sttApiBaseUrl,
+            s.settings.sttApiBaseUrl.placeholder,
+            this.sttEndpointStatus,
+            async (value) => {
+                this.plugin.settings.sttApiBaseUrl = value.trim();
+                await this.plugin.saveSettings();
+                this.sttEndpointStatus = "idle";
+                this.probedKeys.clear();
+                this.refreshSttBadges();
+            }
+        );
+
+        new Setting(containerEl)
+            .setName(s.settings.sttApiKey.name)
+            .setDesc(s.settings.sttApiKey.desc)
+            .addText((text) => {
+                text.inputEl.type = "password";
+                text
+                    .setValue(this.plugin.settings.sttApiKey)
+                    .onChange(async (value) => {
+                        this.plugin.settings.sttApiKey = value.trim();
+                        this.plugin.settings.sttTimestampsProbeKey = "";
+                        await this.plugin.saveSettings();
+                        this.sttEndpointStatus = "idle";
+                        this.probedKeys.clear();
+                        this.refreshSttBadges();
+                    });
+            });
+
+        // Optional STT fallback endpoint — collapsed by default.
+        const sttFallbackDetails = containerEl.createEl("details", {
+            cls: "mc-fallback-endpoint",
+            attr: { "data-mc-details": "stt-endpoint" },
+        });
+        sttFallbackDetails.createEl("summary", {
+            text: s.settings.fallbackEndpoint.summary,
+            cls: "mc-fallback-endpoint-summary",
+        });
+        sttFallbackDetails.createEl("p", {
+            cls: "mc-fallback-endpoint-desc",
+        }).setText(s.settings.fallbackEndpoint.desc);
+
+        this.addEndpointUrlSetting(
+            sttFallbackDetails,
+            s.settings.sttFallbackApiBaseUrl.name,
+            s.settings.sttFallbackApiBaseUrl.desc,
+            this.plugin.settings.sttFallbackApiBaseUrl,
+            s.settings.sttFallbackApiBaseUrl.placeholder,
+            this.sttFallbackEndpointStatus,
+            async (value) => {
+                this.plugin.settings.sttFallbackApiBaseUrl = value.trim();
+                await this.plugin.saveSettings();
+                this.sttFallbackEndpointStatus = "idle";
+            }
+        );
+
+        new Setting(sttFallbackDetails)
+            .setName(s.settings.sttFallbackApiKey.name)
+            .setDesc(s.settings.sttFallbackApiKey.desc)
+            .addText((text) => {
+                text.inputEl.type = "password";
+                text
+                    .setValue(this.plugin.settings.sttFallbackApiKey)
+                    .onChange(async (value) => {
+                        this.plugin.settings.sttFallbackApiKey = value.trim();
+                        await this.plugin.saveSettings();
+                        this.sttFallbackEndpointStatus = "idle";
+                    });
+            });
+
+        // Load models button — uses the effective STT URL (falls back to the
+        // enrichment endpoint when sttApiBaseUrl is empty).
+        new Setting(containerEl)
+            .setName(s.settings.endpointActions.name)
+            .setDesc(s.settings.endpointActions.desc)
+            .addButton((button) =>
+                button
+                    .setButtonText(s.settings.testConnection.button)
+                    .setCta()
+                    .onClick(async () => {
+                        if (!this.effectiveSttBaseUrl()) {
+                            new Notice(s.settings.testConnection.noBaseUrl);
+                            return;
+                        }
+                        button.setButtonText(s.settings.testConnection.testing);
+                        button.setDisabled(true);
+                        try {
+                            await this.loadSttModels();
+                            this.renderTranscriptionEngineBody();
+                        } catch (e) {
+                            new Notice(
+                                s.settings.testConnection.failure(
+                                    e instanceof Error ? e.message : String(e)
+                                )
+                            );
+                            button.setButtonText(s.settings.testConnection.button);
+                            button.setDisabled(false);
+                        }
+                    })
+            );
+
+        // Model id sent on the wire (dropdown once STT models are loaded, else
+        // free text). Use "Load models" above to populate the list.
         const sttModelSetting = new Setting(containerEl)
             .setName(s.settings.sttModel.name)
             .setDesc(s.settings.sttModel.desc);
@@ -1758,20 +2066,17 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                 // Keep the engine family in sync with the picked model.
                 this.plugin.settings.sttApiType = inferSttApiType(value);
                 await this.plugin.saveSettings();
-                // Update in place instead of re-rendering the whole tab (which
-                // would scroll-jump back to the top): sync the engine dropdown,
-                // refresh the badges, and kick off an assessment of the new
-                // model.
+                // Update in place — no full re-render / scroll jump.
                 this.sttEngineDropdown?.setValue(this.engineDropdownValue());
                 this.refreshSttBadges();
                 this.maybeAssessSttModel();
             },
-            // When the endpoint reports capabilities (LiteLLM), only offer
-            // models it says can transcribe. Without that info (plain OpenAI),
-            // no filter — the probe below determines transcription support.
-            this.capabilities
-                ? (id) => this.capabilities?.get(id)?.transcription === true
-                : undefined
+            // When the STT endpoint reports capabilities (LiteLLM), only offer
+            // models it says can transcribe; without that info, no filter.
+            this.sttCapabilities
+                ? (id) => this.sttCapabilities?.get(id)?.transcription === true
+                : undefined,
+            this.sttModels
         );
         this.addFallbackModelDetails(containerEl, {
             detailsKey: "fallback-stt",
@@ -1781,10 +2086,12 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                 this.plugin.settings.fallbackSttModel = value;
                 await this.plugin.saveSettings();
             },
-            filter: this.fallbackCapabilities
+            filter: this.sttFallbackCapabilities
                 ? (id) =>
-                      this.fallbackCapabilities?.get(id)?.transcription === true
+                      this.sttFallbackCapabilities?.get(id)?.transcription ===
+                      true
                 : undefined,
+            modelList: this.sttFallbackModels,
         });
 
         // Transcription support, with timestamp support shown as a sub-detail
@@ -1807,18 +2114,12 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
             cls: "mc-support-detail",
         });
         // Assess transcription + timestamp support for the current model (fires
-        // once per endpoint+model per session; no-op when the endpoint isn't
-        // set or a fresh verdict is already stored). The "Recheck" button above
-        // force-reruns it (and reports the outcome) when a probe came back
-        // inconclusive.
+        // once per endpoint+model per session). The "Recheck" button above
+        // force-reruns it when a probe came back inconclusive.
         this.maybeAssessSttModel();
 
-        // Engine family = request routing/chunking. It's auto-set from the model
-        // above (see the picker's onChange), so this is an advanced override,
-        // only needed when a gateway's opaque model name hides which engine it
-        // really is. Word timestamps are handled automatically by the probe, so
-        // there's no separate "Whisper (word timestamps)" choice: the Whisper
-        // engine asks for timestamps and silently falls back when unsupported.
+        // Engine family = request routing/chunking. Auto-set from the model
+        // above; only change when a gateway's opaque name hides the engine.
         new Setting(containerEl)
             .setName(s.settings.sttApiType.name)
             .setDesc(s.settings.sttApiType.desc)
@@ -1838,8 +2139,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                             ? (value as SttApiType)
                             : "gpt-4o-transcribe";
                         await this.plugin.saveSettings();
-                        // Update badges in place (no full re-render / scroll
-                        // jump) and re-assess against the new engine family.
+                        // Update badges in place (no full re-render / scroll jump).
                         this.refreshSttBadges();
                         this.maybeAssessSttModel();
                     }
@@ -2344,9 +2644,9 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
      * URL or model invalidates it, falling back to the not-checked text).
      */
     private transcriptionBadgeText(s: Messages): string {
-        const { apiBaseUrl, sttModel, sttTranscriptionSupported, sttTimestampsProbeKey } =
+        const { sttModel, sttTranscriptionSupported, sttTimestampsProbeKey } =
             this.plugin.settings;
-        const currentKey = probeKey(apiBaseUrl, sttModel);
+        const currentKey = probeKey(this.effectiveSttBaseUrl(), sttModel);
         if (this.probingKey === currentKey) {
             return s.settings.transcriptionBadge.checking;
         }
@@ -2367,7 +2667,6 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
      */
     private timestampBadgeText(s: Messages): string {
         const {
-            apiBaseUrl,
             sttModel,
             sttApiType,
             sttTimestampsSupported,
@@ -2376,7 +2675,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         if (!isTimestampCapableFamily(sttApiType)) {
             return s.settings.timestampBadge.notApplicable;
         }
-        const currentKey = probeKey(apiBaseUrl, sttModel);
+        const currentKey = probeKey(this.effectiveSttBaseUrl(), sttModel);
         if (this.probingKey === currentKey) {
             return s.settings.timestampBadge.checking;
         }
@@ -2404,12 +2703,13 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 
     /** Force-reruns the assessment for the current model (used by the "Recheck" button), clearing the once-per-session guard and reporting the outcome. */
     private recheckSttSupport(): void {
-        const { apiBaseUrl, sttModel } = this.plugin.settings;
-        if (!apiBaseUrl || !sttModel) {
+        const sttBaseUrl = this.effectiveSttBaseUrl();
+        const { sttModel } = this.plugin.settings;
+        if (!sttBaseUrl || !sttModel) {
             new Notice(t().settings.testConnection.noBaseUrl);
             return;
         }
-        this.probedKeys.delete(probeKey(apiBaseUrl, sttModel));
+        this.probedKeys.delete(probeKey(sttBaseUrl, sttModel));
         this.maybeAssessSttModel(true);
     }
 
@@ -2428,10 +2728,11 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
      * Notice.
      */
     private maybeAssessSttModel(notify = false): void {
-        const { apiBaseUrl, apiKey, sttModel, sttApiType } =
-            this.plugin.settings;
-        if (!apiBaseUrl || !sttModel) return;
-        const key = probeKey(apiBaseUrl, sttModel);
+        const sttBaseUrl = this.effectiveSttBaseUrl();
+        const sttApiKey = this.effectiveSttApiKey();
+        const { sttModel, sttApiType } = this.plugin.settings;
+        if (!sttBaseUrl || !sttModel) return;
+        const key = probeKey(sttBaseUrl, sttModel);
         const wantsTimestamps = isTimestampCapableFamily(sttApiType);
         // A fresh, complete verdict is already stored for this exact pair.
         const haveTranscription =
@@ -2449,7 +2750,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         void (async () => {
             let detail = "";
             try {
-                const declared = this.capabilities?.get(sttModel)?.transcription;
+                const declared = this.sttCapabilities?.get(sttModel)?.transcription;
                 let transcription: boolean | null = declared ?? null;
                 let timestamps: boolean | null = null;
                 // Skip the probe entirely if capabilities say this model can't
@@ -2459,8 +2760,8 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     timestamps = false;
                 } else if (declared === undefined || wantsTimestamps) {
                     const support = await probeSttSupport({
-                        baseUrl: apiBaseUrl,
-                        apiKey,
+                        baseUrl: sttBaseUrl,
+                        apiKey: sttApiKey,
                         wireModel: sttModel,
                         withTimestamps: wantsTimestamps,
                     });
@@ -2480,8 +2781,8 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                         transcriptionVerdict === "unsupported"
                     ) {
                         const plain = await probeSttSupport({
-                            baseUrl: apiBaseUrl,
-                            apiKey,
+                            baseUrl: sttBaseUrl,
+                            apiKey: sttApiKey,
                             wireModel: sttModel,
                             withTimestamps: false,
                         });
@@ -2763,6 +3064,8 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
             current: string;
             onChange: (value: string) => Promise<void>;
             filter?: (modelId: string) => boolean;
+            /** Override the fallback model list; defaults to `this.fallbackModels`. */
+            modelList?: string[];
         }
     ): void {
         const s = t();
@@ -2784,7 +3087,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
             opts.current,
             opts.onChange,
             opts.filter,
-            this.fallbackModels,
+            opts.modelList ?? this.fallbackModels,
             { label: s.settings.fallbackModel.usePrimary }
         );
     }

@@ -646,6 +646,29 @@ export const en = {
 			name: "API key",
 			desc: "Optional. Leave empty for local servers that ignore keys; set it when the fallback gateway requires auth.",
 		},
+		sttApiBaseUrl: {
+			name: "Transcription API URL",
+			desc: "OpenAI-compatible endpoint for transcription. Leave empty to use the enrichment endpoint.",
+			placeholder: "https://api.openai.com/v1",
+		},
+		sttApiKey: {
+			name: "Transcription API key",
+			desc: "API key for the transcription endpoint. Leave empty to use the enrichment key.",
+		},
+		sttFallbackApiBaseUrl: {
+			name: "Fallback URL",
+			desc: "Fallback transcription endpoint. Leave empty to use the enrichment fallback.",
+			placeholder: "https://api.example.com/v1",
+		},
+		sttFallbackApiKey: {
+			name: "Fallback API key",
+			desc: "Key for the fallback transcription endpoint.",
+		},
+		loadCliModels: {
+			button: "List models",
+			loading: "Loading…",
+			noModels: "No models returned",
+		},
 		fallbackModel: {
 			summary: "Fallback model",
 			descStt:

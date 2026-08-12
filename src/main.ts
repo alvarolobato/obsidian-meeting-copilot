@@ -855,6 +855,10 @@ export default class SystemRecordingPlugin extends Plugin {
             this.settings.fallbackApiBaseUrl ?? ""
         ).trim();
         this.settings.fallbackApiKey = (this.settings.fallbackApiKey ?? "").trim();
+        this.settings.sttApiBaseUrl = (this.settings.sttApiBaseUrl ?? "").trim();
+        this.settings.sttApiKey = (this.settings.sttApiKey ?? "").trim();
+        this.settings.sttFallbackApiBaseUrl = (this.settings.sttFallbackApiBaseUrl ?? "").trim();
+        this.settings.sttFallbackApiKey = (this.settings.sttFallbackApiKey ?? "").trim();
         this.settings.fallbackSttModel = (
             this.settings.fallbackSttModel ?? ""
         ).trim();
@@ -5309,13 +5313,33 @@ export default class SystemRecordingPlugin extends Plugin {
      * on-device. For the remote backend the probe gate still applies, so a
      * doomed diarized pass never runs against an endpoint that ignores it.
      */
+    /** Effective STT base URL: falls back to enrichment endpoint when empty. */
+    private effectiveSttBaseUrl(): string {
+        return this.settings.sttApiBaseUrl.trim() || this.settings.apiBaseUrl;
+    }
+
+    /** Effective STT API key: falls back to enrichment key when empty. */
+    private effectiveSttApiKey(): string {
+        return this.settings.sttApiKey.trim() || this.settings.apiKey;
+    }
+
+    /** Effective STT fallback base URL: falls back to enrichment fallback when empty. */
+    private effectiveSttFallbackBaseUrl(): string {
+        return this.settings.sttFallbackApiBaseUrl.trim() || this.settings.fallbackApiBaseUrl;
+    }
+
+    /** Effective STT fallback API key: falls back to enrichment fallback key when empty. */
+    private effectiveSttFallbackApiKey(): string {
+        return this.settings.sttFallbackApiKey.trim() || this.settings.fallbackApiKey;
+    }
+
     private shouldSeparateSpeakers(): boolean {
         if (this.settings.transcriptionBackend === "local") {
             return this.settings.diarizationEnabled;
         }
         return canSeparateSpeakers(
             this.settings,
-            probeKey(this.settings.apiBaseUrl, this.settings.sttModel)
+            probeKey(this.effectiveSttBaseUrl(), this.settings.sttModel)
         );
     }
 
@@ -5387,7 +5411,7 @@ export default class SystemRecordingPlugin extends Plugin {
     private resolveEngineFamily(): SttApiType {
         const s = this.settings;
         if (s.sttApiType !== "whisper-1-ts") return s.sttApiType;
-        const key = probeKey(s.apiBaseUrl, s.sttModel);
+        const key = probeKey(this.effectiveSttBaseUrl(), s.sttModel);
         const timestampsConfirmed =
             s.sttTimestampsProbeKey === key && s.sttTimestampsSupported === true;
         return timestampsConfirmed ? "whisper-1-ts" : "whisper-1";
@@ -5400,20 +5424,26 @@ export default class SystemRecordingPlugin extends Plugin {
         const s = this.settings;
         if (which === "fallback") {
             const fb = fallbackEndpoint(s);
-            if (!fb) {
-                // Caller should have checked; degrade to primary rather than throw.
+            // Determine effective STT fallback credentials: use STT-specific
+            // fallback if set, otherwise fall through to the enrichment fallback.
+            const effectiveFbUrl = this.effectiveSttFallbackBaseUrl();
+            const effectiveFbKey = this.effectiveSttFallbackApiKey();
+            if (!fb && !effectiveFbUrl) {
+                // No fallback configured at all; degrade to primary.
                 return this.buildTranscribeConfig("primary");
             }
             // Fallback STT is mixed-only: we never probed timestamps on that
             // gateway, so never advertise whisper-1-ts here.
+            const baseFamily = (fb?.sttApiType ?? s.sttApiType);
             const family =
-                fb.sttApiType === "whisper-1-ts" ? "whisper-1" : fb.sttApiType;
+                baseFamily === "whisper-1-ts" ? "whisper-1" : baseFamily;
+            const sttModel = (fb?.sttModel || s.sttModel).trim();
             return {
-                baseUrl: fb.baseUrl,
-                apiKey: fb.apiKey,
+                baseUrl: effectiveFbUrl || (fb?.baseUrl ?? s.apiBaseUrl),
+                apiKey: effectiveFbKey || (fb?.apiKey ?? ""),
                 model: family as TranscriptionModel,
-                modelOverride: fb.sttModel,
-                chatModel: fb.enrichModel,
+                modelOverride: sttModel,
+                chatModel: (fb?.enrichModel ?? s.enrichModel).trim(),
                 language: s.sttLanguage || "auto",
                 postProcessingEnabled: s.postProcessingEnabled,
                 dictionaryCorrectionEnabled: s.dictionaryCorrectionEnabled,
@@ -5422,8 +5452,8 @@ export default class SystemRecordingPlugin extends Plugin {
             };
         }
         return {
-            baseUrl: s.apiBaseUrl,
-            apiKey: s.apiKey,
+            baseUrl: this.effectiveSttBaseUrl(),
+            apiKey: this.effectiveSttApiKey(),
             // The engine family selects routing/chunking/timestamps; sttModel is
             // the actual name sent on the wire (may be a gateway id). Whisper
             // downgrades to no-timestamps when the endpoint can't emit them.
@@ -5581,8 +5611,8 @@ export default class SystemRecordingPlugin extends Plugin {
         return (
             this.settings.localFallbackToRemote &&
             !isDiarizationCancelled(error, signal) &&
-            !!this.settings.apiBaseUrl &&
-            !!this.settings.apiKey
+            !!this.effectiveSttBaseUrl() &&
+            !!this.effectiveSttApiKey()
         );
     }
 
@@ -5726,7 +5756,7 @@ export default class SystemRecordingPlugin extends Plugin {
         // model/helper, so it can transcribe with no endpoint configured.
         if (
             this.settings.transcriptionBackend !== "local" &&
-            (!this.settings.apiBaseUrl || !this.settings.apiKey)
+            (!this.effectiveSttBaseUrl() || !this.effectiveSttApiKey())
         ) {
             new Notice(t().notices.transcribeNoEndpoint);
             return;
@@ -6121,7 +6151,7 @@ export default class SystemRecordingPlugin extends Plugin {
         expectedTakes: number,
         mode: TranscribeMode
     ): Promise<void> {
-        if (!this.settings.apiBaseUrl || !this.settings.apiKey) {
+        if (!this.effectiveSttBaseUrl() || !this.effectiveSttApiKey()) {
             new Notice(t().notices.transcribeNoEndpoint);
             return;
         }
