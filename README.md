@@ -2,7 +2,7 @@
 
 Integrated meeting transcription, note-taking, and summarization for Obsidian on macOS: Google Calendar → dual-channel recording → transcription (remote or on-device Whisper) → AI summaries.
 
-![Meeting Copilot dashboard and the "Coming up" agenda](docs/screenshot-dashboard.png)
+![Meeting Copilot](docs/hero.png)
 
 ## Installation
 
