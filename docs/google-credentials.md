@@ -8,7 +8,7 @@ client instead:
 
 | Situation | What you build | Go to |
 | --- | --- | --- |
-| You want group invitees expanded and real attendee names instead of email addresses | A Google Cloud project of your own with an **External** OAuth client | [Option A](#option-a--your-own-google-cloud-project) |
+| You want group invitees expanded and real attendee names instead of email addresses | A Google Cloud project of your own (an **Internal** client on a Workspace account, **External** on a personal one) | [Option A](#option-a--your-own-google-cloud-project) |
 | Your company blocks the built-in app ("your administrator has restricted access to this app") | An **Internal** OAuth client inside your organization's Google Cloud — or an admin allowlist | [Option B](#option-b--your-organization-wont-approve-the-built-in-app) |
 
 Either way the result is the same two strings — a **Client ID** and a **Client
@@ -79,8 +79,11 @@ Cloud Console section that used to be called "OAuth consent screen"):
 - **Branding** — app name (e.g. `Meeting Copilot (my project)`), your email as user
   support contact, and a developer contact email. This is the name *you* will see on
   the consent screen, so make it recognizable.
-- **Audience** — choose **External**. Under **Test users**, add your own Google
-  account. An app in *Testing* only works for accounts listed there.
+- **Audience** — **Internal** if you're on a Google Workspace account and the project
+  lives in your organization: the app belongs to your own domain, so there's no
+  verification, no warning screen, and nothing more to set here. **External** otherwise
+  (a personal Gmail account) — add your own account under **Test users**, since an app
+  in *Testing* only works for accounts listed there.
 
 ### 4. Add the scopes
 
@@ -122,19 +125,16 @@ credentials***. Fill in both fields, then click **Authenticate** (or
 the scopes it was granted at the time, so you must reconnect for the new ones to take
 effect).
 
-Because your app is unverified, Google shows a **"Google hasn't verified this app"**
-interstitial. It's your own app and your own data: choose **Advanced → Go to
-&lt;your app name&gt; (unsafe)** and continue.
+An **External** app shows a **"Google hasn't verified this app"** screen the first
+time. It's your own app and your own data: choose **Advanced → Go to
+&lt;your app name&gt; (unsafe)** and continue. Internal apps skip it.
 
-### 7. Publish the app, or re-connect every week
+### 7. External only: publish the app, or re-connect every week
 
-While the app stays in **Testing**, Google expires its refresh tokens after **7 days** —
-the agenda will show **Reconnect** roughly once a week, forever.
-
-To avoid that, go to **Audience → Publish app**. An unverified app in production can
-serve up to 100 users, which is plenty for yourself, and its tokens don't expire on a
-timer. You still see the unverified-app interstitial once, at consent time. You do
-**not** need to submit anything to Google for verification to use your own app.
+While an **External** app stays in *Testing*, Google expires its refresh tokens after
+**7 days** — the agenda will show **Reconnect** about once a week, forever.
+**Audience → Publish app** stops that; you don't need to submit anything to Google to
+keep using your own app. Internal apps aren't affected.
 
 ---
 
@@ -186,8 +186,8 @@ Follow [Option A](#option-a--your-own-google-cloud-project) with three changes:
    the project (or to grant you the *Project Creator* role on the org).
 2. **Audience → Internal.** This option only appears for Workspace accounts, and
    only when the project lives in the organization.
-3. **Skip step 7 entirely.** Internal apps need no publishing and no verification:
-   no unverified-app interstitial, no 100-user cap, and no 7-day token expiry.
+3. **Skip step 7 entirely.** Internal apps need no publishing and no verification: no
+   warning screen, no 100-user cap, and no 7-day token expiry.
 
 What you get for free with an internal app: the directory and group lookups are
 running against your own domain with your own admin's blessing, which is exactly the
@@ -220,12 +220,12 @@ delete the client in the Cloud Console.
 
 | What you see | What it means |
 | --- | --- |
-| *Google hasn't verified this app* | Expected for your own unverified app. **Advanced → Go to … (unsafe)**. |
+| *Google hasn't verified this app* | Expected for your own **External** app. **Advanced → Go to … (unsafe)**. An Internal Workspace app never shows it. |
 | *Access blocked: your administrator has restricted access to this app* | Your Workspace hasn't approved the app for its users → [Option B](#option-b--your-organization-wont-approve-the-built-in-app). |
 | `Error 400: redirect_uri_mismatch` | The OAuth client isn't of type **Desktop app**. Create a new Desktop client. |
-| `Error 403: access_denied` right after choosing your account | The app is in *Testing* and your account isn't listed under **Test users** — or an admin policy blocks it. |
+| `Error 403: access_denied` right after choosing your account | An **External** app in *Testing* with your account missing from **Test users** — or an admin policy blocks it. |
 | `Error 400: invalid_scope`, or the consent screen doesn't list a permission you enabled | That scope isn't added under **Data access** on your consent screen. |
-| Reconnect prompt roughly once a week (`invalid_grant`) | *Testing*-mode refresh tokens expire after 7 days → **Audience → Publish app**. |
+| Reconnect prompt roughly once a week (`invalid_grant`) | An **External** app in *Testing* expires refresh tokens after 7 days → **Audience → Publish app**. |
 | `SERVICE_DISABLED` in the console log | The Cloud Identity API or People API isn't enabled on the project (step 2). |
 | `people lookup blocked by Workspace admin policy` | Your Workspace disables directory sharing with third-party apps ([this setting](https://support.google.com/a/answer/6343701)). It only blocks `directory.readonly`; the "Other contacts" source still works. |
 | You turned an optional permission on but names/groups didn't change | Existing tokens only carry the scopes granted at the last consent — click **Re-authenticate**. |
