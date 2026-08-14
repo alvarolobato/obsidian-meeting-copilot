@@ -376,7 +376,8 @@ footer.site {
 	color: var(--text);
 	font-size: 1rem;
 }
-.article ul {
+.article ul,
+.article ol {
 	padding-left: 22px;
 }
 .article li {

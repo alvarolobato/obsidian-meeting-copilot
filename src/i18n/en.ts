@@ -513,7 +513,8 @@ export const en = {
 		},
 		advancedCredentials: {
 			summary: "Advanced: custom OAuth credentials",
-			desc: "Override the built-in app credentials. Leave blank to use the bundled defaults. Only needed if you want to use your own Google Cloud project.",
+			desc: "Meeting Copilot's built-in Google app is verified for read-only calendar access only. Create your own Google Cloud OAuth client (a free, ~15-minute setup) if you want the optional permissions below — attendee names and Google Group expansion — to work, or if your organization blocks unverified third-party apps and you need one it already trusts. Leave both fields blank to keep using the built-in app.",
+			docsLink: "Read the step-by-step guide →",
 		},
 		clientId: {
 			name: "Client ID",
