@@ -9,7 +9,7 @@ client instead:
 | Situation | What you build | Go to |
 | --- | --- | --- |
 | You want group invitees expanded and real attendee names instead of email addresses | A Google Cloud project of your own with an **External** OAuth client | [Option A](#option-a--your-own-google-cloud-project) |
-| Your company blocks the built-in app ("has not completed the Google verification process", "your admin has restricted access") | An **Internal** OAuth client inside your organization's Google Cloud — or an admin allowlist | [Option B](#option-b--your-organization-wont-approve-the-built-in-app) |
+| Your company blocks the built-in app ("your administrator has restricted access to this app") | An **Internal** OAuth client inside your organization's Google Cloud — or an admin allowlist | [Option B](#option-b--your-organization-wont-approve-the-built-in-app) |
 
 Either way the result is the same two strings — a **Client ID** and a **Client
 secret** — pasted into *Settings → Meeting Copilot → General → Google Calendar →
@@ -38,8 +38,9 @@ client you created and configured yourself.
 | Resolve attendee names from Google "Other contacts" | `contacts.other.readonly` | People API |
 
 Separately, a Google Workspace admin can block *any* third-party app for the whole
-organization. When that is the case, no amount of configuration on our side helps —
-the app has to be one your organization already trusts. That's Option B.
+organization — being verified by Google doesn't exempt an app from that. When that is
+the case, no amount of configuration on our side helps: the app has to be one your
+organization already trusts. That's Option B.
 
 ---
 
@@ -141,13 +142,14 @@ timer. You still see the unverified-app interstitial once, at consent time. You 
 
 Symptoms, all seen at the Google consent screen rather than inside Obsidian:
 
-- *Access blocked: Meeting Copilot has not completed the Google verification process*
 - *Access blocked: your administrator has restricted access to this app*
+- *Meeting Copilot has not been approved by your administrator*
 - `Error 403: access_denied` / `admin_policy_enforced`
 
 This is Google Workspace's **app access control**: your admin decides which
-third-party OAuth apps may touch company data, and unverified or simply
-unrecognized apps are blocked by default in many organizations. There are two ways out.
+third-party OAuth apps may touch company data, and many organizations block every app
+they haven't explicitly approved. Verification status has nothing to do with it — a
+Google-verified app is still a third-party app to your admin. There are two ways out.
 
 ### B1 — ask your admin to trust the app (fastest)
 
@@ -219,7 +221,7 @@ delete the client in the Cloud Console.
 | What you see | What it means |
 | --- | --- |
 | *Google hasn't verified this app* | Expected for your own unverified app. **Advanced → Go to … (unsafe)**. |
-| *Access blocked: … has not completed the Google verification process* | Your Workspace admin blocks unverified third-party apps → [Option B](#option-b--your-organization-wont-approve-the-built-in-app). |
+| *Access blocked: your administrator has restricted access to this app* | Your Workspace hasn't approved the app for its users → [Option B](#option-b--your-organization-wont-approve-the-built-in-app). |
 | `Error 400: redirect_uri_mismatch` | The OAuth client isn't of type **Desktop app**. Create a new Desktop client. |
 | `Error 403: access_denied` right after choosing your account | The app is in *Testing* and your account isn't listed under **Test users** — or an admin policy blocks it. |
 | `Error 400: invalid_scope`, or the consent screen doesn't list a permission you enabled | That scope isn't added under **Data access** on your consent screen. |
