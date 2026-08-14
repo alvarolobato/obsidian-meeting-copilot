@@ -2,7 +2,7 @@
 
 ## Google Calendar
 
-1. In the [Google Cloud Console](https://console.cloud.google.com/), create an OAuth 2.0 **Desktop** client and enable the Google Calendar API.
+1. In the [Google Cloud Console](https://console.cloud.google.com/), create an OAuth 2.0 **Desktop** client and enable the Google Calendar API — see [Bring your own Google credentials](google-credentials.md) for a step-by-step walkthrough (and for what to do when your company blocks third-party apps).
 2. In *Settings → Meeting Copilot → Google Calendar integration*, paste the **Client ID** and **Client secret**, then click **Authenticate**.
 3. Optionally set the **Target calendar ID** (defaults to `primary`) and the agenda's **horizon** / **history** window.
 

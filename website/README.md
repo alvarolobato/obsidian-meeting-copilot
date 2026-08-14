@@ -2,13 +2,18 @@
 
 Static marketing + privacy site published to GitHub Pages. It provides the pages
 Google OAuth verification requires: a public **home page** (`index.html`), a
-**privacy policy** (`privacy.html`), and **terms of service** (`terms.html`).
+**privacy policy** (`privacy.html`), and **terms of service** (`terms.html`), plus
+a user-facing setup guide, **bring your own Google credentials**
+(`google-credentials.html`).
 Self-contained — no external fonts, scripts, or trackers, matching the plugin's
 privacy stance.
 
-The privacy policy and terms of service here mirror the canonical
-[`docs/privacy-policy.md`](../docs/privacy-policy.md) and
-[`docs/terms-of-service.md`](../docs/terms-of-service.md); keep each pair in sync.
+The privacy policy, terms of service, and credentials guide here mirror the
+canonical [`docs/privacy-policy.md`](../docs/privacy-policy.md),
+[`docs/terms-of-service.md`](../docs/terms-of-service.md), and
+[`docs/google-credentials.md`](../docs/google-credentials.md); keep each pair in
+sync. `google-credentials.html` is also linked from the plugin itself (Settings →
+Google Calendar → Advanced), so its URL must not change.
 
 ## Screenshots to add
 
