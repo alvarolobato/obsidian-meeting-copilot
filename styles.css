@@ -1746,3 +1746,147 @@ ul.mc-action-tasks {
 .mc-local-fallback-models > .setting-item:first-child {
 	border-top: none;
 }
+
+/* ===================== Welcome / onboarding screen ===================== */
+.mc-welcome-modal {
+	max-width: 640px;
+	width: 100%;
+}
+.mc-welcome-title {
+	margin: 0 0 var(--size-4-3);
+}
+.mc-welcome-tab-bar {
+	display: flex;
+	gap: var(--size-4-1);
+	border-bottom: 1px solid var(--background-modifier-border);
+	margin-bottom: var(--size-4-3);
+}
+.mc-welcome-tab {
+	background: none;
+	border: none;
+	border-bottom: 2px solid transparent;
+	border-radius: 0;
+	box-shadow: none;
+	color: var(--text-muted);
+	cursor: pointer;
+	padding: var(--size-4-2) var(--size-4-3);
+}
+.mc-welcome-tab:hover {
+	color: var(--text-normal);
+}
+.mc-welcome-tab.is-active {
+	border-bottom-color: var(--interactive-accent);
+	color: var(--text-normal);
+	font-weight: var(--font-medium);
+}
+.mc-welcome-intro {
+	color: var(--text-muted);
+	margin: 0 0 var(--size-4-4);
+}
+.mc-welcome-subhead {
+	font-size: var(--font-ui-small);
+	letter-spacing: 0.04em;
+	margin: var(--size-4-5) 0 var(--size-4-2);
+	text-transform: uppercase;
+}
+
+/* Ribbon-icon legend — mirrors what the user sees in the left sidebar */
+.mc-welcome-ribbon {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-3);
+}
+.mc-welcome-ribbon-row {
+	align-items: flex-start;
+	display: flex;
+	gap: var(--size-4-3);
+}
+.mc-welcome-ribbon-icon {
+	align-items: center;
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	color: var(--text-accent);
+	display: flex;
+	flex: none;
+	height: 34px;
+	justify-content: center;
+	width: 34px;
+}
+.mc-welcome-ribbon-name {
+	font-weight: var(--font-medium);
+}
+.mc-welcome-ribbon-desc {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+
+/* Numbered post-recording flow */
+.mc-welcome-flow {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-1);
+}
+.mc-welcome-flow-step {
+	align-items: center;
+	color: var(--text-muted);
+	display: flex;
+	font-size: var(--font-ui-small);
+	gap: var(--size-4-2);
+}
+.mc-welcome-flow-num {
+	align-items: center;
+	background: var(--background-modifier-border);
+	border-radius: 50%;
+	color: var(--text-normal);
+	display: flex;
+	flex: none;
+	font-size: var(--font-ui-smaller);
+	height: 20px;
+	justify-content: center;
+	width: 20px;
+}
+
+/* Setup steps */
+.mc-welcome-step {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	margin-bottom: var(--size-4-3);
+	padding: var(--size-4-3);
+}
+.mc-welcome-step-head {
+	align-items: center;
+	display: flex;
+	gap: var(--size-4-2);
+	justify-content: space-between;
+}
+.mc-welcome-step-title {
+	margin: 0;
+}
+.mc-welcome-step-desc {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	margin: var(--size-4-1) 0 0;
+}
+.mc-welcome-step .setting-item {
+	border-top: none;
+	padding-bottom: 0;
+}
+.mc-welcome-pill {
+	border-radius: var(--radius-s);
+	flex: none;
+	font-size: var(--font-ui-smaller);
+	padding: 2px var(--size-4-2);
+}
+.mc-welcome-pill.is-done {
+	background: var(--background-modifier-success);
+	color: var(--text-normal);
+}
+.mc-welcome-pill.is-pending {
+	background: var(--background-modifier-border);
+	color: var(--text-muted);
+}
+.mc-welcome-pill.is-todo {
+	background: var(--background-modifier-error);
+	color: var(--text-normal);
+}
