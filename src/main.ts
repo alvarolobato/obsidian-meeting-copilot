@@ -3,6 +3,7 @@ import {
     DEFAULT_SETTINGS,
     inferSttApiType,
     migrateSettings,
+    SettingsTabId,
     STT_MODELS,
     SttApiType,
     SystemRecordingSettings,
@@ -222,6 +223,8 @@ import {
     TRANSCRIPT_CLEANUP_SYSTEM_PROMPT,
 } from "./enrich/transcriptCleanup";
 import { RenameModal } from "./ui/renameModal";
+import { shouldShowWelcome, type SetupSnapshot } from "./ui/welcome";
+import { WelcomeModal, type WelcomeHost } from "./ui/welcomeModal";
 import { t } from "./i18n";
 import { TypedEventBus } from "./util/eventBus";
 import {
@@ -397,6 +400,8 @@ export default class SystemRecordingPlugin extends Plugin {
 		() => this.onCalendarAuthExpired()
 	);
 	private scheduler: CalendarScheduler | null = null;
+	/** Kept so other surfaces can preselect a settings pane before opening it. */
+	private settingTab: SystemRecordingSettingTab | null = null;
 	/** True once the refresh token died; suppresses the looping calendar-error notice until reconnect. */
 	private authExpired = false;
 	/** Set while `authenticateCalendar()` is waiting on the browser consent flow — lets a "Cancel" button abandon it instead of leaving the button stuck forever. */
@@ -600,7 +605,14 @@ export default class SystemRecordingPlugin extends Plugin {
         });
 
         // Settings tab
-        this.addSettingTab(new SystemRecordingSettingTab(this.app, this));
+        this.settingTab = new SystemRecordingSettingTab(this.app, this);
+        this.addSettingTab(this.settingTab);
+
+		this.addCommand({
+			id: "show-welcome",
+			name: t().commands.showWelcome,
+			callback: () => this.showWelcomeScreen(),
+		});
 
 		this.addCommand({
 			id: "authenticate-google-calendar",
@@ -698,6 +710,11 @@ export default class SystemRecordingPlugin extends Plugin {
 		this.app.workspace.onLayoutReady(() =>
 			this.notifyPendingTranscriptions()
 		);
+
+		// First install only — orient the user and collect the two settings
+		// that actually need a decision. Deferred to layout-ready so the modal
+		// doesn't fight Obsidian's own startup for the screen.
+		this.app.workspace.onLayoutReady(() => void this.maybeShowWelcome());
 
 		// Keep the in-session identity map accurate when the user moves or
 		// deletes a note (#118) — metadataCache lag would otherwise recreate
@@ -1935,6 +1952,57 @@ export default class SystemRecordingPlugin extends Plugin {
 					console.warn("Failed to open Notification settings", err);
 			}
 		);
+	}
+
+	// MARK: - Welcome / onboarding
+
+	/**
+	 * Opens the welcome screen once, on a genuinely fresh install. The "shown"
+	 * marker is persisted *before* the modal opens so a crash or a quit while
+	 * it's up can't turn it into a recurring popup.
+	 */
+	private async maybeShowWelcome(): Promise<void> {
+		if (!shouldShowWelcome(this.settings)) return;
+		this.settings.welcomeShownVersion = this.manifest.version;
+		await this.saveSettings();
+		this.showWelcomeScreen();
+	}
+
+	/** Re-opens the welcome screen on demand (command palette / settings). */
+	showWelcomeScreen(): void {
+		new WelcomeModal(this.app, this.welcomeHost()).open();
+	}
+
+	private welcomeSnapshot(): SetupSnapshot {
+		return {
+			googleAuthenticated: this.isCalendarAuthenticated(),
+			googleAuthenticating: this.isAuthenticating(),
+			enrichBackend: this.settings.enrichBackend,
+			apiBaseUrl: this.settings.apiBaseUrl,
+			transcriptionBackend: this.settings.transcriptionBackend,
+			sttBaseUrl: this.settings.sttApiBaseUrl,
+		};
+	}
+
+	private welcomeHost(): WelcomeHost {
+		return {
+			snapshot: () => this.welcomeSnapshot(),
+			isCalendarAuthenticated: () => this.isCalendarAuthenticated(),
+			isAuthenticating: () => this.isAuthenticating(),
+			authenticateCalendar: () => this.authenticateCalendar(),
+			cancelAuthenticate: () => this.cancelAuthenticate(),
+			getAuthPromise: () => this.getAuthPromise(),
+			getApiBaseUrl: () => this.settings.apiBaseUrl,
+			getApiKey: () => this.settings.apiKey,
+			setApiCredentials: async (baseUrl, apiKey) => {
+				this.settings.apiBaseUrl = baseUrl;
+				this.settings.apiKey = apiKey;
+				await this.saveSettings();
+			},
+			openSettings: (tab) => this.openPluginSettings(tab),
+			enrichBackendLabel: () =>
+				t().settings.enrichBackend.options[this.settings.enrichBackend],
+		};
 	}
 
 	/**
@@ -6819,7 +6887,12 @@ export default class SystemRecordingPlugin extends Plugin {
         }
     }
 
-    private openPluginSettings(): void {
+    /**
+     * @param tab pane to land on. Applied before `openTabById`, which is what
+     *   triggers the tab's `display()` — setting it afterwards would need a
+     *   second render.
+     */
+    private openPluginSettings(tab?: SettingsTabId): void {
         const setting = (
             this.app as unknown as {
                 setting?: {
@@ -6829,6 +6902,7 @@ export default class SystemRecordingPlugin extends Plugin {
             }
         ).setting;
         if (setting) {
+            if (tab) this.settingTab?.selectTab(tab);
             setting.open();
             setting.openTabById(this.manifest.id);
         }

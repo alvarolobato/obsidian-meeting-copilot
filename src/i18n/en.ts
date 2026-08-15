@@ -19,6 +19,7 @@ export const en = {
 		cleanupRecordings: "Clean up old recordings",
 		cancelTranscription: "Cancel transcription",
 		fixMeetingMetadata: "Fix meeting metadata for this note",
+		showWelcome: "Show welcome screen",
 	},
 	menu: {
 		fixMetadataFile: "Fix meeting metadata",
@@ -499,6 +500,11 @@ export const en = {
 			transcription: "Transcription",
 			enrichment: "Enrichment",
 		},
+		showWelcome: {
+			name: "Welcome screen",
+			desc: "Re-open the getting-started screen shown on first install.",
+			button: "Show",
+		},
 		calendarHeading: "Google Calendar integration",
 		googleHeading: "Google Calendar",
 		modelsHeading: "Models",
@@ -884,6 +890,69 @@ export const en = {
 			placeholderCodex: "gpt-5.5",
 			placeholderOpencode: "anthropic/claude-sonnet-5",
 			placeholderPi: "anthropic/claude-sonnet-5",
+		},
+	},
+	welcome: {
+		title: "Welcome to Meeting Copilot",
+		tabs: {
+			start: "Where to start",
+			setup: "Set up",
+		},
+		start: {
+			intro: "Meeting Copilot adds three icons to the left ribbon. That's where everything starts.",
+			record: {
+				name: "Start/Stop on-demand meeting",
+				desc: "Record something that isn't on your calendar. Click again to stop.",
+			},
+			agenda: {
+				name: "Open meeting agenda",
+				desc: "Your upcoming meetings in a sidebar. Create a note or start recording from any event.",
+			},
+			dashboard: {
+				name: "Open meetings dashboard",
+				desc: "Past meetings, transcript status, and open action items in one tab.",
+			},
+			flowHeading: "After you stop recording",
+			flowSteps: [
+				"Both audio channels are saved to your vault",
+				"Whisper transcribes on your Mac",
+				"AI drafts a summary of the discussion",
+				"Your next steps and the group's follow-ups are identified",
+				"Everything lands in the meeting note",
+			],
+			next: "Next: set up →",
+		},
+		setup: {
+			intro: "Two connections and you're set. Both can be changed later in settings.",
+			statusDone: "Ready",
+			statusPending: "Connecting…",
+			statusTodo: "Not set up",
+			google: {
+				heading: "Google Calendar",
+				desc: "Read-only access to your events, so the agenda, meeting notes, and start/stop prompts work. Skip it if you only record ad-hoc meetings.",
+				connect: "Connect",
+				reconnect: "Reconnect",
+				cancel: "Cancel",
+			},
+			llm: {
+				heading: "AI endpoint",
+				desc: "Used to summarize transcripts into notes and action items. Any OpenAI-compatible endpoint — including a local one.",
+				baseUrl: "API base URL",
+				baseUrlPlaceholder: "https://api.openai.com/v1",
+				apiKey: "API key",
+				apiKeyPlaceholder: "sk-… (leave blank for local servers)",
+				cliNote: (backend: string) =>
+					`Enrichment is set to ${backend}, which uses your own signed-in CLI — no endpoint needed here.`,
+			},
+			transcription: {
+				heading: "Transcription",
+				descLocal:
+					"Runs on-device by default — nothing to configure, and audio never leaves your Mac.",
+				descRemote:
+					"Set to a remote engine, which needs an endpoint. Set the API base URL above, or give transcription its own in settings.",
+			},
+			openSettings: "Open full settings",
+			done: "Done",
 		},
 	},
 	oauth: {

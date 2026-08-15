@@ -1,5 +1,11 @@
 # Setup
 
+## Welcome screen
+
+The first time the plugin loads, a welcome screen opens with two tabs: **Where to start** (what the three left-ribbon icons do) and **Set up** (Google Calendar and the AI endpoint — the only two things that need configuring, since transcription runs on-device by default).
+
+It appears once. To see it again, run **Show welcome screen** from the command palette, or use *Settings → Meeting Copilot → General → Welcome screen → Show*.
+
 ## Google Calendar
 
 1. In the [Google Cloud Console](https://console.cloud.google.com/), create an OAuth 2.0 **Desktop** client and enable the Google Calendar API.

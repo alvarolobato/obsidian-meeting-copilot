@@ -149,6 +149,14 @@ export interface SystemRecordingSettings {
 	 * notification fires so we never nag again.
 	 */
 	notificationStyleHintShown: boolean;
+	/**
+	 * Plugin version that last showed the welcome screen, or "" if it never
+	 * has. Bookkeeping (not a user preference); a fresh install has no
+	 * `data.json` at all, so the "" default is what makes the screen open
+	 * exactly once. Stored as a version rather than a boolean so a future
+	 * "what's new" pass needs no second migration.
+	 */
+	welcomeShownVersion: string;
 	// Meeting detection (Tier 1, macOS).
 	detectMeetings: boolean;
 	detectZoom: boolean;
@@ -291,7 +299,7 @@ const DEFAULT_OPEN_DETAILS_KEYS: readonly string[] = ["google-credentials"];
 const OPTIONAL_SCOPES_DEFAULT = true;
 
 /** Settings panes shown as horizontal tabs inside the plugin settings view. */
-type SettingsTabId =
+export type SettingsTabId =
 	| "general"
 	| "aiBackend"
 	| "calendar"
@@ -375,6 +383,7 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	excludeWithoutMeetingLink: false,
 	openMeetAutomatically: false,
 	notificationStyleHintShown: false,
+	welcomeShownVersion: "",
 	detectMeetings: true,
 	detectZoom: true,
 	detectGoogleMeet: false,
@@ -926,6 +935,24 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     .setButtonText(s.settings.notificationStyle.button)
                     .onClick(() => this.plugin.openMacNotificationSettings())
             );
+
+        new Setting(containerEl)
+            .setName(s.settings.showWelcome.name)
+            .setDesc(s.settings.showWelcome.desc)
+            .addButton((btn) =>
+                btn
+                    .setButtonText(s.settings.showWelcome.button)
+                    .onClick(() => this.plugin.showWelcomeScreen())
+            );
+    }
+
+    /**
+     * Preselects a tab before Obsidian calls {@link display}. Used when another
+     * surface (e.g. the welcome screen's "Open full settings") wants to land
+     * the user on a specific pane rather than wherever they last were.
+     */
+    selectTab(id: SettingsTabId): void {
+        this.activeTab = id;
     }
 
     /**
