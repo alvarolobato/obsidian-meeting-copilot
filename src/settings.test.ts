@@ -1,5 +1,12 @@
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
-import { DEFAULT_SETTINGS, migrateSettings } from "./settings";
+import {
+	DEFAULT_SETTINGS,
+	GOOGLE_CREDENTIALS_DOC_URL,
+	migrateSettings,
+} from "./settings";
 import { DEFAULT_ENRICH_PROMPT, effectiveEnrichPrompt } from "./enrich/prompt";
 
 describe("migrateSettings", () => {
@@ -212,5 +219,19 @@ describe("migrateSettings", () => {
 			enrichMaxTranscriptTokens: 50_000,
 		});
 		expect(migrated.enrichMaxTranscriptTokens).toBe(50_000);
+	});
+});
+
+describe("GOOGLE_CREDENTIALS_DOC_URL", () => {
+	// The Advanced credentials section links out to this page. It's published
+	// straight from website/ by pages.yml, so a rename there would silently
+	// turn the in-app link into a 404 — pin the pairing here instead.
+	it("points at a page that exists in website/", () => {
+		const url = new URL(GOOGLE_CREDENTIALS_DOC_URL);
+		expect(url.origin).toBe("https://meetingcopilot.lobato.vip");
+		const page = fileURLToPath(
+			new URL(`../website${url.pathname}`, import.meta.url)
+		);
+		expect(existsSync(page)).toBe(true);
 	});
 });

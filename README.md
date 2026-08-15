@@ -31,6 +31,7 @@ See [Setup](docs/setup.md) for Google Calendar, AI endpoint, transcription, and 
 ## More
 
 - [Setup](docs/setup.md) — calendar, endpoint, transcription, enrichment, usage
+- [Bring your own Google credentials](docs/google-credentials.md) — your own Google Cloud OAuth client, for attendee names/groups or when your company blocks third-party apps
 - [Development](docs/development.md) — build, release, debugging
 - [Organizing meeting notes](docs/organizing-meeting-notes.md)
 

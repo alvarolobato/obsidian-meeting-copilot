@@ -283,6 +283,14 @@ const TEXTAREA_ROWS = 18;
 const DEFAULT_OPEN_DETAILS_KEYS: readonly string[] = ["google-credentials"];
 
 /**
+ * Public walkthrough for creating a personal / org-internal Google Cloud OAuth
+ * client, linked from the Advanced credentials section. Mirrors
+ * `docs/google-credentials.md`; keep the two in sync.
+ */
+export const GOOGLE_CREDENTIALS_DOC_URL =
+    "https://meetingcopilot.lobato.vip/google-credentials.html";
+
+/**
  * Default for the three optional OAuth scope toggles (groups/directory/other
  * contacts) — on for now so existing behavior doesn't change underfoot. Flip
  * to `false` once the app completes Google's verification review for these
@@ -850,6 +858,15 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
             cls: "mc-advanced-credentials-desc",
         });
         advancedDesc.setText(s.settings.advancedCredentials.desc);
+        // Standing up a Google Cloud OAuth client is a multi-step console walk
+        // that can't fit in a settings description — link out to the hosted
+        // guide instead of trying to summarize it here.
+        advancedDesc.createEl("br");
+        advancedDesc.createEl("a", {
+            text: s.settings.advancedCredentials.docsLink,
+            href: GOOGLE_CREDENTIALS_DOC_URL,
+            cls: "mc-advanced-credentials-link",
+        });
 
         new Setting(advancedDetails)
             .setName(s.settings.clientId.name)
