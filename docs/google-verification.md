@@ -13,30 +13,33 @@ This file is the source of truth for the text we paste into the Google Cloud
 
 ## 1. Scope strategy
 
-**Default published app: `calendar.readonly` only.**
+**Published app: `calendar.readonly` always, plus three user-togglable attendee-name
+scopes.**
 
 All requested scopes are **Sensitive** (not Restricted), so this is standard
-verification — **no** paid third-party CASA security assessment. Shipping the
-verified app with a single, self-evident scope minimizes review friction.
+verification — **no** paid third-party CASA security assessment.
 
-| Scope | Classification | In default app? | Notes |
+| Scope | Classification | In published app? | Notes |
 | --- | --- | --- | --- |
-| `.../auth/calendar.readonly` | Sensitive | ✅ Yes | Core: read agenda, create notes, meeting prompts. |
-| `.../auth/directory.readonly` | Sensitive | ❌ Advanced only | Resolve Workspace attendee display names. BYO-credentials. |
-| `.../auth/cloud-identity.groups.readonly` | Sensitive | ❌ Advanced only | Expand group invitees into members. BYO-credentials. |
+| `.../auth/calendar.readonly` | Sensitive | ✅ Always | Core: read agenda, create notes, meeting prompts. |
+| `.../auth/cloud-identity.groups.readonly` | Sensitive | ✅ Opt-in toggle | Expand group invitees into members. |
+| `.../auth/directory.readonly` | Sensitive | ✅ Opt-in toggle | Resolve Workspace attendee display names. |
+| `.../auth/contacts.other.readonly` | Sensitive | ✅ Opt-in toggle | Resolve attendee display names from the user's own "Other contacts". |
 
 > ⚠️ Before submitting, open the consent screen and confirm each scope's label really
 > is **Sensitive**. If Google has reclassified any to **Restricted**, that pulls in a
 > paid annual CASA assessment — stop and reassess.
 
-The directory/group scopes stay available for users who supply their own Google Cloud
-credentials (Advanced settings), so power users keep name/group resolution without
-those scopes touching the published app's verification.
+The three attendee-name scopes are requested only when the matching toggle under
+**Settings → Google → Advanced → Optional permissions** is on
+(`getOptionalScopes()` in `src/main.ts`); `calendar.readonly` is always requested.
+Every scope is read-only and only feeds attendee-name display on the agenda.
 
-> **Decision (2026-07-31):** verified app = **calendar-only**. The plugin-side change
-> that narrows the default requested scopes to calendar-only (keeping directory/groups
-> as a bring-your-own-credentials opt-in) is **owned by a separate app-code PR**, not
-> this docs/site branch. This pack assumes that change ships before submission.
+> **Decision (2026-08-15):** supersedes the 2026-07-31 calendar-only decision. The
+> optional attendee-name scopes are now part of the published app and are included in
+> this verification submission, rather than being reachable only with
+> bring-your-own-credentials. Each stays individually togglable in Advanced settings,
+> so a user who declines them still gets a calendar-only consent screen.
 
 ---
 
@@ -59,19 +62,35 @@ scope that returns event details and attendees. `calendar.events.readonly` would
 calendar-list metadata the agenda uses; there is no read-only scope narrower than
 event read that still lists attendees.
 
-### (Advanced only) `https://www.googleapis.com/auth/directory.readonly`
+### (Opt-in) `https://www.googleapis.com/auth/cloud-identity.groups.readonly`
 
-> Requested only when a user configures the plugin with their own Google Cloud
-> project. Used to resolve a Google Workspace attendee's display name from their email
-> address when Google Calendar did not include the name, so meeting notes show real
-> names instead of email addresses. Read-only, used only for name display, processed
-> locally.
+> Requested only when the user turns on "Expand Google Group invitees" in the plugin's
+> Advanced settings. Used to expand a group invited to a meeting (e.g.
+> `team@company.com`) into its individual members so the meeting note lists the actual
+> attendees instead of the group's raw address. Read-only, processed locally on the
+> user's device; the plugin never creates, edits, or deletes groups or memberships.
 
-### (Advanced only) `https://www.googleapis.com/auth/cloud-identity.groups.readonly`
+### (Opt-in) `https://www.googleapis.com/auth/directory.readonly`
 
-> Requested only for bring-your-own-credentials users. Used to expand a group invited
-> to a meeting (e.g. `team@company.com`) into its individual members so the meeting
-> note lists the actual attendees. Read-only, processed locally.
+> Requested only when the user turns on "Resolve attendee names from your Workspace
+> directory" in the plugin's Advanced settings. Used to resolve a Google Workspace
+> attendee's display name from their email address when Google Calendar did not
+> include the name, so meeting notes show real names instead of email addresses.
+> Read-only, used only for name display, processed locally on the user's device.
+
+### (Opt-in) `https://www.googleapis.com/auth/contacts.other.readonly`
+
+> Requested only when the user turns on "Resolve attendee names from Google 'Other
+> contacts'" in the plugin's Advanced settings. Used as a second, independent source
+> for attendee display names — the user's own auto-populated "Other contacts" rather
+> than their organization's directory — for the many Workspace domains whose admins
+> disable directory access for third-party apps. Read-only, used only for name
+> display, processed locally on the user's device; the plugin never adds, edits, or
+> deletes contacts.
+
+**Why not a narrower scope:** `contacts.other.readonly` is already narrower than the
+full `contacts` / `contacts.readonly` scopes — it exposes only the auto-collected
+"Other contacts" list, not the user's saved contacts, and grants no write access.
 
 ---
 
@@ -101,11 +120,14 @@ event read that still lists attendees.
   subdomain. Verify the `lobato.vip` **domain property** in Search Console (DNS `TXT`)
   with the same Google account that owns the Cloud project; the
   `meetingcopilot.lobato.vip` home page is then covered.
-- [ ] Scopes: `calendar.readonly` (only). Remove `openid`, `.../auth/userinfo.email`,
-  and `.../auth/userinfo.profile` if present — Cloud Console adds these to new
-  consent screens by default, but the plugin's OAuth request
+- [ ] Scopes: `calendar.readonly`, `cloud-identity.groups.readonly`,
+  `directory.readonly`, `contacts.other.readonly` — and nothing else. Remove `openid`,
+  `.../auth/userinfo.email`, and `.../auth/userinfo.profile` if present — Cloud Console
+  adds these to new consent screens by default, but the plugin's OAuth request
   (`src/auth/googleOAuth.ts`) never asks for them, so they're just unused scope
   creep that complicates review.
+- [ ] Enable the **People API** and the **Cloud Identity API** on the project — the
+  three optional scopes are useless without them.
 
 ### DNS + hosting for `meetingcopilot.lobato.vip`
 
@@ -132,14 +154,25 @@ each step.
    - the consent screen shows the app name **Meeting Copilot**;
    - the browser address bar URL contains the app's **OAuth client ID**
      (`client_id=...apps.googleusercontent.com`).
-4. **Grant `calendar.readonly`.** Show the requested permission ("See your calendar
-   events") and approve. Show the "authentication complete" return to Obsidian.
-5. **Show the functionality the scope enables:**
-   - the agenda sidebar populating with real calendar events;
-   - creating a meeting note from an event (title, time, attendees filled in);
-   - a meeting start/stop prompt appearing around an event time.
-6. **Read-only + local.** State that the plugin only reads calendar data, never
-   writes to the calendar, and stores everything locally with no server.
+4. **Show the optional-permission toggles first.** Before authenticating, open
+   Settings → Google → Advanced → **Optional permissions** and show the three toggles
+   (group expansion, Workspace directory, "Other contacts"), stating that each one
+   controls whether its scope is requested at all.
+5. **Grant the scopes.** Show each requested permission on the consent screen and
+   approve. Show the "authentication complete" return to Obsidian.
+6. **Show the functionality each scope enables:**
+   - `calendar.readonly` — the agenda sidebar populating with real calendar events;
+     creating a meeting note from an event (title, time, attendees filled in); a
+     meeting start/stop prompt appearing around an event time.
+   - `cloud-identity.groups.readonly` — an event invited via a group
+     (e.g. `team@company.com`) whose note lists the individual members.
+   - `directory.readonly` / `contacts.other.readonly` — an attendee whose invite
+     carries only an email address showing a real display name in the note.
+7. **Toggle one off to prove it's optional.** Turn a toggle off, re-authenticate, and
+   show that permission is no longer on the consent screen and the plugin still works
+   (that attendee falls back to a name derived from their email address).
+8. **Read-only + local.** State that the plugin only reads this data, never writes to
+   the calendar, contacts, or groups, and stores everything locally with no server.
 
 ---
 

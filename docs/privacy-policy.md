@@ -1,6 +1,6 @@
 # Meeting Copilot — Privacy Policy
 
-_Last updated: 2026-08-03_
+_Last updated: 2026-08-15_
 
 Meeting Copilot is an open-source [Obsidian](https://obsidian.md) plugin for macOS
 that helps you record, transcribe, and take notes on your meetings. It runs entirely
@@ -30,22 +30,26 @@ and you can revoke it at any time (see **Revoking access** below).
 | --- | --- | --- |
 | `https://www.googleapis.com/auth/calendar.readonly` | Read your calendar events | Show your agenda in Obsidian, create meeting notes, and prompt you around each meeting's start/end. **Read-only** — the plugin never creates, edits, or deletes calendar events. |
 
-### Optional, advanced scopes (bring-your-own-credentials only)
+### Optional contacts and groups access (only if you enable it in settings)
 
-If you configure the plugin with **your own** Google Cloud project (Advanced
-settings), you may additionally grant read-only directory scopes so attendee names
-and group invitees resolve for your Google Workspace domain:
+The plugin can optionally read contact and group information, purely to show real
+attendee names on your agenda instead of a raw email address. Each of the scopes
+below is requested **only** when you enable its toggle under _Settings → Google →
+Advanced → Optional permissions_. Turn a toggle off and that scope is never requested
+at sign-in; turn one back on and you must re-authenticate before Google grants it.
+All three are read-only, and the plugin works fine without any of them — attendees
+simply show a name derived from their email address.
 
-- `https://www.googleapis.com/auth/directory.readonly` — resolve a Workspace
-  attendee's **display name** from their email when Calendar didn't already provide
-  it.
-- `https://www.googleapis.com/auth/cloud-identity.groups.readonly` — expand a group
-  invitee (e.g. `team@company.com`) into its member people.
+| Scope | Setting that enables it | Why the plugin requests it | How the data is used |
+| --- | --- | --- | --- |
+| `https://www.googleapis.com/auth/cloud-identity.groups.readonly` | "Expand Google Group invitees" | Read the membership of a Google Group that appears as a calendar attendee | When an invite lists a group (e.g. `team@company.com`), show the individual people on it instead of the group's raw address. **Read-only** — the plugin never creates, edits, or deletes groups or memberships. |
+| `https://www.googleapis.com/auth/directory.readonly` | "Resolve attendee names from your Workspace directory" | Read display names from your organization's Google Workspace directory | Look up a real display name for attendees your calendar invite doesn't already label. Only returns data for people inside your own Workspace domain, and some Workspace admins disable it for third-party apps entirely. |
+| `https://www.googleapis.com/auth/contacts.other.readonly` | "Resolve attendee names from Google 'Other contacts'" | Read display names from your own "Other contacts" (auto-populated from your Gmail correspondence) | A second, independent source for attendee display names, useful when the directory lookup above is blocked by a Workspace admin. **Read-only** — the plugin never adds, edits, or deletes contacts. |
 
-These are **not** requested by the default, published app. They only return data for
-users inside your own Google Workspace domain, and the plugin works without them
-(it falls back to the name Calendar provides, or a readable version of the email
-address).
+Resolved names may be kept in a local cache file (`directory-cache.json`) inside your
+vault so the plugin doesn't re-query Google for every meeting. That cache never leaves
+your device and you can delete it at any time. None of this data is sent anywhere
+other than between your device and Google's own APIs.
 
 ## How your data is stored and used
 
@@ -112,8 +116,10 @@ grant ongoing read access to your calendar — we apply the following protection
   resolved contact names (`directory-cache.json`) is written inside your vault
   folder. It never leaves your device and you can delete it at any time.
 - **Minimum necessary access.** The default app requests only `calendar.readonly` —
-  the narrowest scope sufficient for the feature. The plugin never requests write
-  access and cannot modify your calendar.
+  the narrowest scope sufficient for the feature. The optional contacts and group
+  scopes are requested only when you turn them on in settings, and each can be turned
+  off independently. The plugin never requests write access and cannot modify your
+  calendar, contacts, or groups.
 - **Open-source and auditable.** The full source code is published at
   [github.com/alvarolobato/obsidian-meeting-copilot](https://github.com/alvarolobato/obsidian-meeting-copilot).
   Anyone can inspect exactly how data is fetched, stored, and used.
@@ -179,5 +185,5 @@ including the Limited Use requirements.
 The use of raw or derived user data received from Google Workspace APIs — including
 any data aggregated, anonymized, or derived from those scopes — will not be used to
 develop, improve, or train generalized AI or ML models. This applies to all data
-obtained via `calendar.readonly`, `directory.readonly`, and
-`cloud-identity.groups.readonly`.
+obtained via `calendar.readonly`, `directory.readonly`,
+`cloud-identity.groups.readonly`, and `contacts.other.readonly`.
