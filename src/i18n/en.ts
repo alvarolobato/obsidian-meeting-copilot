@@ -916,7 +916,8 @@ export const en = {
 			flowSteps: [
 				"Both audio channels are saved to your vault",
 				"Whisper transcribes on your Mac",
-				"AI drafts a summary and action items",
+				"AI drafts a summary of the discussion",
+				"Your next steps and the group's follow-ups are identified",
 				"Everything lands in the meeting note",
 			],
 			next: "Next: set up →",
