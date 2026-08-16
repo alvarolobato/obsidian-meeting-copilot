@@ -161,135 +161,153 @@ us to flag. Say so explicitly in the reply and show the toggles on camera.
 
 ## 6. Demo data to prepare
 
-The demo needs a **Google Workspace domain** (a throwaway one is fine) plus one external
-address. The point of the cast below is that each attendee is resolvable by exactly one
-scope.
+### You can invent the people. You cannot invent the accounts.
 
-### Accounts and groups
+Every one of the three scopes resolves against **real Google-side data**, so a made-up
+address that doesn't exist resolves to nothing and the shot proves nothing:
 
-| What | Example | Purpose |
+- `directory.readonly` returns only real users in the real Workspace directory.
+- `contacts.other.readonly` returns only addresses Google has actually filed under the
+  signed-in user's **Other contacts** — which happens from real received mail, and only
+  carries a *name* if the sender had a display name set.
+- `cloud-identity.groups.readonly` needs a real group with real memberships.
+
+So: make up the *identities* freely — a Workspace user called "Sophie Chen" who exists
+only for this demo is completely fine — but actually create each account.
+
+### The group: it must be a Workspace group, not a public one
+
+The plugin calls `cloudidentity.googleapis.com/v1/groups:lookup?groupKey.id=<email>`
+(see `expandGroupAttendees.ts`). Cloud Identity resolves groups belonging to a Cloud
+Identity / Workspace customer. A **public consumer group** created on groups.google.com
+(`…@googlegroups.com`) is not one of those and will fail lookup.
+
+Create the group **inside the demo Workspace domain** — Admin console → Directory →
+Groups, or groups.google.com while signed in as a domain user with group-creation
+rights. Suggested name: **`product-team@<your-demo-domain>`**.
+
+### The cast — one meeting, three guests, one scope each
+
+Substitute your real Workspace domain for `<demo-domain>`.
+
+| Role | Suggested address | Resolvable only by |
 | --- | --- | --- |
-| Signed-in user | `demo@<workspace-domain>` | The account that authenticates in the video. Remove 2FA prompts / recovery nags so a reviewer could repeat it. |
-| Internal colleague | `sophie.chen@<workspace-domain>` | Has a directory profile with a **full display name**. Resolvable **only** by `directory.readonly`. |
-| Second internal member | `raj.patel@<workspace-domain>` | Group member, so the expanded group shows more than one person. |
-| Google Group | `product-team@<workspace-domain>` | 3+ members. Resolvable **only** by `cloud-identity.groups.readonly`. |
-| External contact | `dana@<partner-domain>` | **Not** in the Workspace directory. Exchange a real email with them from the demo account first so Google files them under **Other contacts** with a display name. Resolvable **only** by `contacts.other.readonly`. |
+| Signed-in user | `alex.moreno@<demo-domain>` | — (the account that authenticates) |
+| Workspace group | `product-team@<demo-domain>` | `cloud-identity.groups.readonly` |
+| Internal colleague | `sophie.chen@<demo-domain>` | `directory.readonly` |
+| External contact | `dana.whitfield@gmail.com` | `contacts.other.readonly` |
 
-Verify the external contact really landed in Other contacts before recording:
-Google Contacts → **Other contacts** should list Dana with a name. If it shows only an
-email address, the video has nothing to demonstrate — send another round of email and
-wait for Google to populate it.
+Group members: `sophie.chen@`, `raj.patel@`, `mia.okafor@` — three is enough to make an
+expansion visibly different from a single address.
 
-### Calendar events
+**Dana is the one that takes lead time.** She must be a real mailbox (a second free
+Gmail account is fine) with the profile name set to "Dana Whitfield", and she must
+**send mail to `alex.moreno@`** — receiving is what makes Google file her under Other
+contacts with a name. Before recording, confirm at
+[contacts.google.com → Other contacts](https://contacts.google.com/other) that she is
+listed **with a name**, not just an address. If she shows as a bare address, the third
+scope has nothing to demonstrate.
 
-Create these on the demo account's calendar, timed to be visible in the agenda's
-look-ahead window while recording:
+### The one meeting
 
-1. **"Product sync"** — invite **only** the group `product-team@…`.
-2. **"Partner review"** — invite `sophie.chen@…` and `dana@…`, **pasting bare email
-   addresses** so Calendar attaches no `displayName` of its own. If Calendar supplies a
-   name, the plugin uses it and no lookup happens — which would make the shot prove
-   nothing.
+Create a single event — **"Q3 planning review"** — on Alex's calendar, timed inside the
+agenda's look-ahead window, with exactly three guests: `product-team@`, `sophie.chen@`,
+`dana.whitfield@gmail.com`.
 
-### Cache reset — the single biggest recording gotcha
+Add them by **pasting bare email addresses**. If Calendar attaches a `displayName` of
+its own, the plugin uses it and skips the lookup — which would make the whole video
+prove nothing.
 
-Resolved names persist in `<vault>/.obsidian/plugins/meeting-copilot/directory-cache.json`
-for **~365 days** (people) and **7 days** (groups). Toggling a scope off clears session
-state and *negative* entries only — **positive hits survive**, so an attendee resolved
-during a rehearsal still shows their real name with the scope switched off, and the
-"before" shot silently proves nothing.
+This single event is what makes the recording short: all three failure modes are visible
+in one attendee list, and each toggle then fixes exactly one row of it.
 
-Use the dev console instead of deleting files mid-shoot. Open DevTools
-(Cmd+Opt+I) and run:
+### Turn off caching before you record
+
+Resolved names persist ~365 days (people) / 7 days (groups), so a rehearsal poisons
+every later "before" shot. Open DevTools (Cmd+Opt+I) and run:
 
 ```js
-_mcDev.disableCache()   // every refresh now re-queries Google
-_mcDev.status()         // confirm bypass: true before you hit record
+_mcDev.disableCache()   // every refresh re-queries Google
+_mcDev.status()         // confirm bypass: true
 ```
 
-Leave the bypass on for the whole recording: each toggle-and-reauth then shows a live
-lookup rather than a replay. `_mcDev.clearCache()` wipes the cache outright and forces
-an Other-contacts resync if you want a genuinely cold start. Neither persists — a
-plugin reload returns to normal caching, so re-run `disableCache()` after any reload.
-
-The bypass leaves Other-contacts names visible on purpose: that data arrives via a
-once-a-day bulk sync rather than per-person lookups, so hiding it would make Dana
-permanently unresolvable and break the `contacts.other.readonly` shot.
-
-### Also have ready
-
-- A second Google account to act as organizer, if you want invites with no display name.
-- The OAuth **client ID** visible in the browser URL bar during consent.
-- Screen recording at a resolution where the agenda's attendee names are legible.
+Leave it on for the whole recording. It doesn't persist — re-run it after any plugin
+reload. It deliberately leaves Other-contacts names visible, since those come from a
+bulk sync rather than per-person lookups.
 
 ---
 
 ## 7. Demo-video shot list
 
-There is no voice-over: the argument is carried by full-screen text cards, one before
-each scenario below. They live in [verification-video-cards.md](./verification-video-cards.md)
-— open that file in Obsidian's Reading view, zoomed, and cut to it between shots.
+`calendar.readonly` is already verified — this video is **only** about the three scopes
+under review, so don't spend time re-demonstrating agenda or note features.
 
-Record in English, narrated or captioned. The structure is deliberately
-**off → consent → on** per scope: that contrast is the necessity evidence the reviewer
-asked for. Budget roughly 6–9 minutes.
+One meeting, four sign-ins, roughly **4 minutes**. Text cards between shots carry the
+argument (there is no voice-over): see
+[verification-video-cards.md](./verification-video-cards.md).
 
-### Part 1 — Identity and the least-privilege model
+### Shot 1 — Identity and least privilege (~40s)
 
-1. **App identity.** Obsidian → Settings → Meeting Copilot → Google Calendar
-   integration. State "Meeting Copilot" on camera.
-2. **Show the toggles.** Open **Advanced → Optional permissions** and show all three
-   toggles, narrating: *"each of these three permissions is individually optional and
-   off unless the user turns it on; calendar access is the only one always requested."*
-3. **Turn all three OFF.** Authenticate. On the consent screen, pause on the URL so the
-   **client ID** is readable, and show the permission list contains **only** calendar
-   access. Approve, return to Obsidian.
+> **CARD 1** (title) → **CARD 2** (what this video shows)
 
-### Part 2 — The baseline (what the user sees without the scopes)
+- Obsidian → Settings → Meeting Copilot → Google Calendar integration. App name visible.
+- Open **Advanced → Optional permissions**, show the three toggles, **all off**.
 
-4. **Show the degraded agenda.** Open the agenda sidebar with both demo events visible:
-   - "Product sync" lists `product-team@…` — a raw group address, no people.
-   - "Partner review" lists guessed names derived from the email local part
-     (e.g. "Sophie Chen" is a *guess* from `sophie.chen@`, and `dana@` shows just
-     "Dana") — not the real profile names.
-   - Create a meeting note from one event so the same labels appear written into the
-     note. Narrate: *"this is the maximum the app can do without the three permissions."*
+### Shot 2 — Baseline: calendar only (~50s)
 
-### Part 3 — One scope at a time
+> **CARD 3** (all toggles off)
 
-With `_mcDev.disableCache()` already on (see §6), for each scope: turn on **only** that
-toggle → **Re-authenticate** → show the consent screen now lists that one extra
-permission → approve → show the resulting change. Every lookup is live, so nothing here
-is a cached replay.
+- Click **Authenticate**. Pause on the consent screen long enough to read the URL's
+  `client_id=…` and to see the permission list contains **calendar access only**.
+  Approve.
+- Open the agenda and show **"Q3 planning review"**. All three guests are degraded at
+  once:
+  - `product-team@…` — a raw group address, no people;
+  - "Sophie Chen" — a *guess* from the email local part, not a profile name;
+  - "Dana Whitfield" — likewise a guess, or just "Dana".
 
-5. **`cloud-identity.groups.readonly`.** After granting, "Product sync" expands
-   `product-team@…` into Sophie, Raj, and the third member, in the agenda *and* in a
-   newly created note. Narrate that Calendar only ever returns the group address, so no
-   Calendar or People scope can produce this list.
-6. **`directory.readonly`.** After granting, Sophie on "Partner review" resolves to her
-   real Workspace profile name. Point out that Dana (external) is **still** unresolved —
-   this is the shot that proves the third scope is not redundant.
-7. **`contacts.other.readonly`.** After granting, Dana resolves to her real name from the
-   user's Other contacts. Narrate that she is external, therefore absent from the
-   directory, so the previous scope could never have resolved her.
+> **CARD 4** (what you just saw)
 
-### Part 4 — Prove it's read-only and reversible
+### Shot 3 — `cloud-identity.groups.readonly` (~40s)
 
-8. **Revoke one.** Turn `directory.readonly` back off, re-authenticate, and show that
-   permission is gone from the consent screen and Sophie falls back to a guessed name —
-   the app keeps working.
-9. **Read-only + local.** State that the plugin never creates, edits, or deletes
-   calendar events, contacts, or groups; that all data stays in the local Obsidian vault
-   on the user's Mac; and that there is no developer server. Optionally show
-   `directory-cache.json` in the vault folder as the only place this data is stored.
+> **CARD 5**
 
-### What the reviewer must be able to see at least once
+- Turn on **only** "Expand Google Group invitees" → **Re-authenticate**.
+- Consent screen now lists that one extra permission. Approve.
+- Same agenda entry: `product-team@` is replaced by Sophie, Raj, and Mia.
 
-- [ ] Client ID legible in the consent URL.
-- [ ] Consent screen with calendar-only (Part 1) and with each added scope (Part 3).
-- [ ] The same attendee before and after each scope, in the same view.
-- [ ] Group address → member list.
-- [ ] An external attendee resolved *only* after `contacts.other.readonly`.
+### Shot 4 — `directory.readonly` (~40s)
+
+> **CARD 6**
+
+- Turn on **only** "Resolve attendee names from your Workspace directory" →
+  **Re-authenticate** → approve.
+- Sophie now shows her real Workspace profile name.
+- **Hold on the list**: Dana is still unresolved. This is the shot that proves the third
+  scope is not redundant — don't rush it.
+
+### Shot 5 — `contacts.other.readonly` (~40s)
+
+> **CARD 7**
+
+- Turn on **only** "Resolve attendee names from Google 'Other contacts'" →
+  **Re-authenticate** → approve.
+- Dana resolves to her real name. Every guest on the meeting is now a real person.
+
+### Shot 6 — Read-only and local (~20s)
+
+> **CARD 8** (read-only + local) → **CARD 9** (summary)
+
+- Nothing to perform; hold the cards. Optionally show `directory-cache.json` in the
+  vault folder as the only place any of this is stored.
+
+### Checklist before you stop recording
+
+- [ ] `client_id=…` legible in the consent URL at least once.
+- [ ] Consent screen visible for calendar-only **and** for each of the three additions.
+- [ ] The same three-guest list shown before and after every grant.
+- [ ] Group address → three named members.
+- [ ] Dana unresolved *after* the directory grant, resolved *after* the other-contacts grant.
 - [ ] A statement that nothing is written back to Google.
 
 ---
