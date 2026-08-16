@@ -61,11 +61,11 @@ Expect a **calendar-only** consent screen.
 
 With calendar access alone, all three guests are unusable:
 
-**`product-team@…`** — a raw group address. No people.
+**"Product Team"** — a group address. No people.
 
-**Sophie** — a name *guessed* from the email address.
+**"Schen"** — the app's *guess* from the email address.
 
-**Dana** — likewise a guess.
+**"Dwhitfield42"** — likewise a guess.
 
 ### This is the maximum the app can do without the three permissions.
 
@@ -79,7 +79,7 @@ With calendar access alone, all three guests are unusable:
 
 **Turning ON:** "Expand Google Group invitees"
 
-**Watch:** `product-team@` becomes the three people actually in it.
+**Watch:** "Product Team" becomes the three people actually in it.
 
 **Why nothing narrower works:** Calendar returns the group as a *single
 attendee*. No Calendar or People scope can list a group's members —
@@ -95,9 +95,9 @@ only Cloud Identity can.
 
 **Turning ON:** "Resolve attendee names from your Workspace directory"
 
-**Watch:** Sophie resolves to her real Workspace profile name…
+**Watch:** "Schen" becomes **Sophie Chen**, her real profile name…
 
-### …and Dana does **not**.
+### …and "Dwhitfield42" does **not** change.
 
 She is external. The Workspace directory does not contain her.
 
@@ -111,7 +111,8 @@ She is external. The Workspace directory does not contain her.
 
 **Turning ON:** "Resolve attendee names from Google 'Other contacts'"
 
-**Watch:** Dana resolves — from the user's own contacts, not the directory.
+**Watch:** "Dwhitfield42" becomes **Dana Whitfield** — from the
+user's own contacts, not the directory.
 
 **Why the previous scope could not do this:** external people are
 **by definition absent** from the Workspace directory.

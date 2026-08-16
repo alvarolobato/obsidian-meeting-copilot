@@ -192,13 +192,25 @@ Substitute your real Workspace domain for `<demo-domain>`.
 
 | Role | Suggested address | Resolvable only by |
 | --- | --- | --- |
-| Signed-in user | `alex.moreno@<demo-domain>` | — (the account that authenticates) |
-| Workspace group | `product-team@<demo-domain>` | `cloud-identity.groups.readonly` |
-| Internal colleague | `sophie.chen@<demo-domain>` | `directory.readonly` |
-| External contact | `dana.whitfield@gmail.com` | `contacts.other.readonly` |
+| Role | Address | Profile name | Shows as, before | Resolvable only by |
+| --- | --- | --- | --- | --- |
+| Signed-in user | `alex.moreno@<demo-domain>` | Alex Moreno | — | — |
+| Workspace group | `product-team@<demo-domain>` | — | "Product Team" | `cloud-identity.groups.readonly` |
+| Internal colleague | `schen@<demo-domain>` | **Sophie Chen** | "Schen" | `directory.readonly` |
+| External contact | `dwhitfield42@gmail.com` | **Dana Whitfield** | "Dwhitfield42" | `contacts.other.readonly` |
 
-Group members: `sophie.chen@`, `raj.patel@`, `mia.okafor@` — three is enough to make an
-expansion visibly different from a single address.
+Group members: `schen@`, `rpatel@`, `mokafor@` — three is enough to make an expansion
+visibly different from a single address.
+
+> ⚠️ **Do not use dotted addresses like `sophie.chen@`.** With no scope granted the app
+> falls back to `humanizeEmailName()`, which splits the local part on `. _ + -` and
+> title-cases it — so `sophie.chen@` renders as "Sophie Chen", *character-for-character
+> identical* to her directory profile name. Granting `directory.readonly` would then
+> change nothing on screen and the shot would prove nothing.
+>
+> Pick local parts that humanize into something visibly wrong: `schen@` → "Schen",
+> `dwhitfield42@` → "Dwhitfield42". The gap between the guess and the real name **is**
+> the evidence.
 
 **Dana is the one that takes lead time.** She must be a real mailbox (a second free
 Gmail account is fine — 5 minutes to create) with the **profile name set** to "Dana
@@ -228,9 +240,46 @@ Create a single event — **"Q3 planning review"** — on Alex's calendar, timed
 agenda's look-ahead window, with exactly three guests: `product-team@`, `sophie.chen@`,
 `dana.whitfield@gmail.com`.
 
-Add them by **pasting bare email addresses**. If Calendar attaches a `displayName` of
-its own, the plugin uses it and skips the lookup — which would make the whole video
-prove nothing.
+### Stopping Calendar from supplying the name itself
+
+`mapAttendeesExpanded()` prefers Calendar's own `attendee.displayName` over any lookup.
+If Calendar returns a name, **no API call happens at all** and none of the three scopes
+has anything to show.
+
+`displayName` is a stored property on the event, written when whoever added the attendee
+supplied a name — typically by picking the person from autocomplete, which pulls from
+the organizer's contacts and directory.
+
+**Deterministic way — create the event via the API**, where you control the payload
+exactly. At [script.google.com](https://script.google.com), signed in as the demo user,
+enable the **Calendar** advanced service and run:
+
+```js
+function createDemoEvent() {
+  Calendar.Events.insert({
+    summary: "Q3 planning review",
+    start: { dateTime: "2026-08-20T10:00:00+02:00" },
+    end:   { dateTime: "2026-08-20T11:00:00+02:00" },
+    attendees: [
+      { email: "product-team@<demo-domain>" },
+      { email: "schen@<demo-domain>" },
+      { email: "dwhitfield42@gmail.com" },
+    ],
+  }, "primary");
+}
+```
+
+Attendees carry `email` only, so `displayName` is never set.
+
+**If you use the web UI instead:** paste each raw address and press Enter rather than
+accepting an autocomplete suggestion, and make sure none of them is saved in the
+organizer's My Contacts — a saved contact is exactly what makes autocomplete attach a
+name. (Another reason not to hand-save Dana, per the warning above.)
+
+**Verifying costs nothing, because the baseline shot is the test.** With all three
+toggles off and `_mcDev.disableCache()` on, the agenda must show "Product Team",
+"Schen", and "Dwhitfield42". If you see "Sophie Chen" there, Calendar is supplying the
+name — fix the event before recording anything else.
 
 This single event is what makes the recording short: all three failure modes are visible
 in one attendee list, and each toggle then fixes exactly one row of it.
@@ -276,9 +325,9 @@ argument (there is no voice-over): see
   Approve.
 - Open the agenda and show **"Q3 planning review"**. All three guests are degraded at
   once:
-  - `product-team@…` — a raw group address, no people;
-  - "Sophie Chen" — a *guess* from the email local part, not a profile name;
-  - "Dana Whitfield" — likewise a guess, or just "Dana".
+  - **"Product Team"** — the group address, humanized. No people.
+  - **"Schen"** — a guess from the email local part, not a profile name.
+  - **"Dwhitfield42"** — likewise.
 
 > **CARD 4** (what you just saw)
 
@@ -288,7 +337,7 @@ argument (there is no voice-over): see
 
 - Turn on **only** "Expand Google Group invitees" → **Re-authenticate**.
 - Consent screen now lists that one extra permission. Approve.
-- Same agenda entry: `product-team@` is replaced by Sophie, Raj, and Mia.
+- Same agenda entry: "Product Team" is replaced by Sophie Chen, Raj Patel, and Mia Okafor.
 
 ### Shot 4 — `directory.readonly` (~40s)
 
@@ -296,9 +345,9 @@ argument (there is no voice-over): see
 
 - Turn on **only** "Resolve attendee names from your Workspace directory" →
   **Re-authenticate** → approve.
-- Sophie now shows her real Workspace profile name.
-- **Hold on the list**: Dana is still unresolved. This is the shot that proves the third
-  scope is not redundant — don't rush it.
+- "Schen" becomes **"Sophie Chen"**, her real Workspace profile name.
+- **Hold on the list**: "Dwhitfield42" is unchanged. This is the shot that proves the
+  third scope is not redundant — don't rush it.
 
 ### Shot 5 — `contacts.other.readonly` (~40s)
 
@@ -306,7 +355,7 @@ argument (there is no voice-over): see
 
 - Turn on **only** "Resolve attendee names from Google 'Other contacts'" →
   **Re-authenticate** → approve.
-- Dana resolves to her real name. Every guest on the meeting is now a real person.
+- "Dwhitfield42" becomes **"Dana Whitfield"**. Every guest is now a real person.
 
 ### Shot 6 — Read-only and local (~20s)
 
@@ -321,7 +370,9 @@ argument (there is no voice-over): see
 - [ ] Consent screen visible for calendar-only **and** for each of the three additions.
 - [ ] The same three-guest list shown before and after every grant.
 - [ ] Group address → three named members.
-- [ ] Dana unresolved *after* the directory grant, resolved *after* the other-contacts grant.
+- [ ] "Dwhitfield42" still unresolved *after* the directory grant, resolved *after* the
+      other-contacts grant.
+- [ ] Baseline really showed "Schen"/"Dwhitfield42" — not the real names.
 - [ ] A statement that nothing is written back to Google.
 
 ---
