@@ -226,6 +226,10 @@ permanently unresolvable and break the `contacts.other.readonly` shot.
 
 ## 7. Demo-video shot list
 
+There is no voice-over: the argument is carried by full-screen text cards, one before
+each scenario below. They live in [verification-video-cards.md](./verification-video-cards.md)
+— open that file in Obsidian's Reading view, zoomed, and cut to it between shots.
+
 Record in English, narrated or captioned. The structure is deliberately
 **off → consent → on** per scope: that contrast is the necessity evidence the reviewer
 asked for. Budget roughly 6–9 minutes.
