@@ -45,7 +45,6 @@ import {
 import * as path from "path";
 import * as fs from "fs";
 import {
-	CONTACTS_OTHER_READONLY_SCOPE,
 	CredentialsMissingError,
 	DIRECTORY_READONLY_SCOPE,
 	GoogleOAuth,
@@ -150,11 +149,9 @@ import {
 	createPeopleDirectory,
 	PersonNameCache,
 } from "./calendar/personDirectory";
-import { syncOtherContacts } from "./calendar/otherContactsSync";
 import {
 	DIRECTORY_CACHE_FILENAME,
 	DirectoryCache,
-	OTHER_CONTACTS_RESYNC_INTERVAL_MS,
 	PEOPLE_MAX_REQUESTS_PER_MINUTE,
 	PeopleApiRateLimiter,
 } from "./calendar/directoryCache";
@@ -388,9 +385,6 @@ export default class SystemRecordingPlugin extends Plugin {
 				const scopes: string[] = [];
 				if (this.settings.scopeGroupsEnabled) scopes.push(GROUPS_READONLY_SCOPE);
 				if (this.settings.scopeDirectoryEnabled) scopes.push(DIRECTORY_READONLY_SCOPE);
-				if (this.settings.scopeOtherContactsEnabled) {
-					scopes.push(CONTACTS_OTHER_READONLY_SCOPE);
-				}
 				return scopes;
 			},
 		},
@@ -497,8 +491,6 @@ export default class SystemRecordingPlugin extends Plugin {
 	>();
 	/** Bumped to cancel an in-flight background expansion when a newer fetch wins. */
 	private groupExpandGeneration = 0;
-	/** Guards against overlapping otherContacts syncs (see scheduleOtherContactsSync). */
-	private otherContactsSyncInFlight = false;
 	private agendaEvents = new TypedEventBus<AgendaViewEvents>();
 
     async onload() {
@@ -2478,39 +2470,6 @@ export default class SystemRecordingPlugin extends Plugin {
 		}
 	}
 
-	/**
-	 * Kicks off a background otherContacts sync (display names for people
-	 * you've corresponded with over Gmail — see `otherContactsSync.ts`) at
-	 * most once per {@link OTHER_CONTACTS_RESYNC_INTERVAL_MS}. No-ops when
-	 * the setting is off, not authenticated, already mid-sync, or the user
-	 * hasn't re-consented to the scope yet (setting just turned on, or an
-	 * old install predates it).
-	 */
-	private scheduleOtherContactsSync(): void {
-		if (!this.settings.scopeOtherContactsEnabled) return;
-		if (!this.isCalendarAuthenticated()) return;
-		if (this.otherContactsSyncInFlight) return;
-		if (!this.oauth.hasScope(CONTACTS_OTHER_READONLY_SCOPE)) return;
-		if (
-			Date.now() - this.directoryCache.otherContactsSyncedAt <
-			OTHER_CONTACTS_RESYNC_INTERVAL_MS
-		) {
-			return;
-		}
-		this.otherContactsSyncInFlight = true;
-		syncOtherContacts(this.oauth, this.directoryCache, this.peopleRateLimiter)
-			.then((result) => {
-				if (result.updated > 0) this.agendaEvents.emit("changed", undefined);
-			})
-			.catch((err) => {
-				mcLog("otherContacts", "sync failed", {
-					error: err instanceof Error ? err.message : String(err),
-				});
-			})
-			.finally(() => {
-				this.otherContactsSyncInFlight = false;
-			});
-	}
 
 	/**
 	 * Await expansion for a single meeting before writing a note so attendees
@@ -5197,7 +5156,6 @@ export default class SystemRecordingPlugin extends Plugin {
         );
         this.applyCachedExpandedAttendees(events);
         this.scheduleGroupAttendeeExpand(events);
-        this.scheduleOtherContactsSync();
         const index = buildNoteIndex(
             this.app,
             scanMeetingNotes(this.app, this.excludedFolderPatterns())
