@@ -140,43 +140,170 @@ full `contacts` / `contacts.readonly` scopes — it exposes only the auto-collec
 
 ---
 
-## 5. Demo-video shot list
+## 5. Why three scopes (the necessity argument)
 
-Google requires a screen-recorded video (English) proving the consent flow and the
-functionality each scope enables. Record at readable resolution; narrate or caption
-each step.
+The 2026-08 review rejection was **not** "we don't believe the feature exists" — it was
+*"the video does not demonstrate why the scope is necessary or why narrower permissions
+cannot be used."* So the video's job is to prove each scope resolves a population the
+other two **cannot**. Say this on camera, and structure the shots around it:
 
-1. **App identity.** Show the Meeting Copilot plugin in Obsidian → Settings → Google
-   Calendar integration. State the app name on camera.
-2. **Start the OAuth flow.** Click **Authenticate**. The system browser opens Google's
-   consent screen.
-3. **Prove the consent screen.** Pause so the reviewer can see:
-   - the consent screen shows the app name **Meeting Copilot**;
-   - the browser address bar URL contains the app's **OAuth client ID**
-     (`client_id=...apps.googleusercontent.com`).
-4. **Show the optional-permission toggles first.** Before authenticating, open
-   Settings → Google → Advanced → **Optional permissions** and show the three toggles
-   (group expansion, Workspace directory, "Other contacts"), stating that each one
-   controls whether its scope is requested at all.
-5. **Grant the scopes.** Show each requested permission on the consent screen and
-   approve. Show the "authentication complete" return to Obsidian.
-6. **Show the functionality each scope enables:**
-   - `calendar.readonly` — the agenda sidebar populating with real calendar events;
-     creating a meeting note from an event (title, time, attendees filled in); a
-     meeting start/stop prompt appearing around an event time.
-   - `cloud-identity.groups.readonly` — an event invited via a group
-     (e.g. `team@company.com`) whose note lists the individual members.
-   - `directory.readonly` / `contacts.other.readonly` — an attendee whose invite
-     carries only an email address showing a real display name in the note.
-7. **Toggle one off to prove it's optional.** Turn a toggle off, re-authenticate, and
-   show that permission is no longer on the consent screen and the plugin still works
-   (that attendee falls back to a name derived from their email address).
-8. **Read-only + local.** State that the plugin only reads this data, never writes to
-   the calendar, contacts, or groups, and stores everything locally with no server.
+| Scope | Resolves | Why nothing narrower works |
+| --- | --- | --- |
+| `cloud-identity.groups.readonly` | The people behind a **group address** on an invite | Calendar returns the group's email as a single attendee. No Calendar or People scope can list a group's members; only Cloud Identity can. |
+| `directory.readonly` | Display names of **internal colleagues** Calendar didn't label | These people are in the org directory but not in the user's own contacts, so `contacts.readonly` / `contacts.other.readonly` return nothing for them. |
+| `contacts.other.readonly` | Display names of **external people** (customers, partners) | External attendees are **by definition absent** from the Workspace directory, so `directory.readonly` cannot resolve them. It is also the only fallback when a Workspace admin disables directory sharing for third-party apps. |
+
+Every one of the three is read-only, and each is individually togglable in the app —
+Meeting Copilot **is** the "least privilege auth model" case the rejection email invites
+us to flag. Say so explicitly in the reply and show the toggles on camera.
+
+> ⚠️ **Before recording, check the shipped defaults.** The rejection email says *"do not
+> deploy unverified scopes to production traffic."* `OPTIONAL_SCOPES_DEFAULT` in
+> `src/settings.ts` is currently `true`, so every released install requests all three
+> unverified scopes at sign-in. Either flip that default to `false` before the next
+> release (production traffic goes back to calendar-only; the demo build turns them on
+> explicitly), or be ready to explain the current behaviour. Leaving it as-is burns the
+> unverified-user cap and is the exact pattern the email warns against.
 
 ---
 
-## 6. Human-side checklist (mirrors issue #143)
+## 6. Demo data to prepare
+
+The demo needs a **Google Workspace domain** (a throwaway one is fine) plus one external
+address. The point of the cast below is that each attendee is resolvable by exactly one
+scope.
+
+### Accounts and groups
+
+| What | Example | Purpose |
+| --- | --- | --- |
+| Signed-in user | `demo@<workspace-domain>` | The account that authenticates in the video. Remove 2FA prompts / recovery nags so a reviewer could repeat it. |
+| Internal colleague | `sophie.chen@<workspace-domain>` | Has a directory profile with a **full display name**. Resolvable **only** by `directory.readonly`. |
+| Second internal member | `raj.patel@<workspace-domain>` | Group member, so the expanded group shows more than one person. |
+| Google Group | `product-team@<workspace-domain>` | 3+ members. Resolvable **only** by `cloud-identity.groups.readonly`. |
+| External contact | `dana@<partner-domain>` | **Not** in the Workspace directory. Exchange a real email with them from the demo account first so Google files them under **Other contacts** with a display name. Resolvable **only** by `contacts.other.readonly`. |
+
+Verify the external contact really landed in Other contacts before recording:
+Google Contacts → **Other contacts** should list Dana with a name. If it shows only an
+email address, the video has nothing to demonstrate — send another round of email and
+wait for Google to populate it.
+
+### Calendar events
+
+Create these on the demo account's calendar, timed to be visible in the agenda's
+look-ahead window while recording:
+
+1. **"Product sync"** — invite **only** the group `product-team@…`.
+2. **"Partner review"** — invite `sophie.chen@…` and `dana@…`, **pasting bare email
+   addresses** so Calendar attaches no `displayName` of its own. If Calendar supplies a
+   name, the plugin uses it and no lookup happens — which would make the shot prove
+   nothing.
+
+### Cache reset — the single biggest recording gotcha
+
+Resolved names persist in `<vault>/.obsidian/plugins/meeting-copilot/directory-cache.json`
+for **~365 days** (people) and **7 days** (groups). Toggling a scope off clears session
+state and *negative* entries only — **positive hits survive**, so an attendee resolved
+during a rehearsal still shows their real name with the scope switched off, and the
+"before" shot silently proves nothing.
+
+Before every "before" take: quit Obsidian, delete `directory-cache.json`, reopen.
+
+Deleting it also resets the Other-contacts sync timestamp, which otherwise only re-runs
+once per 24h.
+
+### Also have ready
+
+- A second Google account to act as organizer, if you want invites with no display name.
+- The OAuth **client ID** visible in the browser URL bar during consent.
+- Screen recording at a resolution where the agenda's attendee names are legible.
+
+---
+
+## 7. Demo-video shot list
+
+Record in English, narrated or captioned. The structure is deliberately
+**off → consent → on** per scope: that contrast is the necessity evidence the reviewer
+asked for. Budget roughly 6–9 minutes.
+
+### Part 1 — Identity and the least-privilege model
+
+1. **App identity.** Obsidian → Settings → Meeting Copilot → Google Calendar
+   integration. State "Meeting Copilot" on camera.
+2. **Show the toggles.** Open **Advanced → Optional permissions** and show all three
+   toggles, narrating: *"each of these three permissions is individually optional and
+   off unless the user turns it on; calendar access is the only one always requested."*
+3. **Turn all three OFF.** Authenticate. On the consent screen, pause on the URL so the
+   **client ID** is readable, and show the permission list contains **only** calendar
+   access. Approve, return to Obsidian.
+
+### Part 2 — The baseline (what the user sees without the scopes)
+
+4. **Show the degraded agenda.** Open the agenda sidebar with both demo events visible:
+   - "Product sync" lists `product-team@…` — a raw group address, no people.
+   - "Partner review" lists guessed names derived from the email local part
+     (e.g. "Sophie Chen" is a *guess* from `sophie.chen@`, and `dana@` shows just
+     "Dana") — not the real profile names.
+   - Create a meeting note from one event so the same labels appear written into the
+     note. Narrate: *"this is the maximum the app can do without the three permissions."*
+
+### Part 3 — One scope at a time
+
+For each scope: quit Obsidian → delete `directory-cache.json` → reopen → turn on **only**
+that toggle → **Re-authenticate** → show the consent screen now lists that one extra
+permission → approve → show the resulting change.
+
+5. **`cloud-identity.groups.readonly`.** After granting, "Product sync" expands
+   `product-team@…` into Sophie, Raj, and the third member, in the agenda *and* in a
+   newly created note. Narrate that Calendar only ever returns the group address, so no
+   Calendar or People scope can produce this list.
+6. **`directory.readonly`.** After granting, Sophie on "Partner review" resolves to her
+   real Workspace profile name. Point out that Dana (external) is **still** unresolved —
+   this is the shot that proves the third scope is not redundant.
+7. **`contacts.other.readonly`.** After granting, Dana resolves to her real name from the
+   user's Other contacts. Narrate that she is external, therefore absent from the
+   directory, so the previous scope could never have resolved her.
+
+### Part 4 — Prove it's read-only and reversible
+
+8. **Revoke one.** Turn `directory.readonly` back off, re-authenticate, and show that
+   permission is gone from the consent screen and Sophie falls back to a guessed name —
+   the app keeps working.
+9. **Read-only + local.** State that the plugin never creates, edits, or deletes
+   calendar events, contacts, or groups; that all data stays in the local Obsidian vault
+   on the user's Mac; and that there is no developer server. Optionally show
+   `directory-cache.json` in the vault folder as the only place this data is stored.
+
+### What the reviewer must be able to see at least once
+
+- [ ] Client ID legible in the consent URL.
+- [ ] Consent screen with calendar-only (Part 1) and with each added scope (Part 3).
+- [ ] The same attendee before and after each scope, in the same view.
+- [ ] Group address → member list.
+- [ ] An external attendee resolved *only* after `contacts.other.readonly`.
+- [ ] A statement that nothing is written back to Google.
+
+---
+
+## 8. Replying to the review email
+
+Reply directly to the thread with:
+
+1. The new video link (unlisted YouTube or Drive link with link-sharing on).
+2. A short statement that Meeting Copilot implements a **least-privilege model with
+   per-scope user toggles** — the case their email explicitly asks to be told about.
+3. The table from §5, as the "why nothing narrower works" argument.
+4. **Test credentials + navigation steps.** The app is a local macOS desktop plugin, so
+   there is no hosted URL to hand over. Provide: the demo Workspace account credentials
+   (2FA and recovery prompts removed), and numbered steps — install Obsidian, install the
+   plugin, open Settings → Meeting Copilot → Google Calendar integration → Advanced →
+   Optional permissions, toggle, Authenticate. Say plainly that it requires macOS and a
+   local Obsidian install, so the video is the primary evidence.
+5. Confirmation of what production traffic requests today (see the warning in §5).
+
+---
+
+## 9. Human-side checklist (mirrors issue #143)
 
 - [ ] A1 — Buy domain / A2 — Enable Pages / A3 — DNS records.
 - [ ] B1–B6 — Cloud project, consent screen, Search Console domain, enable APIs,
