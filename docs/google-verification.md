@@ -201,12 +201,26 @@ Group members: `sophie.chen@`, `raj.patel@`, `mia.okafor@` — three is enough t
 expansion visibly different from a single address.
 
 **Dana is the one that takes lead time.** She must be a real mailbox (a second free
-Gmail account is fine) with the profile name set to "Dana Whitfield", and she must
-**send mail to `alex.moreno@`** — receiving is what makes Google file her under Other
-contacts with a name. Before recording, confirm at
+Gmail account is fine — 5 minutes to create) with the **profile name set** to "Dana
+Whitfield", and she must **send mail to `alex.moreno@`**. Receiving is what makes Google
+file her under Other contacts *with a name*.
+
+> ⚠️ **Adding her to Contacts by hand does not work, and makes it worse.** The plugin
+> reads `people.googleapis.com/v1/otherContacts` — the **Other contacts** collection,
+> which Google auto-populates from mail. Manually saving someone creates an entry in
+> **My Contacts**, a different collection read by `contacts.readonly`, which this plugin
+> deliberately does not request (that narrowness is the "why not a broader scope"
+> argument in §2). Worse, "Add to contacts" *promotes* an entry out of Other contacts,
+> deleting the very row the demo needs.
+>
+> A name is mandatory, not cosmetic: `otherContactsSync.ts` does `if (!name) continue`,
+> so an entry with a bare address and no display name is skipped entirely. That is why
+> mailing *out* to an invented address isn't enough — no display name is stored.
+
+Before recording, confirm at
 [contacts.google.com → Other contacts](https://contacts.google.com/other) that she is
-listed **with a name**, not just an address. If she shows as a bare address, the third
-scope has nothing to demonstrate.
+listed **with a name**. Look, don't touch — do not click "Add to contacts". If she shows
+as a bare address, the third scope has nothing to demonstrate.
 
 ### The one meeting
 
