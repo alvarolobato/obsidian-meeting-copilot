@@ -81,9 +81,9 @@ export async function resolveAttendeeLabel(
 	// Note: `cache.disabled` is intentionally *not* an early-return gate here.
 	// `people.resolveDisplayName` (via its own `nameCache` option, the same
 	// `cache` instance) already skips the network call once disabled — but
-	// only after checking the persistent directory cache, so a hit from
-	// otherContactsSync (a separate, unblocked API) still resolves. Gating
-	// here too would skip that cache check entirely.
+	// only after checking the persistent directory cache, so a name resolved
+	// before the block still renders. Gating here too would skip that cache
+	// check entirely and re-humanize names we already know.
 
 	try {
 		const name = await people.resolveDisplayName(key);
@@ -122,19 +122,15 @@ export interface PeopleDirectoryOptions {
 	 * When `.disabled` is true (set after a permanent-for-this-session
 	 * failure — a Workspace policy block or SERVICE_DISABLED), skip the
 	 * *network* searchDirectoryPeople call, but only after already checking
-	 * `directoryCache` — a cache hit (e.g. from `otherContactsSync`, which
-	 * keeps writing into the same cache on its own schedule) still resolves,
-	 * since that's a completely different, unblocked API. Without this
-	 * split, disabling the directory network path also silently stopped
-	 * otherContacts-covered people from ever being looked up again this
-	 * session.
+	 * `directoryCache`, so a name resolved earlier still renders instead of
+	 * regressing to a humanized email address for the rest of the session.
 	 */
 	nameCache?: PersonNameCache;
 	/**
 	 * The `directory.readonly` scope toggle in Settings — false skips the
 	 * *network* searchDirectoryPeople call (same split as `disabled`/
-	 * `permanentlyBlocked` above: a `directoryCache` hit, e.g. from
-	 * `otherContactsSync`, still resolves). Defaults to true.
+	 * `permanentlyBlocked` above: an existing `directoryCache` hit still
+	 * resolves). Defaults to true.
 	 */
 	enabled?: boolean;
 }
@@ -164,7 +160,7 @@ export function createPeopleDirectory(
 		// blocked (`permanentlyBlocked`, e.g. Workspace policy — not reset
 		// per-poll like `disabled` is), or the user turned this scope off in
 		// Settings (`enabled`): the cache check above already ran, so this
-		// only skips the network call — not otherContacts-sourced hits.
+		// only skips the network call — already-cached names still resolve.
 		if (!enabled || nameCache?.disabled || nameCache?.permanentlyBlocked) {
 			return undefined;
 		}

@@ -48,6 +48,25 @@ npm test             # vitest run
 There is no separate `typecheck` script — `npm run build` runs `tsc -noEmit`
 first, so a clean build is the typecheck.
 
+## Dev console helpers (`_mcDev`)
+
+Open Obsidian's DevTools (Cmd+Opt+I) and type `_mcDev` for debug helpers that are
+deliberately **not** exposed as commands, ribbon actions, or settings. Nothing here
+persists — every flag resets on plugin reload.
+
+```js
+_mcDev.disableCache()        // ignore cached directory/group lookups; each refresh re-queries Google
+_mcDev.disableCache(false)   // back to normal caching (the warm cache is still there)
+_mcDev.clearCache()          // wipe cached names and groups outright
+_mcDev.status()              // cache sizes, bypass state, which optional scopes are granted
+```
+
+`disableCache` exists mainly for the Google verification demo: resolved names persist
+~365 days (people) / 7 days (groups), so a "this attendee is unresolved with the scope
+off" shot is otherwise indistinguishable from a cache hit. It hides **reads only** —
+writes still land, so turning it back off returns to a warm cache rather than a cold
+one. See `docs/google-verification.md`.
+
 ## Branch / worktree workflow
 
 Use **one git worktree per branch/PR** so multiple efforts don't clash and the

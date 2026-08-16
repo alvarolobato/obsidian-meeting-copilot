@@ -45,7 +45,6 @@ import {
 import * as path from "path";
 import * as fs from "fs";
 import {
-	CONTACTS_OTHER_READONLY_SCOPE,
 	CredentialsMissingError,
 	DIRECTORY_READONLY_SCOPE,
 	GoogleOAuth,
@@ -150,11 +149,9 @@ import {
 	createPeopleDirectory,
 	PersonNameCache,
 } from "./calendar/personDirectory";
-import { syncOtherContacts } from "./calendar/otherContactsSync";
 import {
 	DIRECTORY_CACHE_FILENAME,
 	DirectoryCache,
-	OTHER_CONTACTS_RESYNC_INTERVAL_MS,
 	PEOPLE_MAX_REQUESTS_PER_MINUTE,
 	PeopleApiRateLimiter,
 } from "./calendar/directoryCache";
@@ -388,9 +385,6 @@ export default class SystemRecordingPlugin extends Plugin {
 				const scopes: string[] = [];
 				if (this.settings.scopeGroupsEnabled) scopes.push(GROUPS_READONLY_SCOPE);
 				if (this.settings.scopeDirectoryEnabled) scopes.push(DIRECTORY_READONLY_SCOPE);
-				if (this.settings.scopeOtherContactsEnabled) {
-					scopes.push(CONTACTS_OTHER_READONLY_SCOPE);
-				}
 				return scopes;
 			},
 		},
@@ -497,8 +491,6 @@ export default class SystemRecordingPlugin extends Plugin {
 	>();
 	/** Bumped to cancel an in-flight background expansion when a newer fetch wins. */
 	private groupExpandGeneration = 0;
-	/** Guards against overlapping otherContacts syncs (see scheduleOtherContactsSync). */
-	private otherContactsSyncInFlight = false;
 	private agendaEvents = new TypedEventBus<AgendaViewEvents>();
 
     async onload() {
@@ -601,6 +593,8 @@ export default class SystemRecordingPlugin extends Plugin {
 
         // Settings tab
         this.addSettingTab(new SystemRecordingSettingTab(this.app, this));
+
+        this.installDevConsole();
 
 		this.addCommand({
 			id: "authenticate-google-calendar",
@@ -788,7 +782,58 @@ export default class SystemRecordingPlugin extends Plugin {
 		});
 	}
 
+    /**
+     * Developer-console helpers, reachable only by typing `_mcDev` into
+     * Obsidian's DevTools (Cmd+Opt+I). Deliberately not a command, ribbon
+     * action, or setting — these exist for demo/debug work (notably recording
+     * the Google verification video, where a ~365-day cached name makes a
+     * "scope turned off" shot indistinguishable from a cache hit) and would
+     * only confuse a normal user.
+     *
+     * Nothing here persists: every flag resets on reload.
+     */
+    private installDevConsole(): void {
+        const api = {
+            /**
+             * Ignore cached directory/group lookups so each refresh re-queries
+             * Google. Other-contacts names are untouched — they only arrive
+             * via the daily bulk sync, so hiding them would disable the
+             * feature rather than force a re-fetch.
+             */
+            disableCache: (on = true): string => {
+                this.directoryCache.bypass = on;
+                // Session caches short-circuit before the persistent one, so
+                // they have to go too or the first refresh still replays names.
+                this.resetGroupAttendeeExpansion();
+                this.agendaEvents.emit("changed", undefined);
+                return `[Meeting Copilot] directory cache bypass ${
+                    on ? "ON — every refresh re-queries Google" : "OFF"
+                }`;
+            },
+            /** Wipe cached names and groups outright. */
+            clearCache: (): string => {
+                this.directoryCache.clearAll();
+                void this.directoryCache.flush();
+                this.resetGroupAttendeeExpansion();
+                this.agendaEvents.emit("changed", undefined);
+                return "[Meeting Copilot] directory cache cleared";
+            },
+            /** Current cache size, bypass state, and which scopes are granted. */
+            status: () => ({
+                bypass: this.directoryCache.bypass,
+                people: this.directoryCache.people.size,
+                groups: this.directoryCache.groups.size,
+                scopes: {
+                    groups: this.oauth.hasScope(GROUPS_READONLY_SCOPE),
+                    directory: this.oauth.hasScope(DIRECTORY_READONLY_SCOPE),
+                },
+            }),
+        };
+        (window as unknown as Record<string, unknown>)._mcDev = api;
+    }
+
     onunload() {
+        delete (window as unknown as Record<string, unknown>)._mcDev;
         if (this.recorder.isRecording) {
             this.recorder.stop();
         }
@@ -2478,39 +2523,6 @@ export default class SystemRecordingPlugin extends Plugin {
 		}
 	}
 
-	/**
-	 * Kicks off a background otherContacts sync (display names for people
-	 * you've corresponded with over Gmail — see `otherContactsSync.ts`) at
-	 * most once per {@link OTHER_CONTACTS_RESYNC_INTERVAL_MS}. No-ops when
-	 * the setting is off, not authenticated, already mid-sync, or the user
-	 * hasn't re-consented to the scope yet (setting just turned on, or an
-	 * old install predates it).
-	 */
-	private scheduleOtherContactsSync(): void {
-		if (!this.settings.scopeOtherContactsEnabled) return;
-		if (!this.isCalendarAuthenticated()) return;
-		if (this.otherContactsSyncInFlight) return;
-		if (!this.oauth.hasScope(CONTACTS_OTHER_READONLY_SCOPE)) return;
-		if (
-			Date.now() - this.directoryCache.otherContactsSyncedAt <
-			OTHER_CONTACTS_RESYNC_INTERVAL_MS
-		) {
-			return;
-		}
-		this.otherContactsSyncInFlight = true;
-		syncOtherContacts(this.oauth, this.directoryCache, this.peopleRateLimiter)
-			.then((result) => {
-				if (result.updated > 0) this.agendaEvents.emit("changed", undefined);
-			})
-			.catch((err) => {
-				mcLog("otherContacts", "sync failed", {
-					error: err instanceof Error ? err.message : String(err),
-				});
-			})
-			.finally(() => {
-				this.otherContactsSyncInFlight = false;
-			});
-	}
 
 	/**
 	 * Await expansion for a single meeting before writing a note so attendees
@@ -5197,7 +5209,6 @@ export default class SystemRecordingPlugin extends Plugin {
         );
         this.applyCachedExpandedAttendees(events);
         this.scheduleGroupAttendeeExpand(events);
-        this.scheduleOtherContactsSync();
         const index = buildNoteIndex(
             this.app,
             scanMeetingNotes(this.app, this.excludedFolderPatterns())
