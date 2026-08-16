@@ -13,7 +13,7 @@ This file is the source of truth for the text we paste into the Google Cloud
 
 ## 1. Scope strategy
 
-**Published app: `calendar.readonly` always, plus three user-togglable attendee-name
+**Published app: `calendar.readonly` always, plus two user-togglable attendee-name
 scopes.**
 
 All requested scopes are **Sensitive** (not Restricted), so this is standard
@@ -24,13 +24,12 @@ verification — **no** paid third-party CASA security assessment.
 | `.../auth/calendar.readonly` | Sensitive | ✅ Always | Core: read agenda, create notes, meeting prompts. |
 | `.../auth/cloud-identity.groups.readonly` | Sensitive | ✅ Opt-in toggle | Expand group invitees into members. |
 | `.../auth/directory.readonly` | Sensitive | ✅ Opt-in toggle | Resolve Workspace attendee display names. |
-| `.../auth/contacts.other.readonly` | Sensitive | ✅ Opt-in toggle | Resolve attendee display names from the user's own "Other contacts". |
 
 > ⚠️ Before submitting, open the consent screen and confirm each scope's label really
 > is **Sensitive**. If Google has reclassified any to **Restricted**, that pulls in a
 > paid annual CASA assessment — stop and reassess.
 
-The three attendee-name scopes are requested only when the matching toggle under
+The two attendee-name scopes are requested only when the matching toggle under
 **Settings → Google → Advanced → Optional permissions** is on
 (`getOptionalScopes()` in `src/main.ts`); `calendar.readonly` is always requested.
 Every scope is read-only and only feeds attendee-name display on the agenda.
@@ -40,6 +39,11 @@ Every scope is read-only and only feeds attendee-name display on the agenda.
 > this verification submission, rather than being reachable only with
 > bring-your-own-credentials. Each stays individually togglable in Advanced settings,
 > so a user who declines them still gets a calendar-only consent screen.
+>
+> **Decision (2026-08-16):** `contacts.other.readonly` **dropped from the app** — it was
+> a leftover from a removed attendee-photo feature and resolved almost nothing the
+> directory scope doesn't already cover. Tell the reviewer to remove it from the
+> request.
 
 ---
 
@@ -78,19 +82,6 @@ event read that still lists attendees.
 > include the name, so meeting notes show real names instead of email addresses.
 > Read-only, used only for name display, processed locally on the user's device.
 
-### (Opt-in) `https://www.googleapis.com/auth/contacts.other.readonly`
-
-> Requested only when the user turns on "Resolve attendee names from Google 'Other
-> contacts'" in the plugin's Advanced settings. Used as a second, independent source
-> for attendee display names — the user's own auto-populated "Other contacts" rather
-> than their organization's directory — for the many Workspace domains whose admins
-> disable directory access for third-party apps. Read-only, used only for name
-> display, processed locally on the user's device; the plugin never adds, edits, or
-> deletes contacts.
-
-**Why not a narrower scope:** `contacts.other.readonly` is already narrower than the
-full `contacts` / `contacts.readonly` scopes — it exposes only the auto-collected
-"Other contacts" list, not the user's saved contacts, and grants no write access.
 
 ---
 
@@ -120,14 +111,14 @@ full `contacts` / `contacts.readonly` scopes — it exposes only the auto-collec
   subdomain. Verify the `lobato.vip` **domain property** in Search Console (DNS `TXT`)
   with the same Google account that owns the Cloud project; the
   `meetingcopilot.lobato.vip` home page is then covered.
-- [ ] Scopes: `calendar.readonly`, `cloud-identity.groups.readonly`,
-  `directory.readonly`, `contacts.other.readonly` — and nothing else. Remove `openid`,
+- [ ] Scopes: `calendar.readonly`, `cloud-identity.groups.readonly`, and
+  `directory.readonly` — and nothing else. Remove `openid`,
   `.../auth/userinfo.email`, and `.../auth/userinfo.profile` if present — Cloud Console
   adds these to new consent screens by default, but the plugin's OAuth request
   (`src/auth/googleOAuth.ts`) never asks for them, so they're just unused scope
   creep that complicates review.
 - [ ] Enable the **People API** and the **Cloud Identity API** on the project — the
-  three optional scopes are useless without them.
+  two optional scopes are useless without them.
 
 ### DNS + hosting for `meetingcopilot.lobato.vip`
 
@@ -140,43 +131,220 @@ full `contacts` / `contacts.readonly` scopes — it exposes only the auto-collec
 
 ---
 
-## 5. Demo-video shot list
+## 5. Why two scopes (the necessity argument)
 
-Google requires a screen-recorded video (English) proving the consent flow and the
-functionality each scope enables. Record at readable resolution; narrate or caption
-each step.
+The 2026-08 review rejection was **not** "we don't believe the feature exists" — it was
+*"the video does not demonstrate why the scope is necessary or why narrower permissions
+cannot be used."* So the video's job is to prove each scope does something the other
+cannot.
 
-1. **App identity.** Show the Meeting Copilot plugin in Obsidian → Settings → Google
-   Calendar integration. State the app name on camera.
-2. **Start the OAuth flow.** Click **Authenticate**. The system browser opens Google's
-   consent screen.
-3. **Prove the consent screen.** Pause so the reviewer can see:
-   - the consent screen shows the app name **Meeting Copilot**;
-   - the browser address bar URL contains the app's **OAuth client ID**
-     (`client_id=...apps.googleusercontent.com`).
-4. **Show the optional-permission toggles first.** Before authenticating, open
-   Settings → Google → Advanced → **Optional permissions** and show the three toggles
-   (group expansion, Workspace directory, "Other contacts"), stating that each one
-   controls whether its scope is requested at all.
-5. **Grant the scopes.** Show each requested permission on the consent screen and
-   approve. Show the "authentication complete" return to Obsidian.
-6. **Show the functionality each scope enables:**
-   - `calendar.readonly` — the agenda sidebar populating with real calendar events;
-     creating a meeting note from an event (title, time, attendees filled in); a
-     meeting start/stop prompt appearing around an event time.
-   - `cloud-identity.groups.readonly` — an event invited via a group
-     (e.g. `team@company.com`) whose note lists the individual members.
-   - `directory.readonly` / `contacts.other.readonly` — an attendee whose invite
-     carries only an email address showing a real display name in the note.
-7. **Toggle one off to prove it's optional.** Turn a toggle off, re-authenticate, and
-   show that permission is no longer on the consent screen and the plugin still works
-   (that attendee falls back to a name derived from their email address).
-8. **Read-only + local.** State that the plugin only reads this data, never writes to
-   the calendar, contacts, or groups, and stores everything locally with no server.
+`contacts.other.readonly` has since been **removed from the app entirely** (it was a
+leftover from a dropped attendee-photo feature), which leaves two, and a story that
+happens to be a clean three-step chain on a single calendar invite:
+
+| State | What the invite's guest list shows | Missing capability |
+| --- | --- | --- |
+| Calendar access only | **one** entry — the group's own address | Who is in the group? |
+| `+ cloud-identity.groups.readonly` | **three** entries, labelled from their email addresses | What are these people called? |
+| `+ directory.readonly` | **three** entries with real profile names | — |
+
+Read as a chain, each scope answers exactly one question and neither answers the
+other's:
+
+- **`cloud-identity.groups.readonly`** — Calendar returns a group invitee as a *single
+  attendee*, the group's address. No Calendar or People scope can list a group's
+  members; only Cloud Identity can.
+- **`directory.readonly`** — Cloud Identity's `memberships.list` returns
+  `preferredMemberKey.id` and `type`, i.e. **email addresses and nothing else**. The
+  group scope therefore cannot produce a name, and the app is left guessing one from the
+  email local part. Only the directory turns those addresses into real people.
+
+Both are read-only, and each is individually togglable in the app — Meeting Copilot
+**is** the "least privilege auth model" case the rejection email invites us to flag. Say
+so explicitly in the reply and show the toggles on camera.
 
 ---
 
-## 6. Human-side checklist (mirrors issue #143)
+## 6. Demo data to prepare
+
+### You can invent the people. You cannot invent the accounts.
+
+Both scopes resolve against **real Google-side data**, so a made-up address that doesn't
+exist resolves to nothing and the shot proves nothing. Make up the *identities* freely —
+a Workspace user called "Sophie Chen" who exists only for this demo is completely fine —
+but actually create each account.
+
+### The group must be a Workspace group, not a public one
+
+The plugin calls `cloudidentity.googleapis.com/v1/groups:lookup?groupKey.id=<email>`
+(see `expandGroupAttendees.ts`). Cloud Identity resolves groups belonging to a Cloud
+Identity / Workspace customer. A **public consumer group** created on groups.google.com
+(`…@googlegroups.com`) is not one of those and will fail lookup.
+
+Create it **inside the demo Workspace domain** — Admin console → Directory → Groups, or
+groups.google.com while signed in as a domain user with group-creation rights.
+
+### The cast — one group, three members, nothing else
+
+Substitute your real Workspace domain for `<demo-domain>`.
+
+| Role | Address | Profile name | Shows as, before |
+| --- | --- | --- | --- |
+| Signed-in user | `alex.moreno@<demo-domain>` | Alex Moreno | — |
+| The group | `product-team@<demo-domain>` | — | "Product Team" |
+| Member 1 | `schen@<demo-domain>` | **Sophie Chen** | "Schen" |
+| Member 2 | `rpatel@<demo-domain>` | **Raj Patel** | "Rpatel" |
+| Member 3 | `mokafor@<demo-domain>` | **Mia Okafor** | "Mokafor" |
+
+> ⚠️ **Do not use dotted addresses like `sophie.chen@`.** With no scope granted the app
+> falls back to `humanizeEmailName()`, which splits the local part on `. _ + -` and
+> title-cases it — so `sophie.chen@` renders as "Sophie Chen", *character-for-character
+> identical* to her directory profile name. Granting `directory.readonly` would then
+> change nothing on screen and the shot would prove nothing.
+>
+> Initial-style local parts (`schen@` → "Schen") keep the guess visibly wrong. The gap
+> between the guess and the real name **is** the evidence.
+
+### The one meeting
+
+Create a single event — **"Q3 planning review"** — on Alex's calendar, timed inside the
+agenda's look-ahead window, with **exactly one guest: the group**. Nothing else. The
+whole story plays out on that one row.
+
+### Stopping Calendar from supplying the name itself
+
+`mapAttendeesExpanded()` prefers Calendar's own `attendee.displayName` over any lookup.
+If Calendar returns a name, **no API call happens at all**.
+
+That matters less now the only direct guest is the group, but the expanded members must
+still arrive nameless — and they will, since they were never invited individually.
+
+**Deterministic way — create the event via the API.** At
+[script.google.com](https://script.google.com), signed in as the demo user, enable the
+**Calendar** advanced service and run:
+
+```js
+function createDemoEvent() {
+  Calendar.Events.insert({
+    summary: "Q3 planning review",
+    start: { dateTime: "2026-08-20T10:00:00+02:00" },
+    end:   { dateTime: "2026-08-20T11:00:00+02:00" },
+    attendees: [{ email: "product-team@<demo-domain>" }],
+  }, "primary");
+}
+```
+
+**Verifying costs nothing, because the baseline shot is the test.** With both toggles
+off and `_mcDev.disableCache()` on, the agenda must show a single **"Product Team"** row.
+
+### Turn off caching before you record
+
+Resolved names persist ~365 days (people) / 7 days (groups), so a rehearsal poisons every
+later "before" shot. Open DevTools (Cmd+Opt+I) and run:
+
+```js
+_mcDev.disableCache()   // every refresh re-queries Google
+_mcDev.status()         // confirm bypass: true, and which scopes are granted
+```
+
+Leave it on for the whole recording. It doesn't persist — re-run it after any plugin
+reload.
+
+---
+
+## 7. Demo-video shot list
+
+`calendar.readonly` is already verified — this video is **only** about the two scopes
+under review, so don't spend time re-demonstrating agenda or note features.
+
+One meeting, one guest, three sign-ins, roughly **3 minutes**. Text cards between shots
+carry the argument (there is no voice-over): see
+[verification-video-cards.md](./verification-video-cards.md).
+
+### Shot 1 — Identity and least privilege (~35s)
+
+> **CARD 1** (title) → **CARD 2** (what this video shows)
+
+- Obsidian → Settings → Meeting Copilot → Google Calendar integration. App name visible.
+- Open **Advanced → Optional permissions**, show both toggles, **both off**.
+
+### Shot 2 — Baseline: one address, no people (~45s)
+
+> **CARD 3** (both toggles off)
+
+- Click **Authenticate**. Pause on the consent screen long enough to read the URL's
+  `client_id=…` and to see the permission list contains **calendar access only**.
+  Approve.
+- Open the agenda and show **"Q3 planning review"**. Its guest list is a single row:
+  **"Product Team"**. The meeting has three actual participants and the app can name
+  none of them.
+
+> **CARD 4** (what you just saw)
+
+### Shot 3 — `cloud-identity.groups.readonly` → addresses (~45s)
+
+> **CARD 5**
+
+- Turn on **only** "Expand Google Group invitees" → **Re-authenticate**.
+- Consent screen now lists that one extra permission. Approve.
+- Same agenda entry: one row becomes **three** — "Schen", "Rpatel", "Mokafor".
+- **Narrate via the card:** we now know *who* is in the meeting, but only as email
+  addresses. Cloud Identity returns member keys, not names.
+
+### Shot 4 — `directory.readonly` → real names (~45s)
+
+> **CARD 6**
+
+- Turn on **only** "Resolve attendee names from your Workspace directory" →
+  **Re-authenticate** → approve.
+- The same three rows become **"Sophie Chen"**, **"Raj Patel"**, **"Mia Okafor"**.
+- Optionally create the meeting note here to show the resolved names written into the
+  vault — the end product the user actually keeps.
+
+### Shot 5 — Read-only and local (~20s)
+
+> **CARD 7** (read-only + local) → **CARD 8** (summary)
+
+- Nothing to perform; hold the cards. Optionally show `directory-cache.json` in the
+  vault folder as the only place any of this is stored.
+
+### Checklist before you stop recording
+
+- [ ] `client_id=…` legible in the consent URL at least once.
+- [ ] Consent screen visible for calendar-only **and** for each of the two additions.
+- [ ] The same guest list shown in all three states, in the same view.
+- [ ] Baseline really showed one "Product Team" row — not three people.
+- [ ] After the group grant, rows really read "Schen"/"Rpatel"/"Mokafor" — not real names.
+- [ ] A statement that nothing is written back to Google.
+
+---
+
+## 8. Replying to the review email
+
+Reply directly to the thread with:
+
+1. The new video link (unlisted YouTube or Drive link with link-sharing on).
+2. **`contacts.other.readonly` has been removed from the app** — please drop it from the
+   request. That alone answers one third of the objection.
+3. A statement that Meeting Copilot implements a **least-privilege model with per-scope
+   user toggles** — the case their email explicitly asks to be told about.
+4. The chain argument from §5: the group scope returns member *addresses only*
+   (`memberships.list` → `preferredMemberKey.id`), so it cannot produce names; the
+   directory scope has no way to discover group membership. Neither substitutes for the
+   other, and no narrower scope exists for either job.
+5. **Test credentials + navigation steps.** The app is a local macOS desktop plugin, so
+   there is no hosted URL to hand over. Provide the demo Workspace account credentials
+   (2FA and recovery prompts removed) and numbered steps — install Obsidian, install the
+   plugin, open Settings → Meeting Copilot → Google Calendar integration → Advanced →
+   Optional permissions, toggle, Authenticate. Say plainly that it requires macOS and a
+   local Obsidian install, so the video is the primary evidence.
+6. A note that the scopes actually sent are computed per sign-in from the user's toggles
+   (`getOptionalScopes()` in `src/main.ts`), so a user who wants only calendar access
+   gets a calendar-only consent screen.
+
+---
+
+## 9. Human-side checklist (mirrors issue #143)
 
 - [ ] A1 — Buy domain / A2 — Enable Pages / A3 — DNS records.
 - [ ] B1–B6 — Cloud project, consent screen, Search Console domain, enable APIs,
