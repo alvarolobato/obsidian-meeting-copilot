@@ -157,14 +157,6 @@ Every one of the three is read-only, and each is individually togglable in the a
 Meeting Copilot **is** the "least privilege auth model" case the rejection email invites
 us to flag. Say so explicitly in the reply and show the toggles on camera.
 
-> ⚠️ **Before recording, check the shipped defaults.** The rejection email says *"do not
-> deploy unverified scopes to production traffic."* `OPTIONAL_SCOPES_DEFAULT` in
-> `src/settings.ts` is currently `true`, so every released install requests all three
-> unverified scopes at sign-in. Either flip that default to `false` before the next
-> release (production traffic goes back to calendar-only; the demo build turns them on
-> explicitly), or be ready to explain the current behaviour. Leaving it as-is burns the
-> unverified-user cap and is the exact pattern the email warns against.
-
 ---
 
 ## 6. Demo data to prepare
@@ -207,10 +199,22 @@ state and *negative* entries only — **positive hits survive**, so an attendee 
 during a rehearsal still shows their real name with the scope switched off, and the
 "before" shot silently proves nothing.
 
-Before every "before" take: quit Obsidian, delete `directory-cache.json`, reopen.
+Use the dev console instead of deleting files mid-shoot. Open DevTools
+(Cmd+Opt+I) and run:
 
-Deleting it also resets the Other-contacts sync timestamp, which otherwise only re-runs
-once per 24h.
+```js
+_mcDev.disableCache()   // every refresh now re-queries Google
+_mcDev.status()         // confirm bypass: true before you hit record
+```
+
+Leave the bypass on for the whole recording: each toggle-and-reauth then shows a live
+lookup rather than a replay. `_mcDev.clearCache()` wipes the cache outright and forces
+an Other-contacts resync if you want a genuinely cold start. Neither persists — a
+plugin reload returns to normal caching, so re-run `disableCache()` after any reload.
+
+The bypass leaves Other-contacts names visible on purpose: that data arrives via a
+once-a-day bulk sync rather than per-person lookups, so hiding it would make Dana
+permanently unresolvable and break the `contacts.other.readonly` shot.
 
 ### Also have ready
 
@@ -249,9 +253,10 @@ asked for. Budget roughly 6–9 minutes.
 
 ### Part 3 — One scope at a time
 
-For each scope: quit Obsidian → delete `directory-cache.json` → reopen → turn on **only**
-that toggle → **Re-authenticate** → show the consent screen now lists that one extra
-permission → approve → show the resulting change.
+With `_mcDev.disableCache()` already on (see §6), for each scope: turn on **only** that
+toggle → **Re-authenticate** → show the consent screen now lists that one extra
+permission → approve → show the resulting change. Every lookup is live, so nothing here
+is a cached replay.
 
 5. **`cloud-identity.groups.readonly`.** After granting, "Product sync" expands
    `product-team@…` into Sophie, Raj, and the third member, in the agenda *and* in a
@@ -299,7 +304,9 @@ Reply directly to the thread with:
    plugin, open Settings → Meeting Copilot → Google Calendar integration → Advanced →
    Optional permissions, toggle, Authenticate. Say plainly that it requires macOS and a
    local Obsidian install, so the video is the primary evidence.
-5. Confirmation of what production traffic requests today (see the warning in §5).
+5. A note that the scopes actually sent are computed per sign-in from the user's
+   toggles (`getOptionalScopes()` in `src/main.ts`), so a user who wants only calendar
+   access gets a calendar-only consent screen.
 
 ---
 
