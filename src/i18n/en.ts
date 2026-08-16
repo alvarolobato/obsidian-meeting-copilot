@@ -535,10 +535,6 @@ export const en = {
 			name: "Resolve attendee names from your Workspace directory",
 			desc: "Looks up a real display name for attendees your calendar invite doesn't already label (e.g. a bare email address). Uses the People API's directory scope (`directory.readonly`) — some Workspace domains disable this for third-party apps regardless of this setting. Off: those attendees show a name guessed from their email address instead.",
 		},
-		scopeOtherContacts: {
-			name: "Resolve attendee names from Google \"Other contacts\"",
-			desc: "A second, independent source for attendee display names — your own auto-populated Gmail correspondence history, not your organization's directory — useful when the directory lookup above is blocked by a Workspace admin. Uses the People API's other-contacts scope (`contacts.other.readonly`). Off: those attendees show a name guessed from their email address instead.",
-		},
 		scopeReauthNeeded: "Re-authenticate above to grant this — your current sign-in predates it.",
 		calendarAutoRecord: {
 			name: "Calendar meeting notifications",

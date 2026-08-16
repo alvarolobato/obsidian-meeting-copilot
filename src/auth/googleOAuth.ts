@@ -81,18 +81,6 @@ export const GROUPS_READONLY_SCOPE =
  */
 export const DIRECTORY_READONLY_SCOPE =
 	"https://www.googleapis.com/auth/directory.readonly";
-/**
- * A second, independent path to the same kind of data as
- * {@link DIRECTORY_READONLY_SCOPE} (display names) via the user's own
- * personal "Other contacts" (auto-populated from Gmail correspondence) —
- * that data is private to the user, not the org Directory, so it isn't
- * subject to that admin setting. User-togglable — see "Optional
- * permissions" in Settings. Also used by {@link GoogleOAuth.hasScope} to
- * check whether a re-auth is still needed (existing tokens predate this
- * scope until the user reconnects).
- */
-export const CONTACTS_OTHER_READONLY_SCOPE =
-	"https://www.googleapis.com/auth/contacts.other.readonly";
 
 export class GoogleOAuth {
 	/** Shared in-flight refresh so concurrent callers (scheduler + agenda) don't double-refresh. */

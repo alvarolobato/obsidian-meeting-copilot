@@ -12,9 +12,6 @@ export const PEOPLE_MAX_REQUESTS_PER_MINUTE = 60;
 /** The People API quota's rolling window; shared by {@link PeopleApiRateLimiter}
  * and the persisted timestamps below so both prune on the same boundary. */
 export const PEOPLE_RATE_WINDOW_MS = 60_000;
-/** Minimum gap between otherContacts syncs — this data (who you've emailed,
- * their name) changes rarely, so a session/day boundary is plenty. */
-export const OTHER_CONTACTS_RESYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 /** Debounce disk writes after a burst of cache fills. */
 export const DIRECTORY_CACHE_SAVE_DEBOUNCE_MS = 1500;
 export const DIRECTORY_CACHE_FILENAME = "directory-cache.json";
@@ -27,23 +24,11 @@ export const DIRECTORY_CACHE_FILENAME = "directory-cache.json";
  */
 export const DIRECTORY_CACHE_VERSION = 1;
 
-/**
- * Where a cached display name came from. Matters only for
- * {@link DirectoryCache.bypass}: "other" entries are the *only* copy of the
- * user's Other-contacts data (it arrives via a once-a-day bulk sync, never a
- * per-person lookup), so bypassing them would disable the feature rather than
- * force a re-fetch. Absent on entries written before this field existed —
- * treated as "directory", which is what they were.
- */
-export type PersonSource = "directory" | "other";
-
 export interface CachedPerson {
 	/** Directory display name, or `null` when looked up and not found. */
 	name: string | null;
 	/** Epoch ms when cached. */
 	at: number;
-	/** Omitted for "directory" — see {@link PersonSource}. */
-	src?: PersonSource;
 }
 
 export interface CachedGroup {
@@ -69,17 +54,6 @@ export interface DirectoryCacheFile {
 	 * once pruned to empty.
 	 */
 	rateLimitTimestamps?: number[];
-	/**
-	 * Google People API sync token for the user's "Other contacts" (see
-	 * `otherContactsSync.ts`). Lets a resync fetch only what changed since
-	 * last time instead of paging through the whole list again. `null`/absent
-	 * means the next sync does a full fetch (first run, or after the token
-	 * was rejected as expired).
-	 */
-	otherContactsSyncToken?: string | null;
-	/** Epoch ms of the last successful (full or incremental) otherContacts
-	 * sync; caps resync frequency since this data changes rarely. */
-	otherContactsSyncedAt?: number;
 }
 
 export interface DirectoryCacheStore {
@@ -109,18 +83,15 @@ export class DirectoryCache {
 	/** Recent People API request timestamps; seeds a fresh {@link PeopleApiRateLimiter}
 	 * after a reload. Pruned to {@link PEOPLE_RATE_WINDOW_MS} on load. */
 	peopleRateLimitTimestamps: number[] = [];
-	otherContactsSyncToken: string | null = null;
-	otherContactsSyncedAt = 0;
 	/**
 	 * Dev/demo escape hatch (see the `_mcDev` console API in `main.ts`): makes
-	 * every directory-sourced read miss, so each agenda refresh re-queries
-	 * Google instead of replaying a cached name. Exists because positive
-	 * entries live ~365 days, which otherwise makes a "scope turned off"
-	 * demo indistinguishable from a cache hit.
+	 * every cached lookup miss, so each agenda refresh re-queries Google
+	 * instead of replaying a cached name. Exists because positive entries live
+	 * ~365 days, which otherwise makes a "scope turned off" demo
+	 * indistinguishable from a cache hit.
 	 *
 	 * Reads only — writes still land, so flipping this back off returns to a
-	 * warm cache. Other-contacts entries are deliberately unaffected; see
-	 * {@link PersonSource}.
+	 * warm cache.
 	 *
 	 * Session-only and off by default: nothing persists it, so a reload always
 	 * returns to normal caching.
@@ -150,7 +121,6 @@ export class DirectoryCache {
 					this.people.set(normEmail(email), {
 						name: entry.name,
 						at: entry.at,
-						...(entry.src === "other" ? { src: entry.src } : {}),
 					});
 				}
 			}
@@ -170,8 +140,6 @@ export class DirectoryCache {
 			this.peopleRateLimitTimestamps = (parsed.rateLimitTimestamps ?? []).filter(
 				(t) => typeof t === "number" && isFresh(t, PEOPLE_RATE_WINDOW_MS, now)
 			);
-			this.otherContactsSyncToken = parsed.otherContactsSyncToken ?? null;
-			this.otherContactsSyncedAt = parsed.otherContactsSyncedAt ?? 0;
 		} catch (err) {
 			console.warn(
 				"[Meeting Copilot] Failed to load directory cache; starting empty.",
@@ -184,11 +152,7 @@ export class DirectoryCache {
 		const key = normEmail(email);
 		const entry = this.people.get(key);
 		if (!entry) return undefined;
-		// Bypass hides directory lookups (re-fetchable) but not Other-contacts
-		// names, which only ever arrive via the daily bulk sync.
-		if (this.bypass && (entry.src ?? "directory") === "directory") {
-			return undefined;
-		}
+		if (this.bypass) return undefined;
 		if (!isFresh(entry.at, PEOPLE_TTL_MS, this.now())) {
 			this.people.delete(key);
 			this.markDirty();
@@ -197,12 +161,8 @@ export class DirectoryCache {
 		return entry;
 	}
 
-	setPerson(email: string, name: string | null, src: PersonSource = "directory"): void {
-		this.people.set(normEmail(email), {
-			name,
-			at: this.now(),
-			...(src === "other" ? { src } : {}),
-		});
+	setPerson(email: string, name: string | null): void {
+		this.people.set(normEmail(email), { name, at: this.now() });
 		this.markDirty();
 	}
 
@@ -271,15 +231,12 @@ export class DirectoryCache {
 	}
 
 	/**
-	 * Wipe every cached person and group, and forget that Other contacts were
-	 * ever synced so the next poll re-fetches them. The disk equivalent of
-	 * deleting `directory-cache.json`, without quitting Obsidian.
+	 * Wipe every cached person and group — the disk equivalent of deleting
+	 * `directory-cache.json`, without quitting Obsidian.
 	 */
 	clearAll(): void {
 		this.people.clear();
 		this.groups.clear();
-		this.otherContactsSyncToken = null;
-		this.otherContactsSyncedAt = 0;
 		this.markDirty();
 	}
 
@@ -316,14 +273,6 @@ export class DirectoryCache {
 		this.markDirty();
 	}
 
-	/** Records a completed otherContacts sync (see `otherContactsSync.ts`).
-	 * `syncToken: null` forces the next sync to do a full fetch (e.g. after
-	 * Google rejected the previous token as expired). */
-	setOtherContactsSynced(syncToken: string | null): void {
-		this.otherContactsSyncToken = syncToken;
-		this.otherContactsSyncedAt = this.now();
-		this.markDirty();
-	}
 
 	toJSON(): DirectoryCacheFile {
 		const now = this.now();
@@ -343,8 +292,6 @@ export class DirectoryCache {
 			people,
 			groups,
 			rateLimitTimestamps,
-			otherContactsSyncToken: this.otherContactsSyncToken,
-			otherContactsSyncedAt: this.otherContactsSyncedAt,
 		};
 	}
 

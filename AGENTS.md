@@ -57,17 +57,15 @@ persists — every flag resets on plugin reload.
 ```js
 _mcDev.disableCache()        // ignore cached directory/group lookups; each refresh re-queries Google
 _mcDev.disableCache(false)   // back to normal caching (the warm cache is still there)
-_mcDev.clearCache()          // wipe cached names/groups + force an Other-contacts resync
-_mcDev.resyncOtherContacts() // re-run the Other-contacts sync now, ignoring the 24h interval
+_mcDev.clearCache()          // wipe cached names and groups outright
 _mcDev.status()              // cache sizes, bypass state, which optional scopes are granted
 ```
 
 `disableCache` exists mainly for the Google verification demo: resolved names persist
 ~365 days (people) / 7 days (groups), so a "this attendee is unresolved with the scope
-off" shot is otherwise indistinguishable from a cache hit. It hides **reads only**, and
-leaves Other-contacts entries visible — that data arrives via a once-a-day bulk sync
-rather than per-person lookups, so hiding it would disable the feature instead of
-forcing a re-fetch. See `docs/google-verification.md`.
+off" shot is otherwise indistinguishable from a cache hit. It hides **reads only** —
+writes still land, so turning it back off returns to a warm cache rather than a cold
+one. See `docs/google-verification.md`.
 
 ## Branch / worktree workflow
 

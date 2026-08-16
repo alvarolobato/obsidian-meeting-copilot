@@ -181,24 +181,13 @@ describe("PeopleApiRateLimiter", () => {
 });
 
 describe("DirectoryCache bypass (dev console)", () => {
-	it("hides directory-sourced people but keeps Other-contacts names", () => {
+	it("hides cached people so the next lookup goes to the network", () => {
 		const cache = new DirectoryCache(null, () => 1_000);
 		cache.setPerson("colleague@acme.com", "Sophie Chen");
-		cache.setPerson("dana@partner.example", "Dana Wu", "other");
 
+		expect(cache.getPerson("colleague@acme.com")?.name).toBe("Sophie Chen");
 		cache.bypass = true;
-		// Directory names are re-fetchable, so hiding them forces a live call.
 		expect(cache.getPerson("colleague@acme.com")).toBeUndefined();
-		// Other contacts only ever arrive via the daily bulk sync — hiding
-		// them would disable the feature, not refresh it.
-		expect(cache.getPerson("dana@partner.example")?.name).toBe("Dana Wu");
-	});
-
-	it("treats entries with no source as directory entries", () => {
-		const cache = new DirectoryCache(null, () => 1_000);
-		cache.people.set("legacy@acme.com", { name: "Legacy", at: 1_000 });
-		cache.bypass = true;
-		expect(cache.getPerson("legacy@acme.com")).toBeUndefined();
 	});
 
 	it("hides groups by email and by resource", () => {
@@ -225,31 +214,29 @@ describe("DirectoryCache bypass (dev console)", () => {
 		expect(cache.getPerson("colleague@acme.com")?.name).toBe("Sophie Chen");
 	});
 
-	it("round-trips the Other-contacts source through disk", async () => {
+	it("does not persist — a cache loaded from disk starts unbypassed", async () => {
 		const store = memoryStore();
 		const write = new DirectoryCache(store, () => 1_000, 0);
-		write.setPerson("dana@partner.example", "Dana Wu", "other");
+		write.bypass = true;
+		write.setPerson("colleague@acme.com", "Sophie Chen");
 		await write.flush();
 
 		const read = new DirectoryCache(store, () => 1_000, 0);
 		await read.load();
-		read.bypass = true;
-		expect(read.getPerson("dana@partner.example")?.name).toBe("Dana Wu");
+		expect(read.bypass).toBe(false);
+		expect(read.getPerson("colleague@acme.com")?.name).toBe("Sophie Chen");
 	});
 });
 
 describe("DirectoryCache.clearAll", () => {
-	it("empties both maps and forces an Other-contacts resync", () => {
+	it("empties both maps", () => {
 		const cache = new DirectoryCache(null, () => 5_000);
 		cache.setPerson("colleague@acme.com", "Sophie Chen");
 		cache.setGroupMembers("team@acme.com", "groups/abc", []);
-		cache.setOtherContactsSynced("token-123");
 
 		cache.clearAll();
 
 		expect(cache.people.size).toBe(0);
 		expect(cache.groups.size).toBe(0);
-		expect(cache.otherContactsSyncedAt).toBe(0);
-		expect(cache.otherContactsSyncToken).toBeNull();
 	});
 });
