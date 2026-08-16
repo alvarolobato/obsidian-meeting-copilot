@@ -122,7 +122,7 @@ export async function syncOtherContacts(
 			for (const e of person.emailAddresses ?? []) {
 				const email = normEmail(e.value ?? "");
 				if (!email) continue;
-				directoryCache.setPerson(email, name);
+				directoryCache.setPerson(email, name, "other");
 				updated++;
 			}
 		}

@@ -37,9 +37,13 @@ describe("syncOtherContacts", () => {
 		const result = await syncOtherContacts(fakeOauth(), cache);
 
 		expect(result).toEqual({ updated: 2, full: true });
+		// `src: "other"` marks this as bulk-synced contact data rather than a
+		// directory lookup, which is what keeps it visible under the dev
+		// console's cache bypass.
 		expect(cache.getPerson("ruflin@elastic.co")).toEqual({
 			name: "Nicolas Ruflin",
 			at: 1_000,
+			src: "other",
 		});
 		expect(cache.getPerson("nick@elastic.co")?.name).toBe("Nicolas Ruflin");
 		expect(cache.otherContactsSyncToken).toBe("token-1");

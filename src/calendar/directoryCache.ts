@@ -27,11 +27,23 @@ export const DIRECTORY_CACHE_FILENAME = "directory-cache.json";
  */
 export const DIRECTORY_CACHE_VERSION = 1;
 
+/**
+ * Where a cached display name came from. Matters only for
+ * {@link DirectoryCache.bypass}: "other" entries are the *only* copy of the
+ * user's Other-contacts data (it arrives via a once-a-day bulk sync, never a
+ * per-person lookup), so bypassing them would disable the feature rather than
+ * force a re-fetch. Absent on entries written before this field existed —
+ * treated as "directory", which is what they were.
+ */
+export type PersonSource = "directory" | "other";
+
 export interface CachedPerson {
 	/** Directory display name, or `null` when looked up and not found. */
 	name: string | null;
 	/** Epoch ms when cached. */
 	at: number;
+	/** Omitted for "directory" — see {@link PersonSource}. */
+	src?: PersonSource;
 }
 
 export interface CachedGroup {
@@ -99,6 +111,21 @@ export class DirectoryCache {
 	peopleRateLimitTimestamps: number[] = [];
 	otherContactsSyncToken: string | null = null;
 	otherContactsSyncedAt = 0;
+	/**
+	 * Dev/demo escape hatch (see the `_mcDev` console API in `main.ts`): makes
+	 * every directory-sourced read miss, so each agenda refresh re-queries
+	 * Google instead of replaying a cached name. Exists because positive
+	 * entries live ~365 days, which otherwise makes a "scope turned off"
+	 * demo indistinguishable from a cache hit.
+	 *
+	 * Reads only — writes still land, so flipping this back off returns to a
+	 * warm cache. Other-contacts entries are deliberately unaffected; see
+	 * {@link PersonSource}.
+	 *
+	 * Session-only and off by default: nothing persists it, so a reload always
+	 * returns to normal caching.
+	 */
+	bypass = false;
 
 	constructor(
 		private readonly store: DirectoryCacheStore | null,
@@ -123,6 +150,7 @@ export class DirectoryCache {
 					this.people.set(normEmail(email), {
 						name: entry.name,
 						at: entry.at,
+						...(entry.src === "other" ? { src: entry.src } : {}),
 					});
 				}
 			}
@@ -156,6 +184,11 @@ export class DirectoryCache {
 		const key = normEmail(email);
 		const entry = this.people.get(key);
 		if (!entry) return undefined;
+		// Bypass hides directory lookups (re-fetchable) but not Other-contacts
+		// names, which only ever arrive via the daily bulk sync.
+		if (this.bypass && (entry.src ?? "directory") === "directory") {
+			return undefined;
+		}
 		if (!isFresh(entry.at, PEOPLE_TTL_MS, this.now())) {
 			this.people.delete(key);
 			this.markDirty();
@@ -164,8 +197,12 @@ export class DirectoryCache {
 		return entry;
 	}
 
-	setPerson(email: string, name: string | null): void {
-		this.people.set(normEmail(email), { name, at: this.now() });
+	setPerson(email: string, name: string | null, src: PersonSource = "directory"): void {
+		this.people.set(normEmail(email), {
+			name,
+			at: this.now(),
+			...(src === "other" ? { src } : {}),
+		});
 		this.markDirty();
 	}
 
@@ -173,6 +210,7 @@ export class DirectoryCache {
 		const key = normEmail(email);
 		const entry = this.groups.get(key);
 		if (!entry) return undefined;
+		if (this.bypass) return undefined;
 		if (!isFresh(entry.at, GROUP_TTL_MS, this.now())) {
 			this.groups.delete(key);
 			this.markDirty();
@@ -203,6 +241,7 @@ export class DirectoryCache {
 
 	/** Find a cached group entry by Cloud Identity resource name. */
 	getGroupByResource(resource: string): CachedGroup | undefined {
+		if (this.bypass) return undefined;
 		const now = this.now();
 		for (const entry of this.groups.values()) {
 			if (entry.resource !== resource) continue;
@@ -228,6 +267,19 @@ export class DirectoryCache {
 				at: now,
 			});
 		}
+		this.markDirty();
+	}
+
+	/**
+	 * Wipe every cached person and group, and forget that Other contacts were
+	 * ever synced so the next poll re-fetches them. The disk equivalent of
+	 * deleting `directory-cache.json`, without quitting Obsidian.
+	 */
+	clearAll(): void {
+		this.people.clear();
+		this.groups.clear();
+		this.otherContactsSyncToken = null;
+		this.otherContactsSyncedAt = 0;
 		this.markDirty();
 	}
 
