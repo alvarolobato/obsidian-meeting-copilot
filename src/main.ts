@@ -5764,7 +5764,7 @@ export default class SystemRecordingPlugin extends Plugin {
     private async launchTranscriber(
         recording: TFile,
         mode: TranscribeMode = "auto",
-        opts: { fresh?: boolean; enrichAfter?: boolean } = {}
+        opts: { fresh?: boolean; enrichAfter?: boolean; note?: TFile } = {}
     ): Promise<void> {
         // "fresh" = the auto-transcribe fired right after a stop (vs. a manual
         // re-transcribe). The fresh path appends its transcript to any existing
@@ -5826,7 +5826,10 @@ export default class SystemRecordingPlugin extends Plugin {
             this.settings.enableEnrichment &&
             (opts.enrichAfter || this.settings.enrichOnTranscribe);
         if (shouldEnrich) {
-            const note = findMeetingNoteForAudio(this.app, recording);
+            // Prefer the caller-supplied note (avoids a metadataCache race on
+            // the auto-transcribe path where the note's recording frontmatter
+            // may not have been re-indexed by the time this runs — #note-race).
+            const note = opts.note ?? findMeetingNoteForAudio(this.app, recording);
             if (note) {
                 void this.enqueueEnrichTask(note, {
                     dependsOn: recording.path,
@@ -8172,6 +8175,7 @@ export default class SystemRecordingPlugin extends Plugin {
                             }
                             return this.launchTranscriber(audio, "auto", {
                                 fresh: true,
+                                note: file,
                             });
                         })
                         .catch((e) => {
