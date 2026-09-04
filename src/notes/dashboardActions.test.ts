@@ -465,6 +465,29 @@ describe("setTaskLineDone", () => {
 		).toBe("- [x] see [x] in the doc ✅ 2026-09-04");
 	});
 
+	// A `✅ YYYY-MM-DD` the user typed into the middle of the task text is
+	// their content, not the dashboard's stamp: un-ticking must not eat it,
+	// and ticking must still append a real stamp (otherwise the task reads as
+	// "completed on some other day" and drops off the dashboard entirely).
+	it("only adds or removes a trailing completion stamp", () => {
+		const pasted = "- [ ] chase the ✅ 2026-01-01 rollout sign-off";
+		const ticked = setTaskLineDone(pasted, true, "2026-09-04");
+		expect(ticked).toBe(
+			"- [x] chase the ✅ 2026-01-01 rollout sign-off ✅ 2026-09-04"
+		);
+		expect(setTaskLineDone(ticked, false, "2026-09-04")).toBe(pasted);
+	});
+
+	it("keeps a mid-text stamp when un-ticking behind a block ref", () => {
+		expect(
+			setTaskLineDone(
+				"- [x] ship ✅ 2026-01-01 notes ✅ 2026-09-04 ^ref-2",
+				false,
+				"2026-09-04"
+			)
+		).toBe("- [ ] ship ✅ 2026-01-01 notes ^ref-2");
+	});
+
 	it("leaves a non-task line alone", () => {
 		expect(setTaskLineDone("just a bullet", true, "2026-09-04")).toBe(
 			"just a bullet"
