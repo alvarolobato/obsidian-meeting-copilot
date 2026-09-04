@@ -359,7 +359,8 @@ export const en = {
 			empty: "No open action items.",
 			loading: "Scanning notes…",
 			taskMoved: "That task has changed in its note; refreshing.",
-			taskError: (msg: string) => `Couldn't complete the task: ${msg}`,
+			// Covers ticking *and* un-ticking, so it stays state-neutral.
+			taskError: (msg: string) => `Couldn't update the task: ${msg}`,
 		},
 		followups: {
 			count: (n: number) =>
@@ -372,7 +373,7 @@ export const en = {
 			hideOlder: "Hide older",
 			taskMoved: "That follow-up has changed in its note; refreshing.",
 			taskError: (msg: string) =>
-				`Couldn't complete the follow-up: ${msg}`,
+				`Couldn't update the follow-up: ${msg}`,
 		},
 		// The "Notes with issues" catch-all — anything "Past meetings" won't
 		// show because it's aged out of the recency window: a broken date, a
