@@ -5,6 +5,7 @@ import {
 	mergeGroupsByKey,
 	parseNoteTasks,
 	parseTaskOwner,
+	setTaskLineDone,
 	sortActionNoteGroups,
 	splitByHorizon,
 	taskAgeDays,
@@ -414,5 +415,59 @@ describe("mergeGroupsByKey", () => {
 		]);
 		expect(merged).toHaveLength(1);
 		expect(merged[0]!.tasks.map((t) => t.text).sort()).toEqual(["a", "b"]);
+	});
+});
+
+describe("setTaskLineDone", () => {
+	it("ticks a line, adding today's completion date", () => {
+		expect(
+			setTaskLineDone("- [ ] **Ask Sophie** about evals", true, "2026-09-04")
+		).toBe("- [x] **Ask Sophie** about evals ✅ 2026-09-04");
+	});
+
+	it("keeps a creation stamp and an existing completion date", () => {
+		expect(
+			setTaskLineDone("- [ ] do it ➕ 2026-08-02", true, "2026-09-04")
+		).toBe("- [x] do it ➕ 2026-08-02 ✅ 2026-09-04");
+		expect(
+			setTaskLineDone("- [x] done ✅ 2026-07-28", true, "2026-09-04")
+		).toBe("- [x] done ✅ 2026-07-28");
+	});
+
+	it("keeps a trailing block reference last", () => {
+		expect(setTaskLineDone("- [ ] do it ^abc-1", true, "2026-09-04")).toBe(
+			"- [x] do it ✅ 2026-09-04 ^abc-1"
+		);
+	});
+
+	it("un-ticks a line, removing the completion date it added", () => {
+		expect(
+			setTaskLineDone(
+				"- [x] **Ask Sophie** about evals ➕ 2026-08-02 ✅ 2026-09-04",
+				false,
+				"2026-09-04"
+			)
+		).toBe("- [ ] **Ask Sophie** about evals ➕ 2026-08-02");
+	});
+
+	it("round-trips a tick and an un-tick back to the original line", () => {
+		const open = "	* [ ] ==**Talk to Oja** (if free)== ➕ 2026-08-02 ^ref-9";
+		const done = setTaskLineDone(open, true, "2026-09-04");
+		expect(done).toBe(
+			"	* [x] ==**Talk to Oja** (if free)== ➕ 2026-08-02 ✅ 2026-09-04 ^ref-9"
+		);
+		expect(setTaskLineDone(done, false, "2026-09-04")).toBe(open);
+	});
+
+	it("only touches the checkbox, not a later bracket in the text", () => {
+		expect(
+			setTaskLineDone("- [ ] see [x] in the doc", true, "2026-09-04")
+		).toBe("- [x] see [x] in the doc ✅ 2026-09-04");
+	});
+
+	it("leaves a non-task line alone", () => {
+		expect(setTaskLineDone("just a bullet", true, "2026-09-04")).toBe(
+			"just a bullet"
+		);
 	});
 });

@@ -118,12 +118,14 @@ import {
     parseNoteTasks,
     sortActionNoteGroups,
     splitByHorizon,
+    setTaskLineDone,
     taskAgeDays,
     tasksOutsideHeadings,
     type ActionGroupCategory,
     type ActionNoteGroup,
     type GroupedTask,
 } from "./notes/dashboardActions";
+import { parseFrontmatter } from "./notes/frontmatter";
 import {
     findNoteIssues,
     inferIdentityFromSiblings,
@@ -3022,12 +3024,19 @@ export default class SystemRecordingPlugin extends Plugin {
         };
     }
 
-    /** True when a note carries meeting frontmatter we can act on. */
-    private isMeetingNote(file: TFile): boolean {
+    /**
+     * True when a note carries meeting frontmatter we can act on. Callers that
+     * have already read the note pass its frontmatter in (`fm`) so the answer
+     * doesn't depend on the metadata cache having caught up with the last
+     * write — see {@link parseFrontmatter}.
+     */
+    private isMeetingNote(
+        file: TFile,
+        fm: Record<string, unknown> | undefined = this.app.metadataCache.getFileCache(
+            file
+        )?.frontmatter as Record<string, unknown> | undefined
+    ): boolean {
         if (file.extension !== "md") return false;
-        const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as
-            | Record<string, unknown>
-            | undefined;
         if (!fm) return false;
         const nonEmpty = (k: string): boolean => {
             const v = fm[k];
@@ -3049,12 +3058,14 @@ export default class SystemRecordingPlugin extends Plugin {
      * never gets `event_id`/`meeting_url`/`recording` — but is still a real
      * meeting note worth offering a "Fix meeting metadata" identity fix for.
      */
-    private looksLikeMeetingNote(file: TFile): boolean {
-        if (this.isMeetingNote(file)) return true;
+    private looksLikeMeetingNote(
+        file: TFile,
+        fm: Record<string, unknown> | undefined = this.app.metadataCache.getFileCache(
+            file
+        )?.frontmatter as Record<string, unknown> | undefined
+    ): boolean {
+        if (this.isMeetingNote(file, fm)) return true;
         if (file.extension !== "md") return false;
-        const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as
-            | Record<string, unknown>
-            | undefined;
         const granolaId = fm?.["granola_id"];
         return typeof granolaId === "string" && granolaId.trim().length > 0;
     }
@@ -4728,37 +4739,39 @@ export default class SystemRecordingPlugin extends Plugin {
                 cls: "mc-action-task-check",
                 type: "checkbox",
             });
-            if (task.done) {
-                cb.checked = true;
+            cb.checked = task.done;
+            // A task ticked here stays listed for the rest of the day (its
+            // grace period), so the checkbox has to work both ways — ticking
+            // one and immediately realising it was the wrong row is exactly
+            // when un-ticking is needed.
+            cb.onclick = (): void => {
+                const nowDone = cb.checked;
                 cb.disabled = true;
-            } else {
-                cb.onclick = (): void => {
-                    cb.disabled = true;
-                    void (async (): Promise<void> => {
-                        try {
-                            await this.completeTask(
-                                task.path,
-                                task,
-                                opts.strings.taskMoved
-                            );
-                        } catch (e) {
-                            cb.disabled = false;
-                            cb.checked = false;
-                            new Notice(
-                                opts.strings.taskError(
-                                    e instanceof Error ? e.message : String(e)
-                                )
-                            );
-                            return;
-                        }
-                        await this.renderTaskSection(sectionEl, {
-                            ...opts,
-                            page,
-                            force: true,
-                        });
-                    })();
-                };
-            }
+                void (async (): Promise<void> => {
+                    try {
+                        await this.setTaskDone(
+                            task.path,
+                            task,
+                            nowDone,
+                            opts.strings.taskMoved
+                        );
+                    } catch (e) {
+                        cb.disabled = false;
+                        cb.checked = !nowDone;
+                        new Notice(
+                            opts.strings.taskError(
+                                e instanceof Error ? e.message : String(e)
+                            )
+                        );
+                        return;
+                    }
+                    await this.renderTaskSection(sectionEl, {
+                        ...opts,
+                        page,
+                        force: true,
+                    });
+                })();
+            };
             // A group can aggregate tasks from several notes (every occurrence
             // of a recurring series, or every one-on-one instance) — the
             // header link above only opens the group's *most recent* note, so
@@ -4872,6 +4885,17 @@ export default class SystemRecordingPlugin extends Plugin {
             } catch {
                 continue;
             }
+            // Same reason the pre-filter above fails open: right after this
+            // plugin writes to a note (ticking a task is exactly that), its
+            // metadata-cache entry can be gone for a beat. Frontmatter drives
+            // the note's *identity* here — 1:1 partner, recurring series,
+            // date, title — so an empty cache entry would silently demote the
+            // note to an unrelated "ad-hoc" group of its own, making its tasks
+            // vanish from the 1:1/series section until the next scan put them
+            // back. Fall back to the frontmatter in the content we just read.
+            const fm =
+                (cache?.frontmatter as Record<string, unknown> | undefined) ??
+                parseFrontmatter(content);
             // The unsectioned-task fallback is gated to notes that already
             // look like meeting notes (including a Granola-style import,
             // which is what it exists for) — without this, any open
@@ -4883,7 +4907,7 @@ export default class SystemRecordingPlugin extends Plugin {
                 mode === "actions"
                     ? [
                           ...parseNoteTasks(content, today, ACTION_ITEMS_HEADING),
-                          ...(this.looksLikeMeetingNote(file)
+                          ...(this.looksLikeMeetingNote(file, fm)
                               ? tasksOutsideHeadings(content, today, [
                                     ACTION_ITEMS_HEADING,
                                     FOLLOW_UPS_HEADING,
@@ -4893,9 +4917,6 @@ export default class SystemRecordingPlugin extends Plugin {
                     : parseNoteTasks(content, today, FOLLOW_UPS_HEADING);
             if (rawTasks.length === 0) continue;
 
-            const fm = cache?.frontmatter as
-                | Record<string, unknown>
-                | undefined;
             const str = (k: string): string => {
                 const v = fm?.[k];
                 return typeof v === "string" ? v.trim() : "";
@@ -5005,16 +5026,18 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /**
-     * Marks a scanned task done in its source note. The captured line index is
-     * used when it still holds the task; otherwise the original line text is
-     * located afresh (the note may have changed since the scan). The first
-     * `[ ]` checkbox on that line becomes `[x]` and a `✅ YYYY-MM-DD` completion
-     * date (today) is appended — Obsidian-Tasks compatible, and what the
-     * dashboard reads to keep the item visible until that day is over.
+     * Sets a scanned task's done state in its source note, both ways: ticking
+     * writes `[x]` plus a `✅ YYYY-MM-DD` completion date (today), un-ticking
+     * restores `[ ]` and strips that date again — Obsidian-Tasks compatible,
+     * and what the dashboard reads to keep a just-ticked item visible until
+     * the day is over. The captured line index is used when it still holds the
+     * task; otherwise the original line text is located afresh (the note may
+     * have changed since the scan).
      */
-    private async completeTask(
+    private async setTaskDone(
         path: string,
         task: GroupedTask,
+        done: boolean,
         movedNotice = t().dashboard.actions.taskMoved
     ): Promise<void> {
         const file = this.app.vault.getAbstractFileByPath(path);
@@ -5028,25 +5051,8 @@ export default class SystemRecordingPlugin extends Plugin {
             new Notice(movedNotice);
             return;
         }
-        const checked = lines[idx]!.replace(/\[[^\]]\]/, "[x]");
-        lines[idx] = this.appendCompletionDate(checked, this.todayStamp());
+        lines[idx] = setTaskLineDone(lines[idx]!, done, this.todayStamp());
         await this.app.vault.modify(file, lines.join("\n"));
-    }
-
-    /**
-     * Appends a `✅ YYYY-MM-DD` completion date to a task line, unless it
-     * already has one. A trailing block reference (` ^id`) is kept at the end
-     * of the line (Obsidian requires it there) with the date inserted before.
-     */
-    private appendCompletionDate(line: string, dateStr: string): string {
-        if (/✅\s*\d{4}-\d{2}-\d{2}/.test(line)) return line;
-        const mark = `✅ ${dateStr}`;
-        const ref = line.match(/(\s+\^[A-Za-z0-9-]+)\s*$/);
-        if (ref) {
-            const head = line.slice(0, line.length - ref[0].length).trimEnd();
-            return `${head} ${mark}${ref[0]}`;
-        }
-        return `${line.trimEnd()} ${mark}`;
     }
 
     /** Nearest scrollable ancestor of an element (the markdown view's scroller). */

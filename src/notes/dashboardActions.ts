@@ -19,8 +19,9 @@ export interface ActionTask {
 	line: number;
 	/**
 	 * True for a task completed within its grace period (kept in the list a
-	 * little longer so a just-ticked item doesn't vanish). Rendered checked and
-	 * struck through, and excluded from the "open action items" count.
+	 * little longer so a just-ticked item doesn't vanish, and can be un-ticked).
+	 * Rendered checked and struck through, and excluded from the "open action
+	 * items" count.
 	 */
 	done: boolean;
 	/**
@@ -342,4 +343,41 @@ export function mergeGroupsByKey(
 		existing.tasks.push(...g.tasks);
 	}
 	return [...byKey.values()];
+}
+
+/**
+ * Rewrites a markdown task line to the given done state, the way the dashboard
+ * checkbox does it. Ticking flips the checkbox to `[x]` and appends a
+ * `✅ YYYY-MM-DD` completion date (unless the line already carries one);
+ * un-ticking restores `[ ]` and removes that date, so the line goes back to
+ * exactly what an open task looks like — an item ticked by mistake shouldn't
+ * leave a stale completion stamp behind. Only the *checkbox* is touched, never
+ * a `[…]` that happens to appear later in the text. A trailing block reference
+ * (` ^id`) stays at the end of the line, where Obsidian requires it, with the
+ * date inserted before it. Pure/testable.
+ */
+export function setTaskLineDone(
+	line: string,
+	done: boolean,
+	dateStr: string
+): string {
+	const box = line.match(/^(\s*[-*+]\s+|\s*\d+[.)]\s+)\[[^\]]\]/);
+	if (!box) return line;
+	const head = box[0].slice(0, box[0].length - 3);
+	const rest = line.slice(box[0].length);
+	if (!done) {
+		const cleared = rest.replace(/\s*✅\s*\d{4}-\d{2}-\d{2}/g, "");
+		return `${head}[ ]${cleared.trimEnd()}`;
+	}
+	const checked = `${head}[x]${rest}`;
+	if (/✅\s*\d{4}-\d{2}-\d{2}/.test(checked)) return checked;
+	const mark = `✅ ${dateStr}`;
+	const ref = checked.match(/(\s+\^[A-Za-z0-9-]+)\s*$/);
+	if (ref) {
+		const body = checked
+			.slice(0, checked.length - ref[0].length)
+			.trimEnd();
+		return `${body} ${mark}${ref[0]}`;
+	}
+	return `${checked.trimEnd()} ${mark}`;
 }
