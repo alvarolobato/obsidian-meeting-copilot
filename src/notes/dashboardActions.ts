@@ -389,6 +389,11 @@ export function setTaskLineDone(
 	if (!done) {
 		return `${head}[ ]${body.replace(TRAILING_DONE_DATE_RE, "").trimEnd()}${ref}`;
 	}
-	if (TRAILING_DONE_DATE_RE.test(body)) return `${head}[x]${body}${ref}`;
-	return `${head}[x]${body.trimEnd()} ✅ ${dateStr}${ref}`;
+	// Ticking always (re)stamps *today*. A line can reach here already
+	// carrying an older `✅` — Obsidian's own "toggle checkbox" command flips
+	// `[x]` back to `[ ]` without touching the date — and keeping that stale
+	// date would make the task read as completed on some other day, so the
+	// scan drops it on the spot: no grace period, and no row left to un-tick.
+	const cleared = body.replace(TRAILING_DONE_DATE_RE, "").trimEnd();
+	return `${head}[x]${cleared} ✅ ${dateStr}${ref}`;
 }

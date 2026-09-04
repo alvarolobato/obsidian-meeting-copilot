@@ -50,14 +50,21 @@ function scalar(raw: string): unknown {
 export function parseFrontmatter(
 	content: string
 ): Record<string, unknown> | undefined {
-	const lines = content.split("\n");
-	// The opening fence must be the very first line (Obsidian's own rule); a
-	// leading BOM is tolerated because vault files sometimes carry one.
-	if ((lines[0] ?? "").replace(/^\uFEFF/, "").trim() !== "---") return undefined;
+	// CRLF-tolerant: a note authored on Windows or round-tripped through an
+	// external sync otherwise leaves a `\r` on every line, which the entry
+	// regex below can't match — the whole block would parse to `{}` and the
+	// note would lose its identity exactly as if there were no frontmatter.
+	const lines = content.split(/\r?\n/);
+	// Both fences must sit at column 0 (YAML's rule, and Obsidian's): an
+	// indented `---` inside a block scalar is content, not a terminator, so
+	// trimming here would end the block early and drop every key after it.
+	// Trailing whitespace on the fence line itself is tolerated. A leading BOM
+	// is stripped because vault files sometimes carry one.
+	const isFence = (line: string): boolean => /^(?:---|\.\.\.)[ \t]*$/.test(line);
+	if (!isFence((lines[0] ?? "").replace(/^\uFEFF/, ""))) return undefined;
 	let end = -1;
 	for (let i = 1; i < lines.length; i++) {
-		const line = (lines[i] ?? "").trim();
-		if (line === "---" || line === "...") {
+		if (isFence(lines[i] ?? "")) {
 			end = i;
 			break;
 		}
@@ -79,7 +86,10 @@ export function parseFrontmatter(
 	for (let i = 1; i < end; i++) {
 		const line = lines[i] ?? "";
 		if (!line.trim() || line.trim().startsWith("#")) continue;
-		const item = line.match(/^\s+-\s+(.*)$/);
+		// A block sequence may be flush with its key (zero indent) — valid
+		// YAML that Obsidian parses, so requiring indentation here would drop
+		// the items and leave the key looking empty.
+		const item = line.match(/^\s*-\s+(.*)$/);
 		if (item && listKey !== null) {
 			list.push(String(unquote(item[1] ?? "")));
 			continue;

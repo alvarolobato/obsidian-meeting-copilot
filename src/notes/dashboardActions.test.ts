@@ -425,13 +425,28 @@ describe("setTaskLineDone", () => {
 		).toBe("- [x] **Ask Sophie** about evals ✅ 2026-09-04");
 	});
 
-	it("keeps a creation stamp and an existing completion date", () => {
+	it("keeps a creation stamp", () => {
 		expect(
 			setTaskLineDone("- [ ] do it ➕ 2026-08-02", true, "2026-09-04")
 		).toBe("- [x] do it ➕ 2026-08-02 ✅ 2026-09-04");
+	});
+
+	// Obsidian's own "toggle checkbox" command un-ticks a line without
+	// touching its `✅` date, so a task can reach the dashboard open but
+	// stamped with an older one. Re-stamping today is what keeps it in the
+	// grace period — a stale date reads as "completed some other day" and the
+	// scan drops the row immediately, leaving nothing to un-tick.
+	it("re-stamps a stale completion date with today on a tick", () => {
 		expect(
-			setTaskLineDone("- [x] done ✅ 2026-07-28", true, "2026-09-04")
-		).toBe("- [x] done ✅ 2026-07-28");
+			setTaskLineDone("- [ ] do it ✅ 2026-08-28", true, "2026-09-04")
+		).toBe("- [x] do it ✅ 2026-09-04");
+		expect(
+			setTaskLineDone(
+				"- [ ] do it ➕ 2026-08-02 ✅ 2026-08-28 ^ref-3",
+				true,
+				"2026-09-04"
+			)
+		).toBe("- [x] do it ➕ 2026-08-02 ✅ 2026-09-04 ^ref-3");
 	});
 
 	it("keeps a trailing block reference last", () => {

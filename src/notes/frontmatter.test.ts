@@ -77,6 +77,49 @@ describe("parseFrontmatter", () => {
 		});
 	});
 
+	// A Windows-authored or externally-synced note. Before this was handled,
+	// every line kept a trailing "\r", no `key: value` matched, and the whole
+	// block parsed to `{}` — the note silently lost its identity.
+	it("parses a CRLF note", () => {
+		const fm = parseFrontmatter(
+			"---\r\ntitle: X\r\none_on_one_with: Ruflin\r\nattendees:\r\n  - a@b.co\r\n---\r\n\r\n- [ ] task\r\n"
+		);
+		expect(fm).toMatchObject({ title: "X", one_on_one_with: "Ruflin" });
+		expect(fm?.["attendees"]).toEqual(["a@b.co"]);
+	});
+
+	it("parses a zero-indent block sequence", () => {
+		const fm = parseFrontmatter(
+			["---", "recording:", '- "[[a.wav]]"', "- \"[[b.wav]]\"", "---"].join(
+				"\n"
+			)
+		);
+		expect(fm?.["recording"]).toEqual(["[[a.wav]]", "[[b.wav]]"]);
+	});
+
+	// Only a column-0 fence closes the block; an indented `---` inside a block
+	// scalar is content, and trimming before comparing would end the block
+	// there, dropping every key after it.
+	it("doesn't end the block on an indented --- inside a block scalar", () => {
+		const fm = parseFrontmatter(
+			[
+				"---",
+				"summary: |",
+				"  ---",
+				"  more",
+				"one_on_one_with: Ruflin",
+				"---",
+			].join("\n")
+		);
+		expect(fm?.["one_on_one_with"]).toBe("Ruflin");
+	});
+
+	it("tolerates trailing whitespace on the fences", () => {
+		expect(
+			parseFrontmatter(["--- ", "title: X", "---\t", ""].join("\n"))
+		).toMatchObject({ title: "X" });
+	});
+
 	it("ignores nested maps rather than half-parsing them", () => {
 		const fm = parseFrontmatter(
 			["---", "nested:", "  inner: 1", "top: keep", "---"].join("\n")
