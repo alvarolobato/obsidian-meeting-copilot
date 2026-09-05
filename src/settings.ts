@@ -827,6 +827,38 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     });
             });
 
+        // Optional scopes live *outside* the Advanced block: they are the one
+        // part of this section a user is expected to change, and reaching them
+        // must never mean opening the panel that displays the Client ID and
+        // secret (which is also what gets shown on screen when demoing the
+        // consent flow).
+        new Setting(containerEl).setName(s.settings.optionalScopes.heading).setHeading();
+        containerEl.createEl("p", {
+            cls: "mc-optional-scopes-desc",
+            text: s.settings.optionalScopes.desc,
+        });
+
+        this.renderScopeToggle(containerEl, {
+            name: s.settings.scopeGroups.name,
+            desc: s.settings.scopeGroups.desc,
+            scope: GROUPS_READONLY_SCOPE,
+            get: () => this.plugin.settings.scopeGroupsEnabled,
+            set: (v) => {
+                this.plugin.settings.scopeGroupsEnabled = v;
+            },
+            reset: () => this.plugin.resetGroupAttendeeExpansion(),
+        });
+        this.renderScopeToggle(containerEl, {
+            name: s.settings.scopeDirectory.name,
+            desc: s.settings.scopeDirectory.desc,
+            scope: DIRECTORY_READONLY_SCOPE,
+            get: () => this.plugin.settings.scopeDirectoryEnabled,
+            set: (v) => {
+                this.plugin.settings.scopeDirectoryEnabled = v;
+            },
+            reset: () => this.plugin.resetGroupAttendeeExpansion(),
+        });
+
         // Advanced: credential overrides — expanded by default only when
         // there's no bundled Client ID/secret to fall back on (a community
         // build), so that user *must* find the fields immediately rather
@@ -874,32 +906,6 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     });
             });
 
-        new Setting(advancedDetails).setName(s.settings.optionalScopes.heading).setHeading();
-        advancedDetails.createEl("p", {
-            cls: "mc-advanced-credentials-desc",
-            text: s.settings.optionalScopes.desc,
-        });
-
-        this.renderScopeToggle(advancedDetails, {
-            name: s.settings.scopeGroups.name,
-            desc: s.settings.scopeGroups.desc,
-            scope: GROUPS_READONLY_SCOPE,
-            get: () => this.plugin.settings.scopeGroupsEnabled,
-            set: (v) => {
-                this.plugin.settings.scopeGroupsEnabled = v;
-            },
-            reset: () => this.plugin.resetGroupAttendeeExpansion(),
-        });
-        this.renderScopeToggle(advancedDetails, {
-            name: s.settings.scopeDirectory.name,
-            desc: s.settings.scopeDirectory.desc,
-            scope: DIRECTORY_READONLY_SCOPE,
-            get: () => this.plugin.settings.scopeDirectoryEnabled,
-            set: (v) => {
-                this.plugin.settings.scopeDirectoryEnabled = v;
-            },
-            reset: () => this.plugin.resetGroupAttendeeExpansion(),
-        });
 
         new Setting(containerEl)
             .setName(s.settings.notificationsHeading)
