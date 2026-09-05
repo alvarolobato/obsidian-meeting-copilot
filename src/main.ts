@@ -596,6 +596,8 @@ export default class SystemRecordingPlugin extends Plugin {
         // Settings tab
         this.addSettingTab(new SystemRecordingSettingTab(this.app, this));
 
+        this.installDevConsole();
+
 		this.addCommand({
 			id: "authenticate-google-calendar",
 			name: t().commands.authenticateCalendar,
@@ -782,7 +784,58 @@ export default class SystemRecordingPlugin extends Plugin {
 		});
 	}
 
+    /**
+     * Developer-console helpers, reachable only by typing `_mcDev` into
+     * Obsidian's DevTools (Cmd+Opt+I). Deliberately not a command, ribbon
+     * action, or setting — these exist for demo/debug work (notably recording
+     * the Google verification video, where a ~365-day cached name makes a
+     * "scope turned off" shot indistinguishable from a cache hit) and would
+     * only confuse a normal user.
+     *
+     * Nothing here persists: every flag resets on reload.
+     */
+    private installDevConsole(): void {
+        const api = {
+            /**
+             * Ignore cached directory/group lookups so each refresh re-queries
+             * Google. Other-contacts names are untouched — they only arrive
+             * via the daily bulk sync, so hiding them would disable the
+             * feature rather than force a re-fetch.
+             */
+            disableCache: (on = true): string => {
+                this.directoryCache.bypass = on;
+                // Session caches short-circuit before the persistent one, so
+                // they have to go too or the first refresh still replays names.
+                this.resetGroupAttendeeExpansion();
+                this.agendaEvents.emit("changed", undefined);
+                return `[Meeting Copilot] directory cache bypass ${
+                    on ? "ON — every refresh re-queries Google" : "OFF"
+                }`;
+            },
+            /** Wipe cached names and groups outright. */
+            clearCache: (): string => {
+                this.directoryCache.clearAll();
+                void this.directoryCache.flush();
+                this.resetGroupAttendeeExpansion();
+                this.agendaEvents.emit("changed", undefined);
+                return "[Meeting Copilot] directory cache cleared";
+            },
+            /** Current cache size, bypass state, and which scopes are granted. */
+            status: () => ({
+                bypass: this.directoryCache.bypass,
+                people: this.directoryCache.people.size,
+                groups: this.directoryCache.groups.size,
+                scopes: {
+                    groups: this.oauth.hasScope(GROUPS_READONLY_SCOPE),
+                    directory: this.oauth.hasScope(DIRECTORY_READONLY_SCOPE),
+                },
+            }),
+        };
+        (window as unknown as Record<string, unknown>)._mcDev = api;
+    }
+
     onunload() {
+        delete (window as unknown as Record<string, unknown>)._mcDev;
         if (this.recorder.isRecording) {
             this.recorder.stop();
         }

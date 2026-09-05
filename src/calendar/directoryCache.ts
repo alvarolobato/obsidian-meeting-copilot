@@ -83,6 +83,20 @@ export class DirectoryCache {
 	/** Recent People API request timestamps; seeds a fresh {@link PeopleApiRateLimiter}
 	 * after a reload. Pruned to {@link PEOPLE_RATE_WINDOW_MS} on load. */
 	peopleRateLimitTimestamps: number[] = [];
+	/**
+	 * Dev/demo escape hatch (see the `_mcDev` console API in `main.ts`): makes
+	 * every cached lookup miss, so each agenda refresh re-queries Google
+	 * instead of replaying a cached name. Exists because positive entries live
+	 * ~365 days, which otherwise makes a "scope turned off" demo
+	 * indistinguishable from a cache hit.
+	 *
+	 * Reads only — writes still land, so flipping this back off returns to a
+	 * warm cache.
+	 *
+	 * Session-only and off by default: nothing persists it, so a reload always
+	 * returns to normal caching.
+	 */
+	bypass = false;
 
 	constructor(
 		private readonly store: DirectoryCacheStore | null,
@@ -138,6 +152,7 @@ export class DirectoryCache {
 		const key = normEmail(email);
 		const entry = this.people.get(key);
 		if (!entry) return undefined;
+		if (this.bypass) return undefined;
 		if (!isFresh(entry.at, PEOPLE_TTL_MS, this.now())) {
 			this.people.delete(key);
 			this.markDirty();
@@ -155,6 +170,7 @@ export class DirectoryCache {
 		const key = normEmail(email);
 		const entry = this.groups.get(key);
 		if (!entry) return undefined;
+		if (this.bypass) return undefined;
 		if (!isFresh(entry.at, GROUP_TTL_MS, this.now())) {
 			this.groups.delete(key);
 			this.markDirty();
@@ -185,6 +201,7 @@ export class DirectoryCache {
 
 	/** Find a cached group entry by Cloud Identity resource name. */
 	getGroupByResource(resource: string): CachedGroup | undefined {
+		if (this.bypass) return undefined;
 		const now = this.now();
 		for (const entry of this.groups.values()) {
 			if (entry.resource !== resource) continue;
@@ -210,6 +227,16 @@ export class DirectoryCache {
 				at: now,
 			});
 		}
+		this.markDirty();
+	}
+
+	/**
+	 * Wipe every cached person and group — the disk equivalent of deleting
+	 * `directory-cache.json`, without quitting Obsidian.
+	 */
+	clearAll(): void {
+		this.people.clear();
+		this.groups.clear();
 		this.markDirty();
 	}
 
