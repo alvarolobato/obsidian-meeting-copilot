@@ -19,8 +19,9 @@ export interface ActionTask {
 	line: number;
 	/**
 	 * True for a task completed within its grace period (kept in the list a
-	 * little longer so a just-ticked item doesn't vanish). Rendered checked and
-	 * struck through, and excluded from the "open action items" count.
+	 * little longer so a just-ticked item doesn't vanish, and can be un-ticked).
+	 * Rendered checked and struck through, and excluded from the "open action
+	 * items" count.
 	 */
 	done: boolean;
 	/**
@@ -342,4 +343,57 @@ export function mergeGroupsByKey(
 		existing.tasks.push(...g.tasks);
 	}
 	return [...byKey.values()];
+}
+
+/** A trailing block reference (` ^id`), which Obsidian pins to the very end. */
+const TRAILING_REF_RE = /(\s+\^[A-Za-z0-9-]+)\s*$/;
+/**
+ * A completion stamp *at the end* of the task body. Deliberately anchored: an
+ * unanchored match would treat a `✅ 2026-01-01` the user typed or pasted into
+ * the middle of the task text as the dashboard's own stamp — stripping it on
+ * an un-tick (losing their content) and suppressing the real stamp on a tick
+ * (which then reads as "completed on some other day" and drops the task off
+ * the dashboard, un-tickable).
+ */
+const TRAILING_DONE_DATE_RE = /\s*✅\s*\d{4}-\d{2}-\d{2}\s*$/;
+
+/** Splits a task body from its trailing block reference (`""` when absent). */
+function splitTrailingRef(body: string): { body: string; ref: string } {
+	const m = body.match(TRAILING_REF_RE);
+	if (!m) return { body, ref: "" };
+	return { body: body.slice(0, body.length - m[0].length), ref: m[0] };
+}
+
+/**
+ * Rewrites a markdown task line to the given done state, the way the dashboard
+ * checkbox does it. Ticking flips the checkbox to `[x]` and appends a
+ * `✅ YYYY-MM-DD` completion date (unless the line already ends in one);
+ * un-ticking restores `[ ]` and removes that trailing date, so the line goes
+ * back to exactly what an open task looks like — an item ticked by mistake
+ * shouldn't leave a stale completion stamp behind. Only the *checkbox* is
+ * touched, never a `[…]` that happens to appear later in the text, and only a
+ * *trailing* stamp is added or removed (see {@link TRAILING_DONE_DATE_RE}). A
+ * trailing block reference (` ^id`) stays at the end of the line, where
+ * Obsidian requires it, with the date inserted before it. Pure/testable.
+ */
+export function setTaskLineDone(
+	line: string,
+	done: boolean,
+	dateStr: string
+): string {
+	const box = line.match(/^(\s*[-*+]\s+|\s*\d+[.)]\s+)\[[^\]]\]/);
+	if (!box) return line;
+	// The checkbox itself is the last 3 chars of the match (`[ ]` / `[x]`).
+	const head = box[0].slice(0, box[0].length - 3);
+	const { body, ref } = splitTrailingRef(line.slice(box[0].length));
+	if (!done) {
+		return `${head}[ ]${body.replace(TRAILING_DONE_DATE_RE, "").trimEnd()}${ref}`;
+	}
+	// Ticking always (re)stamps *today*. A line can reach here already
+	// carrying an older `✅` — Obsidian's own "toggle checkbox" command flips
+	// `[x]` back to `[ ]` without touching the date — and keeping that stale
+	// date would make the task read as completed on some other day, so the
+	// scan drops it on the spot: no grace period, and no row left to un-tick.
+	const cleared = body.replace(TRAILING_DONE_DATE_RE, "").trimEnd();
+	return `${head}[x]${cleared} ✅ ${dateStr}${ref}`;
 }
