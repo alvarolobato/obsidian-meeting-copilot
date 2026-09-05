@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Meeting Copilot — verification video cards</title>
+<style>
+  :root {
+    --bg: #1e1e1e;
+    --fg: #dcddde;
+    --bright: #ffffff;
+    --accent: #a882ff;
+    --muted: #8e8e8e;
+    --code-bg: #2a2a2a;
+    --rule: #3a3a3a;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* One card == one 1920x1080 frame. Fixed px (not vw) so the headless
+     screenshot and the on-screen presentation are byte-identical. */
+  .card {
+    width: 1920px;
+    height: 1080px;
+    padding: 130px 160px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 34px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* Cards 5 and 7 carry the most text; shrink the whole scale rather than
+     re-tuning every element. */
+  .card.dense { --scale: 0.84; gap: 26px; }
+  .card { --scale: 1; }
+
+  h1 {
+    font-size: calc(84px * var(--scale));
+    line-height: 1.08;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--bright);
+    margin-bottom: 12px;
+  }
+
+  h2 {
+    font-size: calc(66px * var(--scale));
+    line-height: 1.15;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    color: var(--accent);
+  }
+
+  h3 {
+    font-size: calc(44px * var(--scale));
+    line-height: 1.25;
+    font-weight: 600;
+    color: var(--accent);
+  }
+
+  p {
+    font-size: calc(38px * var(--scale));
+    line-height: 1.45;
+    max-width: 1500px;
+  }
+
+  strong { color: var(--bright); font-weight: 600; }
+
+  code {
+    font-family: "SF Mono", SFMono-Regular, ui-monospace, Menlo, monospace;
+    font-size: 0.9em;
+    background: var(--code-bg);
+    color: var(--accent);
+    padding: 0.12em 0.32em;
+    border-radius: 6px;
+  }
+
+  h2 > code {
+    background: none;
+    padding: 0;
+    font-size: 0.92em;
+  }
+
+  .lead { color: var(--muted); }
+
+  .pair {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    font-size: calc(36px * var(--scale));
+    line-height: 1.4;
+  }
+
+  .footer {
+    position: absolute;
+    left: 160px;
+    bottom: 90px;
+    font-size: 28px;
+    color: var(--muted);
+  }
+
+  .rule {
+    width: 180px;
+    height: 4px;
+    background: var(--rule);
+    border-radius: 2px;
+    margin: 6px 0;
+  }
+
+  /* ---- presentation mode ---------------------------------------------- */
+  /* Scale the fixed-size card down to whatever the window/screen is, so the
+     deck presents full-screen without changing any of the geometry above. */
+  body.deck {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    overflow: hidden;
+  }
+  body.deck .card { display: none; }
+  body.deck .card.active { display: flex; }
+  body.deck #stage { transform-origin: center center; }
+
+  #counter {
+    position: fixed;
+    right: 26px;
+    bottom: 20px;
+    font-size: 15px;
+    color: #555;
+    font-variant-numeric: tabular-nums;
+    user-select: none;
+  }
+  body.shot #counter { display: none; }
+
+  /* ---- single-card mode (?card=N), used by render.sh ------------------- */
+  body.shot { width: 1920px; height: 1080px; overflow: hidden; }
+  body.shot .card { display: none; }
+  body.shot .card.active { display: flex; }
+</style>
+</head>
+<body>
+
+<div id="stage">
+
+  <!-- 1 -->
+  <section class="card" data-hold="7">
+    <h1>Meeting Copilot</h1>
+    <h3>Google OAuth verification demo</h3>
+    <div class="rule"></div>
+    <p>An <strong>Obsidian plugin for macOS</strong>. Meetings become recorded,
+       transcribed, summarized notes — on the user's own device.</p>
+    <p><strong>No backend server. Nothing is ever written back to Google.</strong></p>
+  </section>
+
+  <!-- 2 -->
+  <section class="card" data-hold="11">
+    <h1>One meeting. One guest.<br>Three states.</h1>
+    <p>A calendar invite addressed to a <strong>Google Group</strong>.</p>
+    <div class="pair">
+      <div><strong>Now:</strong> the app sees one email address.</div>
+      <div><strong>Goal:</strong> three people, by name, in the meeting note.</div>
+    </div>
+    <div class="rule"></div>
+    <h3>Each scope closes exactly one of those two gaps.</h3>
+    <div class="pair">
+      <div><code>cloud-identity.groups.readonly</code> → who is in the group</div>
+      <div><code>directory.readonly</code> → what those people are called</div>
+    </div>
+  </section>
+
+  <!-- 3 -->
+  <section class="card" data-hold="8">
+    <h1>Every permission is optional</h1>
+    <p>Each has its <strong>own toggle</strong> in the app's settings.<br>
+       The scopes sent are computed <strong>per sign-in</strong> from those toggles.</p>
+    <div class="rule"></div>
+    <h3>Starting with both OFF.</h3>
+    <p>Expect a <strong>calendar-only</strong> consent screen.</p>
+  </section>
+
+  <!-- 4 -->
+  <section class="card" data-hold="10">
+    <h1>State 1 — calendar access only</h1>
+    <p>The invite's guest list is a <strong>single row</strong>:</p>
+    <h2>“Product Team”</h2>
+    <div class="rule"></div>
+    <p>Three people are in this meeting.<br>
+       The app can name <strong>none</strong> of them, and cannot even tell you
+       how many there are.</p>
+  </section>
+
+  <!-- 5 -->
+  <section class="card dense" data-hold="12">
+    <h1>State 2 — adding groups access</h1>
+    <h2><code>cloud-identity.groups.readonly</code></h2>
+    <div class="rule"></div>
+    <p><strong>Turning ON:</strong> “Expand Google Group invitees”</p>
+    <p><strong>Watch:</strong> one row becomes <strong>three</strong>.</p>
+    <p><strong>Why nothing narrower works:</strong> Calendar returns the group as a
+       <em>single attendee</em>. No Calendar or People scope can list a group's
+       members — only Cloud Identity can.</p>
+  </section>
+
+  <!-- 6 -->
+  <section class="card dense" data-hold="12">
+    <h1>State 2, continued —<br>we have addresses, not names</h1>
+    <h2>“Schen” · “Rpatel” · “Mokafor”</h2>
+    <div class="rule"></div>
+    <p>We now know <strong>who</strong> is in the meeting — but only as email addresses.</p>
+    <p>Cloud Identity's <code>memberships.list</code> returns <strong>member keys only</strong>.
+       There is no name anywhere in that response.</p>
+    <h3>So the app is guessing these labels from the email addresses.</h3>
+  </section>
+
+  <!-- 7 -->
+  <section class="card dense" data-hold="14">
+    <h1>State 3 — adding directory access</h1>
+    <h2><code>directory.readonly</code></h2>
+    <p><strong>Turning ON:</strong> “Resolve attendee names from your Workspace directory”</p>
+    <p><strong>Watch:</strong> the same three rows become</p>
+    <h2>Sophie Chen · Raj Patel · Mia Okafor</h2>
+    <div class="rule"></div>
+    <p><strong>Why the group scope could not do this:</strong> it returns addresses, never names.<br>
+       <strong>Why this scope alone is not enough:</strong> it has no way to discover
+       who belongs to a group in the first place.</p>
+  </section>
+
+  <!-- 8 -->
+  <section class="card" data-hold="11">
+    <h1>Read-only, and local</h1>
+    <p>The plugin <strong>never</strong> creates, edits, or deletes
+       calendar events, contacts, or groups.</p>
+    <p>Everything read stays in the user's <strong>local Obsidian vault</strong>,
+       on their own Mac.</p>
+    <p><strong>There is no Meeting Copilot server.</strong></p>
+    <div class="rule"></div>
+    <h3>Two permissions. Both optional. Both read-only.</h3>
+    <div class="footer">Meeting Copilot · meetingcopilot.lobato.vip/privacy.html</div>
+  </section>
+
+</div>
+
+<div id="counter"></div>
+
+<script>
+  const cards = [...document.querySelectorAll('.card')];
+  const stage = document.getElementById('stage');
+  const counter = document.getElementById('counter');
+  const params = new URLSearchParams(location.search);
+  const only = params.get('card');
+
+  if (only !== null) {
+    // Single-card mode: render.sh screenshots this at exactly 1920x1080.
+    document.body.classList.add('shot');
+    const i = Math.min(Math.max(parseInt(only, 10) - 1, 0), cards.length - 1);
+    cards[i].classList.add('active');
+  } else {
+    document.body.classList.add('deck');
+    let i = 0;
+
+    // The card is a fixed 1920x1080 box; scale it to fit the actual window so
+    // the deck fills any screen without reflowing (and so hitting fullscreen
+    // never changes a line break).
+    const fit = () => {
+      const s = Math.min(innerWidth / 1920, innerHeight / 1080);
+      stage.style.transform = `scale(${s})`;
+    };
+
+    const show = (n) => {
+      i = Math.min(Math.max(n, 0), cards.length - 1);
+      cards.forEach((c, j) => c.classList.toggle('active', j === i));
+      counter.textContent = `${i + 1} / ${cards.length}  ·  hold ${cards[i].dataset.hold}s`;
+    };
+
+    addEventListener('resize', fit);
+    addEventListener('keydown', (e) => {
+      if (['ArrowRight', 'ArrowDown', ' ', 'PageDown', 'Enter'].includes(e.key)) { show(i + 1); e.preventDefault(); }
+      else if (['ArrowLeft', 'ArrowUp', 'PageUp', 'Backspace'].includes(e.key)) { show(i - 1); e.preventDefault(); }
+      else if (e.key === 'Home') show(0);
+      else if (e.key === 'End') show(cards.length - 1);
+      else if (e.key === 'f' || e.key === 'F') {
+        document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+      }
+    });
+    addEventListener('click', () => show(i + 1));
+
+    fit();
+    show(0);
+  }
+</script>
+
+</body>
+</html>

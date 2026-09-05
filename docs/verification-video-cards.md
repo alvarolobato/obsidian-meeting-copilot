@@ -1,16 +1,30 @@
 # Verification video — on-screen cards
 
-Full-screen text to display **between** shots, since the video has no voice-over. Copy
-this file into a vault, open it in **Reading view**, and zoom in (Cmd +) until a card
-fills the screen.
+Full-screen text to display **between** shots, since the video has no voice-over.
 
-Cards are separated by `---`. If your Obsidian version still ships the **Slides** core
-plugin, "Open as slides" turns this file into a deck that advances one card at a time;
-otherwise scroll card to card.
+## Use the rendered cards, not this file
 
-Eight cards, ~50 seconds of card time total. `HOLD` times are HTML comments and don't
-render. Cards map onto the shot list in
-[google-verification.md](./google-verification.md) §7.
+`verification-cards/render.sh` renders each card below to a 3840x2160 PNG named
+with its hold time (`card-01-hold-7s.png` …). Drop those into the video editor as
+stills and set each clip to the duration in its filename.
+
+That beats presenting from Obsidian: the hold times become exact clip lengths
+instead of mistimed keypresses, there is no cursor or app chrome in frame, and
+re-cutting one card costs nothing. Obsidian's **Slides** core plugin still exists
+but is deprecated, is off by default, and cannot hold a card for a set time.
+
+```bash
+docs/verification-cards/render.sh        # → docs/verification-cards/png/
+open docs/verification-cards/deck.html   # arrow keys / click to advance, F for fullscreen
+```
+
+Edit the card text in [`verification-cards/deck.html`](./verification-cards/deck.html)
+and re-render — that file is the source the PNGs come from. The markdown below is
+the readable copy of the same eight cards; keep the two in sync.
+
+Eight cards, **85 seconds** of card time total. Cards map onto the shot list in
+[google-verification.md](./google-verification.md) §7. `HOLD` times below match the
+`data-hold` attributes in the deck.
 
 Everything above the first horizontal rule is instructions — it does not go on screen.
 
