@@ -167,75 +167,60 @@ so explicitly in the reply and show the toggles on camera.
 
 ## 6. Demo data to prepare
 
-### You can invent the people. You cannot invent the accounts.
+The cast is real: **mhiastore.com**, the group **`testgroup@mhiastore.com`**, and its
+three members. Both scopes resolve against real Google-side data, so nothing here can
+be faked — an address that doesn't exist resolves to nothing and the shot proves
+nothing.
 
-Both scopes resolve against **real Google-side data**, so a made-up address that doesn't
-exist resolves to nothing and the shot proves nothing. Make up the *identities* freely —
-a Workspace user called "Sophie Chen" who exists only for this demo is completely fine —
-but actually create each account.
+[`verification-demo-provision.gs`](./verification-demo-provision.gs) creates all of it.
+Paste it into [script.google.com](https://script.google.com) signed in as a domain
+super admin, add the **Admin SDK API** and **Calendar API** advanced services, and run
+`provisionAll`. It's idempotent — re-run it after a botched take.
 
-### The group must be a Workspace group, not a public one
+### The cast
 
-The plugin calls `cloudidentity.googleapis.com/v1/groups:lookup?groupKey.id=<email>`
-(see `expandGroupAttendees.ts`). Cloud Identity resolves groups belonging to a Cloud
-Identity / Workspace customer. A **public consumer group** created on groups.google.com
-(`…@googlegroups.com`) is not one of those and will fail lookup.
-
-Create it **inside the demo Workspace domain** — Admin console → Directory → Groups, or
-groups.google.com while signed in as a domain user with group-creation rights.
-
-### The cast — one group, three members, nothing else
-
-Substitute your real Workspace domain for `<demo-domain>`.
-
-| Role | Address | Profile name | Shows as, before |
+| Role | Address | Directory name | Shows as, before |
 | --- | --- | --- | --- |
-| Signed-in user | `alex.moreno@<demo-domain>` | Alex Moreno | — |
-| The group | `product-team@<demo-domain>` | — | "Product Team" |
-| Member 1 | `schen@<demo-domain>` | **Sophie Chen** | "Schen" |
-| Member 2 | `rpatel@<demo-domain>` | **Raj Patel** | "Rpatel" |
-| Member 3 | `mokafor@<demo-domain>` | **Mia Okafor** | "Mokafor" |
+| Signed-in user **and** group member | `alvaro@mhiastore.com` | Alvaro Lobato Moreno | "Alvaro" |
+| The group | `testgroup@mhiastore.com` | — | "Testgroup" |
+| Member | `mjpartal@mhiastore.com` | Maria Jose Partal | "Mjpartal" |
+| Member | `alberto@mhiastore.com` | Alberto Lobato | "Alberto" |
 
-> ⚠️ **Do not use dotted addresses like `sophie.chen@`.** With no scope granted the app
-> falls back to `humanizeEmailName()`, which splits the local part on `. _ + -` and
-> title-cases it — so `sophie.chen@` renders as "Sophie Chen", *character-for-character
-> identical* to her directory profile name. Granting `directory.readonly` would then
-> change nothing on screen and the shot would prove nothing.
->
-> Initial-style local parts (`schen@` → "Schen") keep the guess visibly wrong. The gap
-> between the guess and the real name **is** the evidence.
+"Shows as, before" is `humanizeEmailName()` — the local part split on `. _ + -` and
+title-cased. That guess, versus the directory name, **is** the evidence of the video.
 
-### The one meeting
+### Two weaknesses in this cast, and what to do about them
 
-Create a single event — **"Q3 planning review"** — on Alex's calendar, timed inside the
-agenda's look-ahead window, with **exactly one guest: the group**. Nothing else. The
-whole story plays out on that one row.
+**1. Two of the three name changes are weak.** `alvaro@` guesses to "Alvaro" and
+`alberto@` to "Alberto" — both are correct first names, so those rows change from a
+real first name to a fuller one. Only `mjpartal@` → "Maria Jose Partal" is a change a
+reviewer cannot mistake for cosmetics.
 
-### Stopping Calendar from supplying the name itself
+That is still genuine evidence (the app demonstrably did not know the surnames), but
+**Shot 4 should linger on Maria Jose's row**, and the card already names all three so
+the reviewer can compare. If you can add one more member with an initial-style local
+part, do — it costs one account and materially strengthens the shot.
 
-`mapAttendeesExpanded()` prefers Calendar's own `attendee.displayName` over any lookup.
-If Calendar returns a name, **no API call happens at all**.
+**2. The signed-in user is inside the group.** `alvaro@` signs in *and* is a member of
+`testgroup@`. If Calendar has added him to the event as his own attendee entry, the
+baseline shows **two rows, one already correctly named**, instead of the single
+nameless row the whole shot list is built on.
 
-That matters less now the only direct guest is the group, but the expanded members must
-still arrive nameless — and they will, since they were never invited individually.
+The provisioning script's `checkBaseline()` prints the guest list exactly as the
+Calendar API returns it and tells you PASS or FAIL. **Run it before recording.** It
+passes when there is exactly one attendee, `testgroup@mhiastore.com`, with no
+`displayName`. If it fails: remove the extra guest from the event, or organize the
+event from another account in the domain.
 
-**Deterministic way — create the event via the API.** At
-[script.google.com](https://script.google.com), signed in as the demo user, enable the
-**Calendar** advanced service and run:
+### Why the event is created through the API
 
-```js
-function createDemoEvent() {
-  Calendar.Events.insert({
-    summary: "Q3 planning review",
-    start: { dateTime: "2026-08-20T10:00:00+02:00" },
-    end:   { dateTime: "2026-08-20T11:00:00+02:00" },
-    attendees: [{ email: "product-team@<demo-domain>" }],
-  }, "primary");
-}
-```
+`mapAttendeesExpanded()` prefers Calendar's own `attendee.displayName` over any lookup
+— if Calendar returns a name, **no API call happens at all**. Inserting the event with
+a bare group email (as the script does) keeps the guest list nameless. Creating it by
+hand in the Calendar UI risks Calendar attaching names itself.
 
-**Verifying costs nothing, because the baseline shot is the test.** With both toggles
-off and `_mcDev.disableCache()` on, the agenda must show a single **"Product Team"** row.
+The event is **"Q3 planning review"**, tomorrow at 10:00, with **exactly one guest: the
+group**. Nothing else. The whole story plays out on that one row.
 
 ### Turn off caching before you record
 
@@ -250,7 +235,12 @@ _mcDev.status()         // confirm bypass: true, and which scopes are granted
 Leave it on for the whole recording. It doesn't persist — re-run it after any plugin
 reload.
 
----
+### The rehearsal is free
+
+With both toggles off and cache bypass on, the agenda must show a single **"Testgroup"**
+row. Three people are in that meeting and the app can name none of them. If you see
+more than one row, `checkBaseline()` will tell you why.
+
 
 ## 7. Demo-video shot list
 
@@ -276,7 +266,7 @@ carry the argument (there is no voice-over): see
   `client_id=…` and to see the permission list contains **calendar access only**.
   Approve.
 - Open the agenda and show **"Q3 planning review"**. Its guest list is a single row:
-  **"Product Team"**. The meeting has three actual participants and the app can name
+  **"Testgroup"**. The meeting has three actual participants and the app can name
   none of them.
 
 > **CARD 4** (what you just saw)
@@ -287,7 +277,7 @@ carry the argument (there is no voice-over): see
 
 - Turn on **only** "Expand Google Group invitees" → **Re-authenticate**.
 - Consent screen now lists that one extra permission. Approve.
-- Same agenda entry: one row becomes **three** — "Schen", "Rpatel", "Mokafor".
+- Same agenda entry: one row becomes **three** — "Alvaro", "Mjpartal", "Alberto".
 - **Narrate via the card:** we now know *who* is in the meeting, but only as email
   addresses. Cloud Identity returns member keys, not names.
 
@@ -297,7 +287,9 @@ carry the argument (there is no voice-over): see
 
 - Turn on **only** "Resolve attendee names from your Workspace directory" →
   **Re-authenticate** → approve.
-- The same three rows become **"Sophie Chen"**, **"Raj Patel"**, **"Mia Okafor"**.
+- The same three rows become **"Alvaro Lobato Moreno"**, **"Maria Jose Partal"**,
+  **"Alberto Lobato"**. **Linger on Maria Jose's row** — "Mjpartal" → "Maria Jose
+  Partal" is the one change no reviewer can read as cosmetic (see §6).
 - Optionally create the meeting note here to show the resolved names written into the
   vault — the end product the user actually keeps.
 
@@ -313,8 +305,10 @@ carry the argument (there is no voice-over): see
 - [ ] `client_id=…` legible in the consent URL at least once.
 - [ ] Consent screen visible for calendar-only **and** for each of the two additions.
 - [ ] The same guest list shown in all three states, in the same view.
-- [ ] Baseline really showed one "Product Team" row — not three people.
-- [ ] After the group grant, rows really read "Schen"/"Rpatel"/"Mokafor" — not real names.
+- [ ] Baseline really showed one "Testgroup" row — not three people, and not a
+      second row for Alvaro (`checkBaseline()` PASSes).
+- [ ] After the group grant, rows really read "Alvaro"/"Mjpartal"/"Alberto" — not
+      full directory names.
 - [ ] A statement that nothing is written back to Google.
 
 ---

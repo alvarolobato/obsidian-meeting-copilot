@@ -83,6 +83,8 @@
     border-radius: 6px;
   }
 
+  h2.names { font-size: calc(54px * var(--scale)); line-height: 1.22; }
+
   h2 > code {
     background: none;
     padding: 0;
@@ -190,7 +192,7 @@
   <section class="card" data-hold="10">
     <h1>State 1 — calendar access only</h1>
     <p>The invite's guest list is a <strong>single row</strong>:</p>
-    <h2>“Product Team”</h2>
+    <h2>“Testgroup”</h2>
     <div class="rule"></div>
     <p>Three people are in this meeting.<br>
        The app can name <strong>none</strong> of them, and cannot even tell you
@@ -212,7 +214,7 @@
   <!-- 6 -->
   <section class="card dense" data-hold="12">
     <h1>State 2, continued —<br>we have addresses, not names</h1>
-    <h2>“Schen” · “Rpatel” · “Mokafor”</h2>
+    <h2>“Alvaro” · “Mjpartal” · “Alberto”</h2>
     <div class="rule"></div>
     <p>We now know <strong>who</strong> is in the meeting — but only as email addresses.</p>
     <p>Cloud Identity's <code>memberships.list</code> returns <strong>member keys only</strong>.
@@ -226,7 +228,7 @@
     <h2><code>directory.readonly</code></h2>
     <p><strong>Turning ON:</strong> “Resolve attendee names from your Workspace directory”</p>
     <p><strong>Watch:</strong> the same three rows become</p>
-    <h2>Sophie Chen · Raj Patel · Mia Okafor</h2>
+    <h2 class="names">Alvaro Lobato Moreno<br>Maria Jose Partal<br>Alberto Lobato</h2>
     <div class="rule"></div>
     <p><strong>Why the group scope could not do this:</strong> it returns addresses, never names.<br>
        <strong>Why this scope alone is not enough:</strong> it has no way to discover

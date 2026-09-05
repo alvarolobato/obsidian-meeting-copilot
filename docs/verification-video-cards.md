@@ -76,7 +76,7 @@ Expect a **calendar-only** consent screen.
 
 The invite's guest list is a **single row**:
 
-## "Product Team"
+## "Testgroup"
 
 Three people are in this meeting.
 The app can name **none** of them, and cannot even tell you how many there are.
@@ -103,7 +103,7 @@ only Cloud Identity can.
 
 # State 2, continued — we have addresses, not names
 
-## "Schen" · "Rpatel" · "Mokafor"
+## "Alvaro" · "Mjpartal" · "Alberto"
 
 We now know **who** is in the meeting — but only as email addresses.
 
@@ -124,7 +124,9 @@ There is no name anywhere in that response.
 
 **Watch:** the same three rows become
 
-## Sophie Chen · Raj Patel · Mia Okafor
+## Alvaro Lobato Moreno
+## Maria Jose Partal
+## Alberto Lobato
 
 **Why the group scope could not do this:** it returns addresses, never names.
 **Why this scope alone is not enough:** it has no way to discover
