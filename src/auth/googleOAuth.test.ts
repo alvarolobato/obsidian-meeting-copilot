@@ -7,7 +7,6 @@ import {
 	AuthInvalidatedError,
 	CredentialsMissingError,
 	CALENDAR_READONLY_SCOPE,
-	CONTACTS_OTHER_READONLY_SCOPE,
 	DIRECTORY_READONLY_SCOPE,
 	GROUPS_READONLY_SCOPE,
 	type StoredTokens,
@@ -166,12 +165,12 @@ describe("GoogleOAuth.hasScope", () => {
 		const { storage } = makeStorage({
 			...expired,
 			scope:
-				"https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/contacts.other.readonly",
+				"https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/directory.readonly",
 		});
 		const oauth = new GoogleOAuth(storage);
 		expect(
 			oauth.hasScope(
-				"https://www.googleapis.com/auth/contacts.other.readonly"
+				"https://www.googleapis.com/auth/directory.readonly"
 			)
 		).toBe(true);
 	});
@@ -184,7 +183,7 @@ describe("GoogleOAuth.hasScope", () => {
 		const oauth = new GoogleOAuth(storage);
 		expect(
 			oauth.hasScope(
-				"https://www.googleapis.com/auth/contacts.other.readonly"
+				"https://www.googleapis.com/auth/directory.readonly"
 			)
 		).toBe(false);
 	});
@@ -272,13 +271,12 @@ describe("GoogleOAuth.authenticate scope composition", () => {
 		const { storage } = makeStorage(null);
 		const oauth = new GoogleOAuth({
 			...storage,
-			getOptionalScopes: () => [CONTACTS_OTHER_READONLY_SCOPE],
+			getOptionalScopes: () => [DIRECTORY_READONLY_SCOPE],
 		});
 		const scope = await authenticateAndCaptureScope(oauth);
 		expect(scope).toContain(CALENDAR_READONLY_SCOPE);
-		expect(scope).toContain(CONTACTS_OTHER_READONLY_SCOPE);
+		expect(scope).toContain(DIRECTORY_READONLY_SCOPE);
 		expect(scope).not.toContain(GROUPS_READONLY_SCOPE);
-		expect(scope).not.toContain(DIRECTORY_READONLY_SCOPE);
 	});
 
 	it("requests only calendar.readonly when every optional scope is turned off", async () => {
@@ -288,14 +286,13 @@ describe("GoogleOAuth.authenticate scope composition", () => {
 		expect(scope).toBe(CALENDAR_READONLY_SCOPE);
 	});
 
-	it("includes all three optional scopes when all are enabled", async () => {
+	it("includes both optional scopes when both are enabled", async () => {
 		const { storage } = makeStorage(null);
 		const oauth = new GoogleOAuth({
 			...storage,
 			getOptionalScopes: () => [
 				GROUPS_READONLY_SCOPE,
 				DIRECTORY_READONLY_SCOPE,
-				CONTACTS_OTHER_READONLY_SCOPE,
 			],
 		});
 		const scope = await authenticateAndCaptureScope(oauth);
@@ -304,7 +301,6 @@ describe("GoogleOAuth.authenticate scope composition", () => {
 				CALENDAR_READONLY_SCOPE,
 				GROUPS_READONLY_SCOPE,
 				DIRECTORY_READONLY_SCOPE,
-				CONTACTS_OTHER_READONLY_SCOPE,
 			].join(" ")
 		);
 	});

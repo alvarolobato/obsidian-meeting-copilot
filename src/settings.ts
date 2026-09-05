@@ -9,7 +9,6 @@ import {
 import type SystemRecordingPlugin from "./main";
 import type { InputDevice } from "./recorder";
 import {
-	CONTACTS_OTHER_READONLY_SCOPE,
 	DIRECTORY_READONLY_SCOPE,
 	GROUPS_READONLY_SCOPE,
 	type StoredTokens,
@@ -120,7 +119,6 @@ export interface SystemRecordingSettings {
 	 */
 	scopeGroupsEnabled: boolean;
 	scopeDirectoryEnabled: boolean;
-	scopeOtherContactsEnabled: boolean;
 	calendarAutoRecord: boolean;
 	/**
 	 * Automatically start recording at a calendar event's start, instead of only
@@ -365,7 +363,6 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	googleTokens: null,
 	scopeGroupsEnabled: OPTIONAL_SCOPES_DEFAULT,
 	scopeDirectoryEnabled: OPTIONAL_SCOPES_DEFAULT,
-	scopeOtherContactsEnabled: OPTIONAL_SCOPES_DEFAULT,
 	calendarAutoRecord: true,
 	calendarAutoStart: false,
 	calendarAutoStop: false,
@@ -900,16 +897,6 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
             get: () => this.plugin.settings.scopeDirectoryEnabled,
             set: (v) => {
                 this.plugin.settings.scopeDirectoryEnabled = v;
-            },
-            reset: () => this.plugin.resetGroupAttendeeExpansion(),
-        });
-        this.renderScopeToggle(advancedDetails, {
-            name: s.settings.scopeOtherContacts.name,
-            desc: s.settings.scopeOtherContacts.desc,
-            scope: CONTACTS_OTHER_READONLY_SCOPE,
-            get: () => this.plugin.settings.scopeOtherContactsEnabled,
-            set: (v) => {
-                this.plugin.settings.scopeOtherContactsEnabled = v;
             },
             reset: () => this.plugin.resetGroupAttendeeExpansion(),
         });
