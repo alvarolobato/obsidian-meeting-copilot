@@ -38,21 +38,29 @@ describe("computeTrimStartSeconds", () => {
 	// earliest window left ~6 minutes (system) / ~15 minutes (mic) of silence
 	// in front of the decode.
 	it("skips an isolated leading blip (real system-stream shape)", () => {
+		// A 1.1s bleep, ~2.5 minutes of nothing, then the meeting proper.
 		const windows: Array<[number, number]> = [
 			[741.39, 742.5],
 			[902.1, 904.0],
 			[908.6, 912.0],
+			[913.4, 921.0],
+			[922.2, 935.7],
 		];
 		expect(sustainedSpeechStart(windows)).toBe(902.1);
 		expect(computeTrimStartSeconds(windows)).toBeCloseTo(872.1);
 	});
 
 	it("skips several isolated leading blips (real mic-stream shape)", () => {
+		// Two bursts nine seconds apart, ~15 minutes of nothing, then the
+		// meeting proper (which keeps going — a couple of its windows suffice
+		// to make that stretch sustained).
 		const windows: Array<[number, number]> = [
 			[0.9, 2.1],
 			[11.2, 12.5],
 			[888.6, 897.5],
 			[897.7, 899.0],
+			[903.2, 911.8],
+			[915.0, 940.3],
 		];
 		expect(sustainedSpeechStart(windows)).toBe(888.6);
 		expect(computeTrimStartSeconds(windows)).toBeCloseTo(858.6);
@@ -81,10 +89,20 @@ describe("computeTrimStartSeconds", () => {
 		).toBe(900);
 	});
 
-	it("anchors on the last window rather than skipping everything", () => {
-		// A stream that is nothing but isolated blips still has to be decoded
-		// from somewhere; the final one wins.
-		expect(sustainedSpeechStart([[10, 11], [400, 401], [900, 901]])).toBe(900);
+	it("falls back to the earliest stretch when none is sustained", () => {
+		// A mostly-listening participant: a few words every few minutes, never
+		// 15s in one stretch. Anchoring on any later blip would silently drop
+		// everything said before it, so this keeps the pre-heuristic anchor
+		// (and the full decode) instead.
+		const sparse: Array<[number, number]> = [
+			[10, 11],
+			[400, 403],
+			[900, 910],
+			[1500, 1502],
+		];
+		expect(sustainedSpeechStart(sparse)).toBe(10);
+		expect(computeTrimStartSeconds(sparse)).toBeUndefined();
+		expect(sustainedSpeechStart([[500, 501], [900, 901]])).toBe(500);
 	});
 
 	it("ignores non-finite windows", () => {

@@ -168,9 +168,16 @@ const MIN_SUSTAINED_SPEECH_SECONDS = 15;
  * {@link MIN_SUSTAINED_SPEECH_SECONDS} of speech anchors the trim. Grouping
  * (rather than judging one window at a time) matters because a lead-in often
  * has *several* blips close together — two "hello?"s nine seconds apart are
- * still collectively a blip. When no stretch qualifies the last one wins:
- * something has to be decoded, and the end of a stream of blips is the least
- * bad place to start. Pure/testable.
+ * still collectively a blip.
+ *
+ * When no stretch qualifies, the *earliest* one anchors — the pre-heuristic
+ * behavior. A stream that is nothing but scattered short utterances is the
+ * shape of a mostly-listening participant ("yes", "agreed", a ten-second
+ * question every few minutes); anchoring anywhere later would silently drop
+ * everything they said before it, and clipping real speech is the one outcome
+ * the trim must never produce (see {@link LEADING_SILENCE_TRIM_PADDING_SECONDS}).
+ * Such a stream keeps its full decode and merely loses the lead-in protection.
+ * Pure/testable.
  */
 export function sustainedSpeechStart(
 	windows: Array<[number, number]>
@@ -197,7 +204,7 @@ export function sustainedSpeechStart(
 	const sustained = clusters.find(
 		(c) => c.speech >= MIN_SUSTAINED_SPEECH_SECONDS
 	);
-	return (sustained ?? clusters[clusters.length - 1]!).start;
+	return (sustained ?? clusters[0]!).start;
 }
 
 /** A JSON string field, or the fallback when it's absent or a non-string. */
