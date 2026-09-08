@@ -123,10 +123,81 @@ export function computeTrimStartSeconds(
 	windows: Array<[number, number]> | undefined
 ): number | undefined {
 	if (!windows || windows.length === 0) return undefined;
-	const firstStart = windows.reduce((min, [start]) => Math.min(min, start), Infinity);
-	if (!Number.isFinite(firstStart)) return undefined;
-	const trimStart = firstStart - LEADING_SILENCE_TRIM_PADDING_SECONDS;
+	const start = sustainedSpeechStart(windows);
+	if (start === undefined) return undefined;
+	const trimStart = start - LEADING_SILENCE_TRIM_PADDING_SECONDS;
 	return trimStart > 0 ? trimStart : undefined;
+}
+
+/**
+ * Silence that separates one burst of talking from the next. Comfortably
+ * longer than any natural conversational pause, so windows closer together
+ * than this are treated as one stretch of speech.
+ */
+const SPEECH_CLUSTER_GAP_SECONDS = 120;
+/**
+ * How much speech a leading stretch must contain to be the real start of the
+ * conversation rather than a blip to seek past. A "can you hear me?" before
+ * muting, a notification chime, or a stray bleep all fall well under this;
+ * anyone genuinely talking early runs over it and keeps their audio.
+ */
+const MIN_SUSTAINED_SPEECH_SECONDS = 15;
+
+/**
+ * Start of the first *sustained* speech in a stream.
+ *
+ * Anchoring on the earliest window (a plain `Math.min`) is what made the
+ * lead-in trim fail in practice: one brief blip in an otherwise silent
+ * stretch — a "can you hear me?" before muting, a notification chime, a
+ * 2-second bleep minutes before anyone really speaks — drags the anchor back
+ * to itself, and whisper.cpp is handed the very long silent lead-in the trim
+ * exists to avoid. Observed on a real recording: the system stream's first
+ * window was a 1.1s bleep at 741s while the meeting began at 902s, so the
+ * "trimmed" decode still opened on ~6 minutes of silence; the mic stream
+ * opened with two short bursts and then went quiet for ~15 minutes, which
+ * zeroed its trim entirely.
+ *
+ * Two consequences, both bad, both fixed by skipping such blips: the decoder
+ * degrades across the silence, and — with `language: "auto"` — whisper's
+ * language probe reads the *first 30 seconds after the seek*, so a silent
+ * opening makes it detect an arbitrary language and then transcribe the whole
+ * meeting as that language.
+ *
+ * Windows are grouped into stretches separated by at least
+ * {@link SPEECH_CLUSTER_GAP_SECONDS}; the first stretch holding at least
+ * {@link MIN_SUSTAINED_SPEECH_SECONDS} of speech anchors the trim. Grouping
+ * (rather than judging one window at a time) matters because a lead-in often
+ * has *several* blips close together — two "hello?"s nine seconds apart are
+ * still collectively a blip. When no stretch qualifies the last one wins:
+ * something has to be decoded, and the end of a stream of blips is the least
+ * bad place to start. Pure/testable.
+ */
+export function sustainedSpeechStart(
+	windows: Array<[number, number]>
+): number | undefined {
+	const sorted = [...windows]
+		.filter(
+			([start, end]) =>
+				Number.isFinite(start) && Number.isFinite(end) && end >= start
+		)
+		.sort((a, b) => a[0] - b[0]);
+	if (sorted.length === 0) return undefined;
+
+	type Cluster = { start: number; speech: number; end: number };
+	const clusters: Cluster[] = [];
+	for (const [start, end] of sorted) {
+		const last = clusters[clusters.length - 1];
+		if (last && start - last.end < SPEECH_CLUSTER_GAP_SECONDS) {
+			last.speech += end - start;
+			last.end = Math.max(last.end, end);
+			continue;
+		}
+		clusters.push({ start, speech: end - start, end });
+	}
+	const sustained = clusters.find(
+		(c) => c.speech >= MIN_SUSTAINED_SPEECH_SECONDS
+	);
+	return (sustained ?? clusters[clusters.length - 1]!).start;
 }
 
 /** A JSON string field, or the fallback when it's absent or a non-string. */

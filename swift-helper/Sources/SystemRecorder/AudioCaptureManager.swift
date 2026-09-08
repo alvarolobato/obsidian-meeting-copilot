@@ -502,6 +502,43 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
         return true
     }
 
+    /// Drop the explicit input-device selection and rebuild the mic engine on
+    /// the system default.
+    ///
+    /// The watchdog calls this when an explicitly-selected device has delivered
+    /// zero frames: a live tap emits buffers continuously even in silence, so
+    /// zero means the tap never fired at all. Repointing a realized
+    /// `AVAudioEngine` input node at another device is the fragile part — the
+    /// node keeps the graph format it was realized with, and when that
+    /// disagrees with what the device actually produces, `installTap` accepts
+    /// the format and then silently delivers nothing (observed with a 16 kHz
+    /// USB headset against a 48 kHz graph; intermittent, so not something the
+    /// start path can reliably detect up front). The default-device path
+    /// doesn't take that risk because the engine negotiates it itself.
+    ///
+    /// Warning-only was the previous behavior and it left the user with a
+    /// one-sided recording for the rest of the meeting — no `.me` sidecar, so
+    /// no diarization. Recovering costs one engine rebuild and keeps the
+    /// speaker separation.
+    ///
+    /// Returns false when there was nothing to fall back from (no explicit
+    /// selection) or the rebuild itself failed, so the caller can still warn.
+    func fallBackToDefaultInputDevice() -> Bool {
+        guard let uid = preferredInputDeviceUID, !uid.isEmpty else { return false }
+        _ = uid
+        preferredInputDeviceUID = nil
+        return controlQueue.sync {
+            guard capturing() else { return false }
+            teardownMicEngine()
+            do {
+                try startMicEngine()
+                return true
+            } catch {
+                return false
+            }
+        }
+    }
+
     private func teardownMicEngine() {
         audioEngine?.inputNode.removeTap(onBus: 0)
         audioEngine?.stop()

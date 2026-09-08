@@ -196,9 +196,18 @@ if #available(macOS 13.0, *) {
             // the device. Non-fatal: the recording keeps going with system
             // audio. Gated on micTapActive() so a mic intentionally disabled for
             // an unusable format (which already warned) doesn't warn twice.
+            // Recover rather than just report: rebuild the mic engine on the
+            // system default, which is the path AVAudioEngine negotiates for
+            // itself and so the one that doesn't hit the stale-graph-format
+            // trap. Warning-only left the rest of the meeting one-sided (no
+            // `.me` sidecar, so no diarization) for a fault the user can't see
+            // or act on mid-call.
+            let recovered = captureManager.fallBackToDefaultInputDevice()
             emitJSON([
                 "status": "warning",
-                "message": "The selected microphone produced no audio after \(Int(watchdogSeconds))s; recording continues with system audio only. Try selecting “System default” as the input device, or reconnect the microphone.",
+                "message": recovered
+                    ? "The selected microphone produced no audio after \(Int(watchdogSeconds))s; switched to the system default input for the rest of this recording."
+                    : "The selected microphone produced no audio after \(Int(watchdogSeconds))s; recording continues with system audio only. Try selecting “System default” as the input device, or reconnect the microphone.",
             ])
         } else if captureManager.isUsingProcessTap() && frames.system == 0 && frames.mic > 0 {
             // Mic audio is flowing (so we're well past start and the Microphone
