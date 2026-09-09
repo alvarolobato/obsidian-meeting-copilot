@@ -491,12 +491,16 @@ export const en = {
 			name: "Suggest a title for unplanned meetings",
 			desc: "When enriching an unplanned (ad-hoc or detected) meeting, ask the same LLM call for a title and offer to rename the note, keeping the date prefix. Scheduled meetings keep their calendar title.",
 		},
+		// Kept terse on purpose: seven tabs have to sit on one row in the
+		// settings pane, and wrapping onto a second row pushed the content down
+		// and read as a separate group rather than a continuation. "AI" and
+		// "Recording" are the two that were costing the row its width.
 		tabs: {
 			general: "General",
-			aiBackend: "AI backend",
+			aiBackend: "AI",
 			calendar: "Calendar",
 			detection: "Detection",
-			recording: "Recording & notes",
+			recording: "Recording",
 			transcription: "Transcription",
 			enrichment: "Enrichment",
 		},
