@@ -147,6 +147,11 @@ if #available(macOS 13.0, *) {
     captureManager.onMicrophoneAudio = { buffer, _ in
         mixer.appendMicrophoneAudio(buffer)
     }
+    // A mic engine replaced after delivering nothing restarts its timeline at
+    // frame 0; pad the gap so `.me` stays positionally aligned with `.them`.
+    captureManager.onMicrophoneRebuilt = { elapsed in
+        mixer.padMicrophoneSilence(toElapsedSeconds: elapsed)
+    }
 
     // Surface non-fatal capture recovery failures (e.g. a device-change restart
     // that didn't take) without ending the recording.
@@ -196,10 +201,38 @@ if #available(macOS 13.0, *) {
             // the device. Non-fatal: the recording keeps going with system
             // audio. Gated on micTapActive() so a mic intentionally disabled for
             // an unusable format (which already warned) doesn't warn twice.
+            // Recover rather than just report: rebuild the mic engine on the
+            // system default, which is the path AVAudioEngine negotiates for
+            // itself and so the one that doesn't hit the stale-graph-format
+            // trap. Warning-only left the rest of the meeting one-sided (no
+            // `.me` sidecar, so no diarization) for a fault the user can't see
+            // or act on mid-call.
+            let recovered = captureManager.fallBackToDefaultInputDevice()
             emitJSON([
                 "status": "warning",
-                "message": "The selected microphone produced no audio after \(Int(watchdogSeconds))s; recording continues with system audio only. Try selecting “System default” as the input device, or reconnect the microphone.",
+                "message": recovered
+                    ? "The selected microphone produced no audio after \(Int(watchdogSeconds))s; switched to the system default input for the rest of this recording."
+                    : "The selected microphone produced no audio after \(Int(watchdogSeconds))s; recording continues with system audio only. Try selecting “System default” as the input device, or reconnect the microphone.",
             ])
+            if recovered {
+                // "Switched to the system default" is a promise; the default
+                // can be dead too (it may even be the same device, or the
+                // selected UID never resolved and we were on the default all
+                // along). Check once more so a still-silent mic isn't reported
+                // as recovered. The fallback padded the mic stream with
+                // silence, so compare against the count right after it, not
+                // zero. Guarded on micTapActive(): stopCapture tears the tap
+                // down before finalize, so a check landing after stop no-ops.
+                let framesAfterFallback = mixer.capturedFrames.mic
+                DispatchQueue.global().asyncAfter(deadline: .now() + watchdogSeconds) {
+                    guard captureManager.micTapActive(),
+                          mixer.capturedFrames.mic <= framesAfterFallback else { return }
+                    emitJSON([
+                        "status": "warning",
+                        "message": "The system default microphone also produced no audio after \(Int(watchdogSeconds))s; recording continues with system audio only. Reconnect the microphone or pick a different input in System Settings → Sound.",
+                    ])
+                }
+            }
         } else if captureManager.isUsingProcessTap() && frames.system == 0 && frames.mic > 0 {
             // Mic audio is flowing (so we're well past start and the Microphone
             // grant is fine), yet the process tap has produced no frames. Usually
