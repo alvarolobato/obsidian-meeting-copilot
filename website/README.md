@@ -5,8 +5,11 @@ Google OAuth verification requires: a public **home page** (`index.html`), a
 **privacy policy** (`privacy.html`), and **terms of service** (`terms.html`), plus
 a user-facing setup guide, **bring your own Google credentials**
 (`google-credentials.html`).
-Self-contained — no external fonts, scripts, or trackers, matching the plugin's
-privacy stance.
+Hand-written HTML with no build step, no framework, and no external fonts or
+stylesheets. The one third-party script is Google Analytics / Tag Manager
+(`G-CR6N3MYFGV`, `GTM-TS7K7WK9`), added in 9e84438 / 53e807d and repeated verbatim at
+the top of every page — copy that block into any new page so the site measures
+consistently. The plugin itself still ships no telemetry.
 
 The privacy policy, terms of service, and credentials guide here mirror the
 canonical [`docs/privacy-policy.md`](../docs/privacy-policy.md),

@@ -891,11 +891,19 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         // that can't fit in a settings description — link out to the hosted
         // guide instead of trying to summarize it here.
         advancedDesc.createEl("br");
-        advancedDesc.createEl("a", {
+        const docsLinkEl = advancedDesc.createEl("a", {
             text: s.settings.advancedCredentials.docsLink,
+            // Kept for copy-link / hover-preview, but the click is handled
+            // below: letting the anchor navigate would replace the Obsidian
+            // window itself with the page, as everywhere else in the plugin
+            // that opens an external URL.
             href: GOOGLE_CREDENTIALS_DOC_URL,
             cls: "mc-advanced-credentials-link",
         });
+        docsLinkEl.onclick = (e): void => {
+            e.preventDefault();
+            window.open(GOOGLE_CREDENTIALS_DOC_URL, "_blank");
+        };
 
         new Setting(advancedDetails)
             .setName(s.settings.clientId.name)

@@ -1,15 +1,14 @@
 # Bring your own Google credentials
 
-Meeting Copilot ships with a built-in Google OAuth app. For most people that is all
-you need: click **Authenticate**, grant read-only calendar access, done.
+Meeting Copilot ships with a built-in Google OAuth app, and most people never need
+anything else: click **Authenticate**, grant access, done. This guide covers the cases
+where you have to supply your **own** Google Cloud OAuth client instead.
 
-There are two situations where you have to create your **own** Google Cloud OAuth
-client instead:
-
-| Situation | What you build | Go to |
-| --- | --- | --- |
-| You want group invitees expanded and real attendee names instead of email addresses | A Google Cloud project of your own (an **Internal** client on a Workspace account, **External** on a personal one) | [Option A](#option-a--your-own-google-cloud-project) |
-| Your company blocks the built-in app ("your administrator has restricted access to this app") | An **Internal** OAuth client inside your organization's Google Cloud — or an admin allowlist | [Option B](#option-b--your-organization-wont-approve-the-built-in-app) |
+| Situation | Where to go |
+| --- | --- |
+| Your organization blocks the built-in app ("your administrator has restricted access to this app") | [Option B](#option-b--your-organization-wont-approve-the-built-in-app) — an admin allowlist, or an **Internal** client inside your own organization |
+| You want the optional attendee-name permissions without Google's "hasn't verified this app" screen | [Option A](#option-a--your-own-google-cloud-project) |
+| You built the plugin from source, so it carries no bundled credentials | [Option A](#option-a--your-own-google-cloud-project) |
 
 Either way the result is the same two strings — a **Client ID** and a **Client
 secret** — pasted into *Settings → Meeting Copilot → General → Google Calendar →
@@ -20,36 +19,33 @@ are far above what one person's calendar uses.
 
 ---
 
-## Why the built-in app isn't always enough
+## What the built-in app already covers
 
-The published Meeting Copilot app is verified by Google for exactly one scope,
-`calendar.readonly`. That is deliberate — it is the narrowest possible surface for the
-thing the plugin exists to do, and it keeps the verified app easy to audit.
-
-Everything under **Optional permissions** in settings — group expansion and attendee
-name resolution — needs three *additional* scopes that the published app does not
-carry. They are a bring-your-own-credentials feature: they only work against an OAuth
-client you created and configured yourself.
+Read-only calendar access always, plus the two **Optional permissions** you can toggle
+in *Settings → Meeting Copilot → General → Google Calendar*:
 
 | Optional permission (settings toggle) | Scope | Google API |
 | --- | --- | --- |
 | Expand Google Group invitees | `cloud-identity.groups.readonly` | Cloud Identity API |
 | Resolve attendee names from your Workspace directory | `directory.readonly` | People API |
-| Resolve attendee names from Google "Other contacts" | `contacts.other.readonly` | People API |
+
+Calendar access is verified by Google. The two optional scopes are **in review**, so
+until that finishes a sign-in that includes them can show Google's **"Google hasn't
+verified this app"** screen. Three ways past it: continue anyway (**Advanced → Go to
+Meeting Copilot**), turn both toggles off for a plain verified calendar-only sign-in,
+or run the features off your own OAuth client — [Option A](#option-a--your-own-google-cloud-project).
 
 Separately, a Google Workspace admin can block *any* third-party app for the whole
 organization — being verified by Google doesn't exempt an app from that. When that is
 the case, no amount of configuration on our side helps: the app has to be one your
-organization already trusts. That's Option B.
+organization already trusts. That's
+[Option B](#option-b--your-organization-wont-approve-the-built-in-app).
 
 ---
 
 ## Option A — your own Google Cloud project
 
-Use this when you want group expansion and real attendee names, on a personal Google
-account or a Workspace account whose admin allows third-party apps.
-
-Roughly 15 minutes.
+Roughly 15 minutes in the Google Cloud Console.
 
 ### 1. Create a project
 
@@ -66,7 +62,7 @@ and enable:
 | --- | --- |
 | **Google Calendar API** | Always — the agenda, meeting notes, start/stop prompts |
 | **Cloud Identity API** | Expanding Google Group invitees |
-| **People API** | Attendee names (both directory and "Other contacts") |
+| **People API** | Resolving attendee names from the Workspace directory |
 
 Skipping one shows up later as a `SERVICE_DISABLED` error in the Obsidian console, not
 as a visible failure — enable all three unless you know you don't want the feature.
@@ -94,10 +90,9 @@ full URLs into the "manually add scopes" box:
 https://www.googleapis.com/auth/calendar.readonly
 https://www.googleapis.com/auth/cloud-identity.groups.readonly
 https://www.googleapis.com/auth/directory.readonly
-https://www.googleapis.com/auth/contacts.other.readonly
 ```
 
-Only `calendar.readonly` is required. Add the others to match the **Optional
+Only `calendar.readonly` is required. Add the other two to match the **Optional
 permissions** toggles you intend to leave on — a scope the plugin requests but the
 consent screen doesn't list will fail the sign-in.
 
@@ -162,7 +157,10 @@ only).
 Send them, in the request:
 
 - App name: **Meeting Copilot**, an open-source Obsidian plugin
-- What it reads: Google Calendar, **read-only** (`calendar.readonly`)
+- What it reads: Google Calendar, **read-only** (`calendar.readonly`) — plus, if you
+  leave the optional permissions on, group memberships
+  (`cloud-identity.groups.readonly`) and directory display names
+  (`directory.readonly`), both read-only as well
 - Where the data goes: nowhere — no backend server exists; everything is processed on
   the user's Mac and stored in their local Obsidian vault
 - [Privacy policy](https://meetingcopilot.lobato.vip/privacy.html) ·
@@ -175,7 +173,8 @@ Send them, in the request:
 If your admin won't allowlist an external app but will let you create a Google Cloud
 project inside the company's organization, an **Internal** OAuth client sidesteps the
 problem entirely: an internal app belongs to your organization, so it isn't a
-third-party app at all.
+third-party app at all. It's also the natural home for the directory and group
+lookups — they run against your own domain, with your own admin's blessing.
 
 Follow [Option A](#option-a--your-own-google-cloud-project) with three changes:
 
@@ -188,10 +187,6 @@ Follow [Option A](#option-a--your-own-google-cloud-project) with three changes:
    only when the project lives in the organization.
 3. **Skip step 7 entirely.** Internal apps need no publishing and no verification: no
    warning screen, no 100-user cap, and no 7-day token expiry.
-
-What you get for free with an internal app: the directory and group lookups are
-running against your own domain with your own admin's blessing, which is exactly the
-setup those features were designed for.
 
 Two things that can still bite you:
 
@@ -220,14 +215,14 @@ delete the client in the Cloud Console.
 
 | What you see | What it means |
 | --- | --- |
-| *Google hasn't verified this app* | Expected for your own **External** app. **Advanced → Go to … (unsafe)**. An Internal Workspace app never shows it. |
+| *Google hasn't verified this app* | On the built-in app: the optional attendee-name scopes are still in review. On your own **External** app: expected, it's your app — **Advanced → Go to … (unsafe)**. An Internal Workspace app never shows it. |
 | *Access blocked: your administrator has restricted access to this app* | Your Workspace hasn't approved the app for its users → [Option B](#option-b--your-organization-wont-approve-the-built-in-app). |
 | `Error 400: redirect_uri_mismatch` | The OAuth client isn't of type **Desktop app**. Create a new Desktop client. |
 | `Error 403: access_denied` right after choosing your account | An **External** app in *Testing* with your account missing from **Test users** — or an admin policy blocks it. |
 | `Error 400: invalid_scope`, or the consent screen doesn't list a permission you enabled | That scope isn't added under **Data access** on your consent screen. |
 | Reconnect prompt roughly once a week (`invalid_grant`) | An **External** app in *Testing* expires refresh tokens after 7 days → **Audience → Publish app**. |
 | `SERVICE_DISABLED` in the console log | The Cloud Identity API or People API isn't enabled on the project (step 2). |
-| `people lookup blocked by Workspace admin policy` | Your Workspace disables directory sharing with third-party apps ([this setting](https://support.google.com/a/answer/6343701)). It only blocks `directory.readonly`; the "Other contacts" source still works. |
+| `people lookup blocked by Workspace admin policy` | Your Workspace disables directory sharing with third-party apps ([this setting](https://support.google.com/a/answer/6343701)). Those attendees fall back to a name guessed from their email address. |
 | You turned an optional permission on but names/groups didn't change | Existing tokens only carry the scopes granted at the last consent — click **Re-authenticate**. |
 | Names resolve but group invitees don't expand fully | Expansion is capped by **Max group members to expand** (default 50) in settings. |
 
