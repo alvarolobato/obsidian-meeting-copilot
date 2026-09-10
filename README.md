@@ -1,6 +1,13 @@
-# Meeting Copilot
+<p align="center">
+  <a href="https://meetingcopilot.lobato.vip/"><img src="docs/logo.png" alt="" width="128" /></a>
+</p>
 
-Integrated meeting transcription, note-taking, and summarization for Obsidian on macOS: Google Calendar → dual-channel recording → transcription (remote or on-device Whisper) → AI summaries.
+<h1 align="center"><a href="https://meetingcopilot.lobato.vip/">Meeting Copilot</a></h1>
+
+<p align="center">
+  Integrated meeting transcription, note-taking, and summarization for Obsidian on macOS:<br />
+  Google Calendar → dual-channel recording → transcription (remote or on-device Whisper) → AI summaries.
+</p>
 
 ![Meeting Copilot](docs/hero.png)
 
@@ -31,6 +38,7 @@ See [Setup](docs/setup.md) for Google Calendar, AI endpoint, transcription, and 
 ## More
 
 - [Setup](docs/setup.md) — calendar, endpoint, transcription, enrichment, usage
+- [Bring your own Google credentials](docs/google-credentials.md) — your own Google Cloud OAuth client, for when your company blocks third-party apps
 - [Development](docs/development.md) — build, release, debugging
 - [Organizing meeting notes](docs/organizing-meeting-notes.md)
 

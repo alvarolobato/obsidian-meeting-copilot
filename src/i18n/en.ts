@@ -521,7 +521,8 @@ export const en = {
 		},
 		advancedCredentials: {
 			summary: "Advanced: custom OAuth credentials",
-			desc: "Override the built-in app credentials. Leave blank to use the bundled defaults. Only needed if you want to use your own Google Cloud project.",
+			desc: "Replace the built-in Google app with your own Google Cloud OAuth client (free, ~15 minutes). Worth doing if your organization only allows Google apps it has explicitly approved and hasn't approved this one, or to skip the \"Google hasn't verified this app\" screen that the optional permissions above still show while their verification is in review. Leave both fields blank to keep using the built-in app.",
+			docsLink: "Read the step-by-step guide →",
 		},
 		clientId: {
 			name: "Client ID",
