@@ -243,6 +243,11 @@ import {
     DASHBOARD_ICON,
 } from "./ui/dashboard/MeetingDashboardView";
 import {
+    anchoredScrollTop,
+    isForeignScroll,
+    needsScrollAdjust,
+} from "./ui/dashboard/scrollAnchor";
+import {
     populateMeetingMenu,
     RowHandlers,
 } from "./ui/agenda/components/eventRow";
@@ -310,6 +315,14 @@ const FVAD_PROVISION_TIMEOUT_MS = 15_000;
  * `silenceAutoStopMinutes` cap (`checkSilenceAutoStop`).
  */
 const AUTO_STOP_WARNING_SECONDS = 30;
+
+/**
+ * How long a re-rendered dashboard section keeps re-anchoring its scroll
+ * position while its height settles (see `preserveScroll`). Long enough to
+ * cover the un-awaited markdown render of a page of task rows, short enough
+ * that nothing keeps touching the scroller once the user has moved on.
+ */
+const SCROLL_SETTLE_MS = 400;
 
 export default class SystemRecordingPlugin extends Plugin {
     settings: SystemRecordingSettings;
@@ -863,6 +876,7 @@ export default class SystemRecordingPlugin extends Plugin {
 		this.agendaEvents.clear();
 		for (const renderer of this.liveActionRenderers) renderer.unload();
 		this.liveActionRenderers.clear();
+		this.stopAllScrollAnchors();
 		for (const controller of this.meetingNotices.values())
 			controller.dispose();
 		this.meetingNotices.clear();
@@ -4072,6 +4086,13 @@ export default class SystemRecordingPlugin extends Plugin {
     private liveActionRenderers: Set<Component> = new Set();
 
     /**
+     * Per-section "stop re-anchoring" handles from {@link watchScrollAnchor}.
+     * A plain Map (not a WeakMap) so `onunload` can drain it; entries remove
+     * themselves as each settle loop finishes, so it stays tiny.
+     */
+    private scrollAnchors: Map<HTMLElement, () => void> = new Map();
+
+    /**
      * Monotonic render id per dashboard block element. Async renders (calendar
      * fetch, vault scan) capture the id at start and bail before mutating the
      * DOM if a newer render superseded them — so fast paging/Refresh can't let
@@ -5083,33 +5104,136 @@ export default class SystemRecordingPlugin extends Plugin {
         return null;
     }
 
+    /** Distance from the scroller's top edge to an element's top edge, in px. */
+    private anchorOffset(scroller: HTMLElement, anchor: HTMLElement): number {
+        return (
+            anchor.getBoundingClientRect().top -
+            scroller.getBoundingClientRect().top
+        );
+    }
+
     /**
-     * Snapshots the section's scroll position and returns a fn that restores
-     * it. Re-rendering a dashboard section empties and rebuilds its element,
-     * which otherwise makes the view jump (usually to the top) on a task tick,
-     * a page change, or Refresh; call the returned fn once the new content is
-     * in place. The rAF re-apply covers async renders whose height settles a
-     * frame later.
+     * The element a re-rendered section should stay pinned to: its pagination
+     * toolbar when it has one, else the section itself.
+     *
+     * The toolbar is what the user is actually looking at when a section
+     * re-renders — it holds Prev/Next, the page indicator and the per-page
+     * dropdown, so it's under the pointer for every page change — and, being
+     * the last child, it sits *below* the rows whose number and height just
+     * changed. Anchoring the section's top edge instead is exactly what let
+     * it slide.
+     */
+    private scrollAnchorEl(el: HTMLElement): HTMLElement {
+        return (
+            el.querySelector<HTMLElement>(":scope > .mc-dash-toolbar") ?? el
+        );
+    }
+
+    /**
+     * Snapshots where the section sits in the viewport and returns a fn that
+     * puts it back once the new content is in place. Re-rendering a dashboard
+     * section empties and rebuilds its element, which otherwise makes the view
+     * jump on a task tick, a page change, or Refresh.
+     *
+     * The restore is *relative*, not absolute: it measures how far the anchor
+     * ({@link scrollAnchorEl}) drifted and nudges `scrollTop` by that much.
+     * A page turn changes the section's height — a last page with three rows
+     * instead of ten, task text wrapping onto a second line, a new per-page
+     * size — and re-applying the old absolute `scrollTop` pins the section's
+     * top edge while everything from the rows down slides by the delta.
      */
     private preserveScroll(el: HTMLElement): () => void {
         const scroller = this.scrollParent(el);
-        const top = scroller ? scroller.scrollTop : 0;
+        if (!scroller) return (): void => {};
+        const targetOffset = this.anchorOffset(scroller, this.scrollAnchorEl(el));
+        // Whatever the previous render left re-anchoring is now stale — its
+        // target predates this snapshot, so let it not fight the new one.
+        this.stopScrollAnchor(el);
         return (): void => {
-            if (!scroller) return;
-            // Re-apply across the next few frames (and a macrotask): async
-            // markdown rendering in the action list settles its height a frame
-            // or two after the initial rebuild, and a single restore would be
-            // undone by that late reflow — leaving the view jumped.
+            const anchor = this.scrollAnchorEl(el);
+            let lastWritten = scroller.scrollTop;
             const apply = (): void => {
-                scroller.scrollTop = top;
+                const next = anchoredScrollTop({
+                    scrollTop: scroller.scrollTop,
+                    anchorOffset: this.anchorOffset(scroller, anchor),
+                    targetOffset,
+                    maxScrollTop: scroller.scrollHeight - scroller.clientHeight,
+                });
+                if (needsScrollAdjust(scroller.scrollTop, next)) {
+                    scroller.scrollTop = next;
+                }
+                lastWritten = scroller.scrollTop;
             };
             apply();
-            window.requestAnimationFrame(() => {
-                apply();
-                window.requestAnimationFrame(apply);
-            });
-            window.setTimeout(apply, 0);
+            // The section's final height usually lands *after* this call:
+            // task rows are filled in by an un-awaited MarkdownRenderer.render
+            // and the meetings table swaps in behind a calendar fetch. Until
+            // then the document can be short enough that the browser clamps
+            // the write — which is how a restore near the bottom of the
+            // dashboard used to lose the position outright. So keep
+            // re-anchoring while the height moves; each pass is measured
+            // afresh, so it converges to a no-op instead of oscillating.
+            this.watchScrollAnchor(el, scroller, apply, () => lastWritten);
         };
+    }
+
+    /**
+     * Re-applies `apply` while `el`'s height is still settling after a
+     * rebuild, then stops — at the latest after {@link SCROLL_SETTLE_MS}, and
+     * immediately if the scroller moved by anything other than our own last
+     * write (the user grabbing the wheel, scrollbar or keyboard mid-settle),
+     * so re-anchoring never fights a deliberate scroll.
+     */
+    private watchScrollAnchor(
+        el: HTMLElement,
+        scroller: HTMLElement,
+        apply: () => void,
+        lastWritten: () => number
+    ): void {
+        this.stopScrollAnchor(el);
+        let observer: ResizeObserver | null = null;
+        let timer = 0;
+        let done = false;
+        const stop = (): void => {
+            if (done) return;
+            done = true;
+            observer?.disconnect();
+            window.clearTimeout(timer);
+            scroller.removeEventListener("wheel", stop);
+            scroller.removeEventListener("touchmove", stop);
+            if (this.scrollAnchors.get(el) === stop) this.scrollAnchors.delete(el);
+        };
+        const settle = (): void => {
+            if (done) return;
+            if (isForeignScroll(scroller.scrollTop, lastWritten())) {
+                stop();
+                return;
+            }
+            apply();
+        };
+        if (typeof ResizeObserver !== "undefined") {
+            observer = new ResizeObserver(settle);
+            observer.observe(el);
+        }
+        // A late reflow that leaves `el`'s own box alone (a clamp lifting as
+        // the rest of the document grows) never trips the observer, so give
+        // it one plain frame too.
+        window.requestAnimationFrame(settle);
+        timer = window.setTimeout(stop, SCROLL_SETTLE_MS);
+        scroller.addEventListener("wheel", stop, { passive: true });
+        scroller.addEventListener("touchmove", stop, { passive: true });
+        this.scrollAnchors.set(el, stop);
+    }
+
+    /** Stops the settle loop for one section (no-op when none is running). */
+    private stopScrollAnchor(el: HTMLElement): void {
+        this.scrollAnchors.get(el)?.();
+    }
+
+    /** Stops every settle loop — `onunload` and dashboard teardown. */
+    private stopAllScrollAnchors(): void {
+        for (const stop of [...this.scrollAnchors.values()]) stop();
+        this.scrollAnchors.clear();
     }
 
     /** Opens a file in the active tab (used by dashboard row links/buttons). */

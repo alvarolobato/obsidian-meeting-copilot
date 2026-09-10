@@ -667,17 +667,6 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         containerEl.empty();
         containerEl.addClass("meeting-copilot-settings");
 
-        // Version / build provenance. Release builds show just the version; a
-        // local/custom build also shows commit·branch·date so it's obvious the
-        // vault isn't running an official release.
-        containerEl
-            .createEl("div", { cls: "meeting-copilot-version" })
-            .setText(
-                `${this.plugin.manifest.name} v${describeVersion(
-                    this.plugin.manifest.version,
-                    s.settings.customBuild
-                )}`
-            );
         // Opening (or re-rendering) the tab is a fresh chance to auto-probe:
         // clear the per-session "already probed" guard so a verdict invalidated
         // at runtime (e.g. diarization found no timestamps) is re-checked here
@@ -712,6 +701,21 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                 break;
         }
         this.restoreOpenDetails();
+
+        // Version / build provenance. Release builds show just the version; a
+        // local/custom build also shows commit·branch·date so it's obvious the
+        // vault isn't running an official release. Rendered last, below the
+        // pane: it's reference information you go looking for, and above the
+        // tabs it pushed the whole pane down and read like a heading for them.
+        containerEl
+            .createEl("div", { cls: "meeting-copilot-version" })
+            .setText(
+                `${this.plugin.manifest.name} v${describeVersion(
+                    this.plugin.manifest.version,
+                    s.settings.customBuild
+                )}`
+            );
+
         containerEl.scrollTop = scrollTop;
     }
 

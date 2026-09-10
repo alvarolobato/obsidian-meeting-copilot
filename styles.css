@@ -246,9 +246,11 @@
 /* Horizontal tabs for the settings sections. */
 .meeting-copilot-settings .mc-settings-tab-bar {
 	display: flex;
+	/* Still allowed to wrap so a narrow pane degrades to two rows rather than
+	 * clipping tabs; the tighter spacing below is what keeps it on one. */
 	flex-wrap: wrap;
-	gap: 2px;
-	margin: var(--size-4-3) 0 var(--size-4-4);
+	gap: 0;
+	margin: 0 0 var(--size-4-4);
 	border-bottom: 1px solid var(--background-modifier-border);
 	padding-bottom: 0;
 }
@@ -264,7 +266,9 @@
 	cursor: pointer;
 	font-size: var(--font-ui-small);
 	margin-bottom: -1px;
-	padding: var(--size-4-2) var(--size-4-3);
+	padding: var(--size-4-2) var(--size-4-2);
+	/* A label must never break mid-word into a second line of its own. */
+	white-space: nowrap;
 }
 
 .meeting-copilot-settings .mc-settings-tab:hover {
@@ -1633,10 +1637,11 @@ ul.mc-action-tasks {
 .mc-rename-input {
 	width: 100%;
 }
+/* Build provenance, rendered last so the tab bar is the pane's first element. */
 .meeting-copilot-version {
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
-	margin-bottom: var(--size-4-4);
+	margin-top: var(--size-4-4);
 }
 
 /* Advanced credentials collapsible */
