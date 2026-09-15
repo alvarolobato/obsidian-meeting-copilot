@@ -90,7 +90,7 @@
 				scopes below is requested <strong>only</strong> when you enable its toggle under
 				<em>Settings → Google → Advanced → Optional permissions</em>. Turn a toggle off
 				and that scope is never requested at sign-in; turn one back on and you must
-				re-authenticate before Google grants it. All three are read-only, and the plugin
+				re-authenticate before Google grants it. Both are read-only, and the plugin
 				works fine without any of them — attendees simply show a name derived from their
 				email address.
 			</p>
@@ -110,12 +110,6 @@
 						<td>“Resolve attendee names from your Workspace directory”</td>
 						<td>Read display names from your organization's Google Workspace directory</td>
 						<td>Look up a real display name for attendees your calendar invite doesn't already label. Only returns data for people inside your own Workspace domain, and some Workspace admins disable it for third-party apps entirely.</td>
-					</tr>
-					<tr>
-						<td><code>contacts.other.readonly</code></td>
-						<td>“Resolve attendee names from Google &quot;Other contacts&quot;”</td>
-						<td>Read display names from your own “Other contacts” (auto-populated from your Gmail correspondence)</td>
-						<td>A second, independent source for attendee display names, useful when the directory lookup above is blocked by a Workspace admin. Read-only — the plugin never adds, edits, or deletes contacts.</td>
 					</tr>
 				</tbody>
 			</table>
@@ -222,8 +216,8 @@
 				including any data aggregated, anonymized, or derived from those scopes — will
 				not be used to develop, improve, or train generalized AI or ML models. This
 				applies to all data obtained via <code>calendar.readonly</code>,
-				<code>directory.readonly</code>, <code>cloud-identity.groups.readonly</code>, and
-				<code>contacts.other.readonly</code>.
+				<code>directory.readonly</code>, and
+				<code>cloud-identity.groups.readonly</code>.
 			</p>
 		</div>
 	</main>

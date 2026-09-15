@@ -360,7 +360,8 @@ export const en = {
 			empty: "No open action items.",
 			loading: "Scanning notes…",
 			taskMoved: "That task has changed in its note; refreshing.",
-			taskError: (msg: string) => `Couldn't complete the task: ${msg}`,
+			// Covers ticking *and* un-ticking, so it stays state-neutral.
+			taskError: (msg: string) => `Couldn't update the task: ${msg}`,
 		},
 		followups: {
 			count: (n: number) =>
@@ -373,7 +374,7 @@ export const en = {
 			hideOlder: "Hide older",
 			taskMoved: "That follow-up has changed in its note; refreshing.",
 			taskError: (msg: string) =>
-				`Couldn't complete the follow-up: ${msg}`,
+				`Couldn't update the follow-up: ${msg}`,
 		},
 		// The "Notes with issues" catch-all — anything "Past meetings" won't
 		// show because it's aged out of the recency window: a broken date, a
@@ -491,9 +492,16 @@ export const en = {
 			name: "Suggest a title for unplanned meetings",
 			desc: "When enriching an unplanned (ad-hoc or detected) meeting, ask the same LLM call for a title and offer to rename the note, keeping the date prefix. Scheduled meetings keep their calendar title.",
 		},
+		// Kept terse on purpose: seven tabs have to sit on one row in the
+		// settings pane, and wrapping onto a second row pushed the content down
+		// and read as a separate group rather than a continuation. Shortening
+		// "AI backend" to "AI", together with the tighter tab spacing in
+		// styles.css, buys enough width for the row without having to abbreviate
+		// "Recording & notes" — which names two distinct things the tab covers,
+		// so it doesn't shorten cleanly.
 		tabs: {
 			general: "General",
-			aiBackend: "AI backend",
+			aiBackend: "AI",
 			calendar: "Calendar",
 			detection: "Detection",
 			recording: "Recording & notes",
@@ -540,10 +548,6 @@ export const en = {
 		scopeDirectory: {
 			name: "Resolve attendee names from your Workspace directory",
 			desc: "Looks up a real display name for attendees your calendar invite doesn't already label (e.g. a bare email address). Uses the People API's directory scope (`directory.readonly`) — some Workspace domains disable this for third-party apps regardless of this setting. Off: those attendees show a name guessed from their email address instead.",
-		},
-		scopeOtherContacts: {
-			name: "Resolve attendee names from Google \"Other contacts\"",
-			desc: "A second, independent source for attendee display names — your own auto-populated Gmail correspondence history, not your organization's directory — useful when the directory lookup above is blocked by a Workspace admin. Uses the People API's other-contacts scope (`contacts.other.readonly`). Off: those attendees show a name guessed from their email address instead.",
 		},
 		scopeReauthNeeded: "Re-authenticate above to grant this — your current sign-in predates it.",
 		calendarAutoRecord: {

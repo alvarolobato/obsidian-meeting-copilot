@@ -46,7 +46,6 @@ import {
 import * as path from "path";
 import * as fs from "fs";
 import {
-	CONTACTS_OTHER_READONLY_SCOPE,
 	CredentialsMissingError,
 	DIRECTORY_READONLY_SCOPE,
 	GoogleOAuth,
@@ -119,12 +118,14 @@ import {
     parseNoteTasks,
     sortActionNoteGroups,
     splitByHorizon,
+    setTaskLineDone,
     taskAgeDays,
     tasksOutsideHeadings,
     type ActionGroupCategory,
     type ActionNoteGroup,
     type GroupedTask,
 } from "./notes/dashboardActions";
+import { parseFrontmatter } from "./notes/frontmatter";
 import {
     findNoteIssues,
     inferIdentityFromSiblings,
@@ -151,11 +152,9 @@ import {
 	createPeopleDirectory,
 	PersonNameCache,
 } from "./calendar/personDirectory";
-import { syncOtherContacts } from "./calendar/otherContactsSync";
 import {
 	DIRECTORY_CACHE_FILENAME,
 	DirectoryCache,
-	OTHER_CONTACTS_RESYNC_INTERVAL_MS,
 	PEOPLE_MAX_REQUESTS_PER_MINUTE,
 	PeopleApiRateLimiter,
 } from "./calendar/directoryCache";
@@ -247,6 +246,11 @@ import {
     DASHBOARD_ICON,
 } from "./ui/dashboard/MeetingDashboardView";
 import {
+    anchoredScrollTop,
+    isForeignScroll,
+    needsScrollAdjust,
+} from "./ui/dashboard/scrollAnchor";
+import {
     populateMeetingMenu,
     RowHandlers,
 } from "./ui/agenda/components/eventRow";
@@ -314,6 +318,14 @@ const FVAD_PROVISION_TIMEOUT_MS = 15_000;
  * `silenceAutoStopMinutes` cap (`checkSilenceAutoStop`).
  */
 const AUTO_STOP_WARNING_SECONDS = 30;
+
+/**
+ * How long a re-rendered dashboard section keeps re-anchoring its scroll
+ * position while its height settles (see `preserveScroll`). Long enough to
+ * cover the un-awaited markdown render of a page of task rows, short enough
+ * that nothing keeps touching the scroller once the user has moved on.
+ */
+const SCROLL_SETTLE_MS = 400;
 
 export default class SystemRecordingPlugin extends Plugin {
     settings: SystemRecordingSettings;
@@ -391,9 +403,6 @@ export default class SystemRecordingPlugin extends Plugin {
 				const scopes: string[] = [];
 				if (this.settings.scopeGroupsEnabled) scopes.push(GROUPS_READONLY_SCOPE);
 				if (this.settings.scopeDirectoryEnabled) scopes.push(DIRECTORY_READONLY_SCOPE);
-				if (this.settings.scopeOtherContactsEnabled) {
-					scopes.push(CONTACTS_OTHER_READONLY_SCOPE);
-				}
 				return scopes;
 			},
 		},
@@ -502,8 +511,6 @@ export default class SystemRecordingPlugin extends Plugin {
 	>();
 	/** Bumped to cancel an in-flight background expansion when a newer fetch wins. */
 	private groupExpandGeneration = 0;
-	/** Guards against overlapping otherContacts syncs (see scheduleOtherContactsSync). */
-	private otherContactsSyncInFlight = false;
 	private agendaEvents = new TypedEventBus<AgendaViewEvents>();
 
     async onload() {
@@ -613,6 +620,8 @@ export default class SystemRecordingPlugin extends Plugin {
 			name: t().commands.showWelcome,
 			callback: () => this.showWelcomeScreen(),
 		});
+
+        this.installDevConsole();
 
 		this.addCommand({
 			id: "authenticate-google-calendar",
@@ -805,7 +814,58 @@ export default class SystemRecordingPlugin extends Plugin {
 		});
 	}
 
+    /**
+     * Developer-console helpers, reachable only by typing `_mcDev` into
+     * Obsidian's DevTools (Cmd+Opt+I). Deliberately not a command, ribbon
+     * action, or setting — these exist for demo/debug work (notably recording
+     * the Google verification video, where a ~365-day cached name makes a
+     * "scope turned off" shot indistinguishable from a cache hit) and would
+     * only confuse a normal user.
+     *
+     * Nothing here persists: every flag resets on reload.
+     */
+    private installDevConsole(): void {
+        const api = {
+            /**
+             * Ignore cached directory/group lookups so each refresh re-queries
+             * Google. Other-contacts names are untouched — they only arrive
+             * via the daily bulk sync, so hiding them would disable the
+             * feature rather than force a re-fetch.
+             */
+            disableCache: (on = true): string => {
+                this.directoryCache.bypass = on;
+                // Session caches short-circuit before the persistent one, so
+                // they have to go too or the first refresh still replays names.
+                this.resetGroupAttendeeExpansion();
+                this.agendaEvents.emit("changed", undefined);
+                return `[Meeting Copilot] directory cache bypass ${
+                    on ? "ON — every refresh re-queries Google" : "OFF"
+                }`;
+            },
+            /** Wipe cached names and groups outright. */
+            clearCache: (): string => {
+                this.directoryCache.clearAll();
+                void this.directoryCache.flush();
+                this.resetGroupAttendeeExpansion();
+                this.agendaEvents.emit("changed", undefined);
+                return "[Meeting Copilot] directory cache cleared";
+            },
+            /** Current cache size, bypass state, and which scopes are granted. */
+            status: () => ({
+                bypass: this.directoryCache.bypass,
+                people: this.directoryCache.people.size,
+                groups: this.directoryCache.groups.size,
+                scopes: {
+                    groups: this.oauth.hasScope(GROUPS_READONLY_SCOPE),
+                    directory: this.oauth.hasScope(DIRECTORY_READONLY_SCOPE),
+                },
+            }),
+        };
+        (window as unknown as Record<string, unknown>)._mcDev = api;
+    }
+
     onunload() {
+        delete (window as unknown as Record<string, unknown>)._mcDev;
         if (this.recorder.isRecording) {
             this.recorder.stop();
         }
@@ -833,6 +893,7 @@ export default class SystemRecordingPlugin extends Plugin {
 		this.agendaEvents.clear();
 		for (const renderer of this.liveActionRenderers) renderer.unload();
 		this.liveActionRenderers.clear();
+		this.stopAllScrollAnchors();
 		for (const controller of this.meetingNotices.values())
 			controller.dispose();
 		this.meetingNotices.clear();
@@ -2546,39 +2607,6 @@ export default class SystemRecordingPlugin extends Plugin {
 		}
 	}
 
-	/**
-	 * Kicks off a background otherContacts sync (display names for people
-	 * you've corresponded with over Gmail — see `otherContactsSync.ts`) at
-	 * most once per {@link OTHER_CONTACTS_RESYNC_INTERVAL_MS}. No-ops when
-	 * the setting is off, not authenticated, already mid-sync, or the user
-	 * hasn't re-consented to the scope yet (setting just turned on, or an
-	 * old install predates it).
-	 */
-	private scheduleOtherContactsSync(): void {
-		if (!this.settings.scopeOtherContactsEnabled) return;
-		if (!this.isCalendarAuthenticated()) return;
-		if (this.otherContactsSyncInFlight) return;
-		if (!this.oauth.hasScope(CONTACTS_OTHER_READONLY_SCOPE)) return;
-		if (
-			Date.now() - this.directoryCache.otherContactsSyncedAt <
-			OTHER_CONTACTS_RESYNC_INTERVAL_MS
-		) {
-			return;
-		}
-		this.otherContactsSyncInFlight = true;
-		syncOtherContacts(this.oauth, this.directoryCache, this.peopleRateLimiter)
-			.then((result) => {
-				if (result.updated > 0) this.agendaEvents.emit("changed", undefined);
-			})
-			.catch((err) => {
-				mcLog("otherContacts", "sync failed", {
-					error: err instanceof Error ? err.message : String(err),
-				});
-			})
-			.finally(() => {
-				this.otherContactsSyncInFlight = false;
-			});
-	}
 
 	/**
 	 * Await expansion for a single meeting before writing a note so attendees
@@ -3090,12 +3118,19 @@ export default class SystemRecordingPlugin extends Plugin {
         };
     }
 
-    /** True when a note carries meeting frontmatter we can act on. */
-    private isMeetingNote(file: TFile): boolean {
+    /**
+     * True when a note carries meeting frontmatter we can act on. Callers that
+     * have already read the note pass its frontmatter in (`fm`) so the answer
+     * doesn't depend on the metadata cache having caught up with the last
+     * write — see {@link parseFrontmatter}.
+     */
+    private isMeetingNote(
+        file: TFile,
+        fm: Record<string, unknown> | undefined = this.app.metadataCache.getFileCache(
+            file
+        )?.frontmatter as Record<string, unknown> | undefined
+    ): boolean {
         if (file.extension !== "md") return false;
-        const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as
-            | Record<string, unknown>
-            | undefined;
         if (!fm) return false;
         const nonEmpty = (k: string): boolean => {
             const v = fm[k];
@@ -3117,12 +3152,14 @@ export default class SystemRecordingPlugin extends Plugin {
      * never gets `event_id`/`meeting_url`/`recording` — but is still a real
      * meeting note worth offering a "Fix meeting metadata" identity fix for.
      */
-    private looksLikeMeetingNote(file: TFile): boolean {
-        if (this.isMeetingNote(file)) return true;
+    private looksLikeMeetingNote(
+        file: TFile,
+        fm: Record<string, unknown> | undefined = this.app.metadataCache.getFileCache(
+            file
+        )?.frontmatter as Record<string, unknown> | undefined
+    ): boolean {
+        if (this.isMeetingNote(file, fm)) return true;
         if (file.extension !== "md") return false;
-        const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as
-            | Record<string, unknown>
-            | undefined;
         const granolaId = fm?.["granola_id"];
         return typeof granolaId === "string" && granolaId.trim().length > 0;
     }
@@ -4117,6 +4154,13 @@ export default class SystemRecordingPlugin extends Plugin {
     private liveActionRenderers: Set<Component> = new Set();
 
     /**
+     * Per-section "stop re-anchoring" handles from {@link watchScrollAnchor}.
+     * A plain Map (not a WeakMap) so `onunload` can drain it; entries remove
+     * themselves as each settle loop finishes, so it stays tiny.
+     */
+    private scrollAnchors: Map<HTMLElement, () => void> = new Map();
+
+    /**
      * Monotonic render id per dashboard block element. Async renders (calendar
      * fetch, vault scan) capture the id at start and bail before mutating the
      * DOM if a newer render superseded them — so fast paging/Refresh can't let
@@ -4796,37 +4840,39 @@ export default class SystemRecordingPlugin extends Plugin {
                 cls: "mc-action-task-check",
                 type: "checkbox",
             });
-            if (task.done) {
-                cb.checked = true;
+            cb.checked = task.done;
+            // A task ticked here stays listed for the rest of the day (its
+            // grace period), so the checkbox has to work both ways — ticking
+            // one and immediately realising it was the wrong row is exactly
+            // when un-ticking is needed.
+            cb.onclick = (): void => {
+                const nowDone = cb.checked;
                 cb.disabled = true;
-            } else {
-                cb.onclick = (): void => {
-                    cb.disabled = true;
-                    void (async (): Promise<void> => {
-                        try {
-                            await this.completeTask(
-                                task.path,
-                                task,
-                                opts.strings.taskMoved
-                            );
-                        } catch (e) {
-                            cb.disabled = false;
-                            cb.checked = false;
-                            new Notice(
-                                opts.strings.taskError(
-                                    e instanceof Error ? e.message : String(e)
-                                )
-                            );
-                            return;
-                        }
-                        await this.renderTaskSection(sectionEl, {
-                            ...opts,
-                            page,
-                            force: true,
-                        });
-                    })();
-                };
-            }
+                void (async (): Promise<void> => {
+                    try {
+                        await this.setTaskDone(
+                            task.path,
+                            task,
+                            nowDone,
+                            opts.strings.taskMoved
+                        );
+                    } catch (e) {
+                        cb.disabled = false;
+                        cb.checked = !nowDone;
+                        new Notice(
+                            opts.strings.taskError(
+                                e instanceof Error ? e.message : String(e)
+                            )
+                        );
+                        return;
+                    }
+                    await this.renderTaskSection(sectionEl, {
+                        ...opts,
+                        page,
+                        force: true,
+                    });
+                })();
+            };
             // A group can aggregate tasks from several notes (every occurrence
             // of a recurring series, or every one-on-one instance) — the
             // header link above only opens the group's *most recent* note, so
@@ -4940,6 +4986,17 @@ export default class SystemRecordingPlugin extends Plugin {
             } catch {
                 continue;
             }
+            // Same reason the pre-filter above fails open: right after this
+            // plugin writes to a note (ticking a task is exactly that), its
+            // metadata-cache entry can be gone for a beat. Frontmatter drives
+            // the note's *identity* here — 1:1 partner, recurring series,
+            // date, title — so an empty cache entry would silently demote the
+            // note to an unrelated "ad-hoc" group of its own, making its tasks
+            // vanish from the 1:1/series section until the next scan put them
+            // back. Fall back to the frontmatter in the content we just read.
+            const fm =
+                (cache?.frontmatter as Record<string, unknown> | undefined) ??
+                parseFrontmatter(content);
             // The unsectioned-task fallback is gated to notes that already
             // look like meeting notes (including a Granola-style import,
             // which is what it exists for) — without this, any open
@@ -4951,7 +5008,7 @@ export default class SystemRecordingPlugin extends Plugin {
                 mode === "actions"
                     ? [
                           ...parseNoteTasks(content, today, ACTION_ITEMS_HEADING),
-                          ...(this.looksLikeMeetingNote(file)
+                          ...(this.looksLikeMeetingNote(file, fm)
                               ? tasksOutsideHeadings(content, today, [
                                     ACTION_ITEMS_HEADING,
                                     FOLLOW_UPS_HEADING,
@@ -4961,9 +5018,6 @@ export default class SystemRecordingPlugin extends Plugin {
                     : parseNoteTasks(content, today, FOLLOW_UPS_HEADING);
             if (rawTasks.length === 0) continue;
 
-            const fm = cache?.frontmatter as
-                | Record<string, unknown>
-                | undefined;
             const str = (k: string): string => {
                 const v = fm?.[k];
                 return typeof v === "string" ? v.trim() : "";
@@ -5073,16 +5127,18 @@ export default class SystemRecordingPlugin extends Plugin {
     }
 
     /**
-     * Marks a scanned task done in its source note. The captured line index is
-     * used when it still holds the task; otherwise the original line text is
-     * located afresh (the note may have changed since the scan). The first
-     * `[ ]` checkbox on that line becomes `[x]` and a `✅ YYYY-MM-DD` completion
-     * date (today) is appended — Obsidian-Tasks compatible, and what the
-     * dashboard reads to keep the item visible until that day is over.
+     * Sets a scanned task's done state in its source note, both ways: ticking
+     * writes `[x]` plus a `✅ YYYY-MM-DD` completion date (today), un-ticking
+     * restores `[ ]` and strips that date again — Obsidian-Tasks compatible,
+     * and what the dashboard reads to keep a just-ticked item visible until
+     * the day is over. The captured line index is used when it still holds the
+     * task; otherwise the original line text is located afresh (the note may
+     * have changed since the scan).
      */
-    private async completeTask(
+    private async setTaskDone(
         path: string,
         task: GroupedTask,
+        done: boolean,
         movedNotice = t().dashboard.actions.taskMoved
     ): Promise<void> {
         const file = this.app.vault.getAbstractFileByPath(path);
@@ -5096,25 +5152,8 @@ export default class SystemRecordingPlugin extends Plugin {
             new Notice(movedNotice);
             return;
         }
-        const checked = lines[idx]!.replace(/\[[^\]]\]/, "[x]");
-        lines[idx] = this.appendCompletionDate(checked, this.todayStamp());
+        lines[idx] = setTaskLineDone(lines[idx]!, done, this.todayStamp());
         await this.app.vault.modify(file, lines.join("\n"));
-    }
-
-    /**
-     * Appends a `✅ YYYY-MM-DD` completion date to a task line, unless it
-     * already has one. A trailing block reference (` ^id`) is kept at the end
-     * of the line (Obsidian requires it there) with the date inserted before.
-     */
-    private appendCompletionDate(line: string, dateStr: string): string {
-        if (/✅\s*\d{4}-\d{2}-\d{2}/.test(line)) return line;
-        const mark = `✅ ${dateStr}`;
-        const ref = line.match(/(\s+\^[A-Za-z0-9-]+)\s*$/);
-        if (ref) {
-            const head = line.slice(0, line.length - ref[0].length).trimEnd();
-            return `${head} ${mark}${ref[0]}`;
-        }
-        return `${line.trimEnd()} ${mark}`;
     }
 
     /** Nearest scrollable ancestor of an element (the markdown view's scroller). */
@@ -5133,33 +5172,136 @@ export default class SystemRecordingPlugin extends Plugin {
         return null;
     }
 
+    /** Distance from the scroller's top edge to an element's top edge, in px. */
+    private anchorOffset(scroller: HTMLElement, anchor: HTMLElement): number {
+        return (
+            anchor.getBoundingClientRect().top -
+            scroller.getBoundingClientRect().top
+        );
+    }
+
     /**
-     * Snapshots the section's scroll position and returns a fn that restores
-     * it. Re-rendering a dashboard section empties and rebuilds its element,
-     * which otherwise makes the view jump (usually to the top) on a task tick,
-     * a page change, or Refresh; call the returned fn once the new content is
-     * in place. The rAF re-apply covers async renders whose height settles a
-     * frame later.
+     * The element a re-rendered section should stay pinned to: its pagination
+     * toolbar when it has one, else the section itself.
+     *
+     * The toolbar is what the user is actually looking at when a section
+     * re-renders — it holds Prev/Next, the page indicator and the per-page
+     * dropdown, so it's under the pointer for every page change — and, being
+     * the last child, it sits *below* the rows whose number and height just
+     * changed. Anchoring the section's top edge instead is exactly what let
+     * it slide.
+     */
+    private scrollAnchorEl(el: HTMLElement): HTMLElement {
+        return (
+            el.querySelector<HTMLElement>(":scope > .mc-dash-toolbar") ?? el
+        );
+    }
+
+    /**
+     * Snapshots where the section sits in the viewport and returns a fn that
+     * puts it back once the new content is in place. Re-rendering a dashboard
+     * section empties and rebuilds its element, which otherwise makes the view
+     * jump on a task tick, a page change, or Refresh.
+     *
+     * The restore is *relative*, not absolute: it measures how far the anchor
+     * ({@link scrollAnchorEl}) drifted and nudges `scrollTop` by that much.
+     * A page turn changes the section's height — a last page with three rows
+     * instead of ten, task text wrapping onto a second line, a new per-page
+     * size — and re-applying the old absolute `scrollTop` pins the section's
+     * top edge while everything from the rows down slides by the delta.
      */
     private preserveScroll(el: HTMLElement): () => void {
         const scroller = this.scrollParent(el);
-        const top = scroller ? scroller.scrollTop : 0;
+        if (!scroller) return (): void => {};
+        const targetOffset = this.anchorOffset(scroller, this.scrollAnchorEl(el));
+        // Whatever the previous render left re-anchoring is now stale — its
+        // target predates this snapshot, so let it not fight the new one.
+        this.stopScrollAnchor(el);
         return (): void => {
-            if (!scroller) return;
-            // Re-apply across the next few frames (and a macrotask): async
-            // markdown rendering in the action list settles its height a frame
-            // or two after the initial rebuild, and a single restore would be
-            // undone by that late reflow — leaving the view jumped.
+            const anchor = this.scrollAnchorEl(el);
+            let lastWritten = scroller.scrollTop;
             const apply = (): void => {
-                scroller.scrollTop = top;
+                const next = anchoredScrollTop({
+                    scrollTop: scroller.scrollTop,
+                    anchorOffset: this.anchorOffset(scroller, anchor),
+                    targetOffset,
+                    maxScrollTop: scroller.scrollHeight - scroller.clientHeight,
+                });
+                if (needsScrollAdjust(scroller.scrollTop, next)) {
+                    scroller.scrollTop = next;
+                }
+                lastWritten = scroller.scrollTop;
             };
             apply();
-            window.requestAnimationFrame(() => {
-                apply();
-                window.requestAnimationFrame(apply);
-            });
-            window.setTimeout(apply, 0);
+            // The section's final height usually lands *after* this call:
+            // task rows are filled in by an un-awaited MarkdownRenderer.render
+            // and the meetings table swaps in behind a calendar fetch. Until
+            // then the document can be short enough that the browser clamps
+            // the write — which is how a restore near the bottom of the
+            // dashboard used to lose the position outright. So keep
+            // re-anchoring while the height moves; each pass is measured
+            // afresh, so it converges to a no-op instead of oscillating.
+            this.watchScrollAnchor(el, scroller, apply, () => lastWritten);
         };
+    }
+
+    /**
+     * Re-applies `apply` while `el`'s height is still settling after a
+     * rebuild, then stops — at the latest after {@link SCROLL_SETTLE_MS}, and
+     * immediately if the scroller moved by anything other than our own last
+     * write (the user grabbing the wheel, scrollbar or keyboard mid-settle),
+     * so re-anchoring never fights a deliberate scroll.
+     */
+    private watchScrollAnchor(
+        el: HTMLElement,
+        scroller: HTMLElement,
+        apply: () => void,
+        lastWritten: () => number
+    ): void {
+        this.stopScrollAnchor(el);
+        let observer: ResizeObserver | null = null;
+        let timer = 0;
+        let done = false;
+        const stop = (): void => {
+            if (done) return;
+            done = true;
+            observer?.disconnect();
+            window.clearTimeout(timer);
+            scroller.removeEventListener("wheel", stop);
+            scroller.removeEventListener("touchmove", stop);
+            if (this.scrollAnchors.get(el) === stop) this.scrollAnchors.delete(el);
+        };
+        const settle = (): void => {
+            if (done) return;
+            if (isForeignScroll(scroller.scrollTop, lastWritten())) {
+                stop();
+                return;
+            }
+            apply();
+        };
+        if (typeof ResizeObserver !== "undefined") {
+            observer = new ResizeObserver(settle);
+            observer.observe(el);
+        }
+        // A late reflow that leaves `el`'s own box alone (a clamp lifting as
+        // the rest of the document grows) never trips the observer, so give
+        // it one plain frame too.
+        window.requestAnimationFrame(settle);
+        timer = window.setTimeout(stop, SCROLL_SETTLE_MS);
+        scroller.addEventListener("wheel", stop, { passive: true });
+        scroller.addEventListener("touchmove", stop, { passive: true });
+        this.scrollAnchors.set(el, stop);
+    }
+
+    /** Stops the settle loop for one section (no-op when none is running). */
+    private stopScrollAnchor(el: HTMLElement): void {
+        this.scrollAnchors.get(el)?.();
+    }
+
+    /** Stops every settle loop — `onunload` and dashboard teardown. */
+    private stopAllScrollAnchors(): void {
+        for (const stop of [...this.scrollAnchors.values()]) stop();
+        this.scrollAnchors.clear();
     }
 
     /** Opens a file in the active tab (used by dashboard row links/buttons). */
@@ -5265,7 +5407,6 @@ export default class SystemRecordingPlugin extends Plugin {
         );
         this.applyCachedExpandedAttendees(events);
         this.scheduleGroupAttendeeExpand(events);
-        this.scheduleOtherContactsSync();
         const index = buildNoteIndex(
             this.app,
             scanMeetingNotes(this.app, this.excludedFolderPatterns())
@@ -5832,7 +5973,7 @@ export default class SystemRecordingPlugin extends Plugin {
     private async launchTranscriber(
         recording: TFile,
         mode: TranscribeMode = "auto",
-        opts: { fresh?: boolean; enrichAfter?: boolean } = {}
+        opts: { fresh?: boolean; enrichAfter?: boolean; note?: TFile } = {}
     ): Promise<void> {
         // "fresh" = the auto-transcribe fired right after a stop (vs. a manual
         // re-transcribe). The fresh path appends its transcript to any existing
@@ -5894,7 +6035,10 @@ export default class SystemRecordingPlugin extends Plugin {
             this.settings.enableEnrichment &&
             (opts.enrichAfter || this.settings.enrichOnTranscribe);
         if (shouldEnrich) {
-            const note = findMeetingNoteForAudio(this.app, recording);
+            // Prefer the caller-supplied note (avoids a metadataCache race on
+            // the auto-transcribe path where the note's recording frontmatter
+            // may not have been re-indexed by the time this runs — #note-race).
+            const note = opts.note ?? findMeetingNoteForAudio(this.app, recording);
             if (note) {
                 void this.enqueueEnrichTask(note, {
                     dependsOn: recording.path,
@@ -8246,6 +8390,7 @@ export default class SystemRecordingPlugin extends Plugin {
                             }
                             return this.launchTranscriber(audio, "auto", {
                                 fresh: true,
+                                note: file,
                             });
                         })
                         .catch((e) => {

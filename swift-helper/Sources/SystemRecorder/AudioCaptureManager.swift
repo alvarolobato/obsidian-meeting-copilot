@@ -34,6 +34,13 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
     /// Non-fatal capture warnings (e.g. a device-change restart that failed).
     /// The recording keeps going; the plugin surfaces these for visibility.
     var onWarning: ((String) -> Void)?
+    /// Fired from `fallBackToDefaultInputDevice` just before the replacement
+    /// mic engine starts, with how many seconds of mic timeline have elapsed
+    /// since the first engine came up. The consumer must pad its mic stream
+    /// with silence to that position: the mixer aligns the two streams
+    /// positionally, so a mic timeline that restarts at frame 0 while system
+    /// audio is many seconds in would shift `.me` early for the whole meeting.
+    var onMicrophoneRebuilt: ((TimeInterval) -> Void)?
 
     /// Stable UID of the input device to record from. Nil/empty = the system
     /// default. Set before startCapture(); a UID that no longer resolves (the
@@ -74,6 +81,10 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
     /// so the watchdog can tell an intentionally-off mic from one that's
     /// installed but delivering nothing.
     private var micTapInstalled = false
+    /// When the first mic engine started delivering, i.e. where mic frame 0
+    /// sits on the wall clock. Restarts continue the same timeline, so this is
+    /// set once. Touched only on the control path (start / controlQueue).
+    private var micTimelineStart: Date?
     private var micRestarts = 0
     private var systemRestarts = 0
     private static let maxRestarts = 30
@@ -459,6 +470,7 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
         engine.prepare()
         try engine.start()
         self.audioEngine = engine
+        if micTimelineStart == nil { micTimelineStart = Date() }
         setMicTapInstalled(true)
     }
 
@@ -500,6 +512,59 @@ final class AudioCaptureManager: NSObject, SCStreamDelegate, @unchecked Sendable
             return false
         }
         return true
+    }
+
+    /// Drop the explicit input-device selection and rebuild the mic engine on
+    /// the system default.
+    ///
+    /// The watchdog calls this when an explicitly-selected device has delivered
+    /// zero frames: a live tap emits buffers continuously even in silence, so
+    /// zero means the tap never fired at all. Repointing a realized
+    /// `AVAudioEngine` input node at another device is the fragile part — the
+    /// node keeps the graph format it was realized with, and when that
+    /// disagrees with what the device actually produces, `installTap` accepts
+    /// the format and then silently delivers nothing (observed with a 16 kHz
+    /// USB headset against a 48 kHz graph; intermittent, so not something the
+    /// start path can reliably detect up front). The default-device path
+    /// doesn't take that risk because the engine negotiates it itself.
+    ///
+    /// Warning-only was the previous behavior and it left the user with a
+    /// one-sided recording for the rest of the meeting — no `.me` sidecar, so
+    /// no diarization. Recovering costs one engine rebuild and keeps the
+    /// speaker separation.
+    ///
+    /// Returns false when there was nothing to fall back from (no explicit
+    /// selection, or we're stopping) or the rebuild didn't leave a live tap
+    /// behind, so the caller can still warn.
+    ///
+    /// Runs entirely on controlQueue: `preferredInputDeviceUID` is read by
+    /// `startMicEngine` on every (re)start there, and serializing the teardown
+    /// + start with the config-change restarts and stopCapture's barrier means
+    /// a stop that wins the race tears down whatever this built (its barrier
+    /// waits for this block, then `teardownMicEngine` runs).
+    func fallBackToDefaultInputDevice() -> Bool {
+        controlQueue.sync {
+            guard capturing(), let uid = preferredInputDeviceUID, !uid.isEmpty else { return false }
+            preferredInputDeviceUID = nil
+            teardownMicEngine()
+            // The dead engine covered [micTimelineStart, now) with no frames.
+            // Hand that span to the consumer as silence BEFORE the replacement
+            // can deliver, so the mic stream stays positionally aligned with
+            // system audio (the mixer has no timestamps to realign on).
+            if let origin = micTimelineStart {
+                onMicrophoneRebuilt?(Date().timeIntervalSince(origin))
+            }
+            do {
+                try startMicEngine()
+            } catch {
+                onWarning?("Falling back to the system default microphone failed: \(error.localizedDescription)")
+                return false
+            }
+            // startMicEngine returns without a tap (and has already warned)
+            // when the default's format is unusable; don't report that as
+            // recovered.
+            return micTapActive()
+        }
     }
 
     private func teardownMicEngine() {

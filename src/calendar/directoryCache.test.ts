@@ -179,3 +179,64 @@ describe("PeopleApiRateLimiter", () => {
 		expect(seen).toEqual([[0], [0, 10]]);
 	});
 });
+
+describe("DirectoryCache bypass (dev console)", () => {
+	it("hides cached people so the next lookup goes to the network", () => {
+		const cache = new DirectoryCache(null, () => 1_000);
+		cache.setPerson("colleague@acme.com", "Sophie Chen");
+
+		expect(cache.getPerson("colleague@acme.com")?.name).toBe("Sophie Chen");
+		cache.bypass = true;
+		expect(cache.getPerson("colleague@acme.com")).toBeUndefined();
+	});
+
+	it("hides groups by email and by resource", () => {
+		const cache = new DirectoryCache(null, () => 1_000);
+		cache.setGroupMembers("team@acme.com", "groups/abc", [
+			{ email: "raj@acme.com", type: "USER" },
+		]);
+
+		expect(cache.getGroup("team@acme.com")).toBeDefined();
+		expect(cache.getGroupByResource("groups/abc")).toBeDefined();
+
+		cache.bypass = true;
+		expect(cache.getGroup("team@acme.com")).toBeUndefined();
+		expect(cache.getGroupByResource("groups/abc")).toBeUndefined();
+	});
+
+	it("only hides reads, so turning it off restores the warm cache", () => {
+		const cache = new DirectoryCache(null, () => 1_000);
+		cache.bypass = true;
+		cache.setPerson("colleague@acme.com", "Sophie Chen");
+		expect(cache.getPerson("colleague@acme.com")).toBeUndefined();
+
+		cache.bypass = false;
+		expect(cache.getPerson("colleague@acme.com")?.name).toBe("Sophie Chen");
+	});
+
+	it("does not persist — a cache loaded from disk starts unbypassed", async () => {
+		const store = memoryStore();
+		const write = new DirectoryCache(store, () => 1_000, 0);
+		write.bypass = true;
+		write.setPerson("colleague@acme.com", "Sophie Chen");
+		await write.flush();
+
+		const read = new DirectoryCache(store, () => 1_000, 0);
+		await read.load();
+		expect(read.bypass).toBe(false);
+		expect(read.getPerson("colleague@acme.com")?.name).toBe("Sophie Chen");
+	});
+});
+
+describe("DirectoryCache.clearAll", () => {
+	it("empties both maps", () => {
+		const cache = new DirectoryCache(null, () => 5_000);
+		cache.setPerson("colleague@acme.com", "Sophie Chen");
+		cache.setGroupMembers("team@acme.com", "groups/abc", []);
+
+		cache.clearAll();
+
+		expect(cache.people.size).toBe(0);
+		expect(cache.groups.size).toBe(0);
+	});
+});

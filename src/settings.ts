@@ -9,7 +9,6 @@ import {
 import type SystemRecordingPlugin from "./main";
 import type { InputDevice } from "./recorder";
 import {
-	CONTACTS_OTHER_READONLY_SCOPE,
 	DIRECTORY_READONLY_SCOPE,
 	GROUPS_READONLY_SCOPE,
 	type StoredTokens,
@@ -120,7 +119,6 @@ export interface SystemRecordingSettings {
 	 */
 	scopeGroupsEnabled: boolean;
 	scopeDirectoryEnabled: boolean;
-	scopeOtherContactsEnabled: boolean;
 	calendarAutoRecord: boolean;
 	/**
 	 * Automatically start recording at a calendar event's start, instead of only
@@ -373,7 +371,6 @@ export const DEFAULT_SETTINGS: SystemRecordingSettings = {
 	googleTokens: null,
 	scopeGroupsEnabled: OPTIONAL_SCOPES_DEFAULT,
 	scopeDirectoryEnabled: OPTIONAL_SCOPES_DEFAULT,
-	scopeOtherContactsEnabled: OPTIONAL_SCOPES_DEFAULT,
 	calendarAutoRecord: true,
 	calendarAutoStart: false,
 	calendarAutoStop: false,
@@ -679,17 +676,6 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         containerEl.empty();
         containerEl.addClass("meeting-copilot-settings");
 
-        // Version / build provenance. Release builds show just the version; a
-        // local/custom build also shows commit·branch·date so it's obvious the
-        // vault isn't running an official release.
-        containerEl
-            .createEl("div", { cls: "meeting-copilot-version" })
-            .setText(
-                `${this.plugin.manifest.name} v${describeVersion(
-                    this.plugin.manifest.version,
-                    s.settings.customBuild
-                )}`
-            );
         // Opening (or re-rendering) the tab is a fresh chance to auto-probe:
         // clear the per-session "already probed" guard so a verdict invalidated
         // at runtime (e.g. diarization found no timestamps) is re-checked here
@@ -724,6 +710,21 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                 break;
         }
         this.restoreOpenDetails();
+
+        // Version / build provenance. Release builds show just the version; a
+        // local/custom build also shows commit·branch·date so it's obvious the
+        // vault isn't running an official release. Rendered last, below the
+        // pane: it's reference information you go looking for, and above the
+        // tabs it pushed the whole pane down and read like a heading for them.
+        containerEl
+            .createEl("div", { cls: "meeting-copilot-version" })
+            .setText(
+                `${this.plugin.manifest.name} v${describeVersion(
+                    this.plugin.manifest.version,
+                    s.settings.customBuild
+                )}`
+            );
+
         containerEl.scrollTop = scrollTop;
     }
 
@@ -839,6 +840,38 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     });
             });
 
+        // Optional scopes live *outside* the Advanced block: they are the one
+        // part of this section a user is expected to change, and reaching them
+        // must never mean opening the panel that displays the Client ID and
+        // secret (which is also what gets shown on screen when demoing the
+        // consent flow).
+        new Setting(containerEl).setName(s.settings.optionalScopes.heading).setHeading();
+        containerEl.createEl("p", {
+            cls: "mc-optional-scopes-desc",
+            text: s.settings.optionalScopes.desc,
+        });
+
+        this.renderScopeToggle(containerEl, {
+            name: s.settings.scopeGroups.name,
+            desc: s.settings.scopeGroups.desc,
+            scope: GROUPS_READONLY_SCOPE,
+            get: () => this.plugin.settings.scopeGroupsEnabled,
+            set: (v) => {
+                this.plugin.settings.scopeGroupsEnabled = v;
+            },
+            reset: () => this.plugin.resetGroupAttendeeExpansion(),
+        });
+        this.renderScopeToggle(containerEl, {
+            name: s.settings.scopeDirectory.name,
+            desc: s.settings.scopeDirectory.desc,
+            scope: DIRECTORY_READONLY_SCOPE,
+            get: () => this.plugin.settings.scopeDirectoryEnabled,
+            set: (v) => {
+                this.plugin.settings.scopeDirectoryEnabled = v;
+            },
+            reset: () => this.plugin.resetGroupAttendeeExpansion(),
+        });
+
         // Advanced: credential overrides — expanded by default only when
         // there's no bundled Client ID/secret to fall back on (a community
         // build), so that user *must* find the fields immediately rather
@@ -886,42 +919,6 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                     });
             });
 
-        new Setting(advancedDetails).setName(s.settings.optionalScopes.heading).setHeading();
-        advancedDetails.createEl("p", {
-            cls: "mc-advanced-credentials-desc",
-            text: s.settings.optionalScopes.desc,
-        });
-
-        this.renderScopeToggle(advancedDetails, {
-            name: s.settings.scopeGroups.name,
-            desc: s.settings.scopeGroups.desc,
-            scope: GROUPS_READONLY_SCOPE,
-            get: () => this.plugin.settings.scopeGroupsEnabled,
-            set: (v) => {
-                this.plugin.settings.scopeGroupsEnabled = v;
-            },
-            reset: () => this.plugin.resetGroupAttendeeExpansion(),
-        });
-        this.renderScopeToggle(advancedDetails, {
-            name: s.settings.scopeDirectory.name,
-            desc: s.settings.scopeDirectory.desc,
-            scope: DIRECTORY_READONLY_SCOPE,
-            get: () => this.plugin.settings.scopeDirectoryEnabled,
-            set: (v) => {
-                this.plugin.settings.scopeDirectoryEnabled = v;
-            },
-            reset: () => this.plugin.resetGroupAttendeeExpansion(),
-        });
-        this.renderScopeToggle(advancedDetails, {
-            name: s.settings.scopeOtherContacts.name,
-            desc: s.settings.scopeOtherContacts.desc,
-            scope: CONTACTS_OTHER_READONLY_SCOPE,
-            get: () => this.plugin.settings.scopeOtherContactsEnabled,
-            set: (v) => {
-                this.plugin.settings.scopeOtherContactsEnabled = v;
-            },
-            reset: () => this.plugin.resetGroupAttendeeExpansion(),
-        });
 
         new Setting(containerEl)
             .setName(s.settings.notificationsHeading)

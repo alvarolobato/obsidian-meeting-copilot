@@ -5,6 +5,7 @@ import { TFile } from "obsidian";
 import {
 	WhisperCppBackend,
 	computeTrimStartSeconds,
+	sustainedSpeechStart,
 	type WhisperCppConfig,
 	type WhisperCppDeps,
 	type WhisperChildProcess,
@@ -28,6 +29,85 @@ describe("computeTrimStartSeconds", () => {
 
 	it("uses the earliest window regardless of array order", () => {
 		expect(computeTrimStartSeconds([[1000, 1010], [955, 960]])).toBe(925);
+	});
+
+	// The window shapes below are the real VAD output from a recording where
+	// this trim failed: the system stream's first window was a 1.1s bleep at
+	// 741s while the meeting began at 902s, and the mic stream opened with two
+	// short bursts before going quiet for ~15 minutes. Anchoring on the
+	// earliest window left ~6 minutes (system) / ~15 minutes (mic) of silence
+	// in front of the decode.
+	it("skips an isolated leading blip (real system-stream shape)", () => {
+		// A 1.1s bleep, ~2.5 minutes of nothing, then the meeting proper.
+		const windows: Array<[number, number]> = [
+			[741.39, 742.5],
+			[902.1, 904.0],
+			[908.6, 912.0],
+			[913.4, 921.0],
+			[922.2, 935.7],
+		];
+		expect(sustainedSpeechStart(windows)).toBe(902.1);
+		expect(computeTrimStartSeconds(windows)).toBeCloseTo(872.1);
+	});
+
+	it("skips several isolated leading blips (real mic-stream shape)", () => {
+		// Two bursts nine seconds apart, ~15 minutes of nothing, then the
+		// meeting proper (which keeps going — a couple of its windows suffice
+		// to make that stretch sustained).
+		const windows: Array<[number, number]> = [
+			[0.9, 2.1],
+			[11.2, 12.5],
+			[888.6, 897.5],
+			[897.7, 899.0],
+			[903.2, 911.8],
+			[915.0, 940.3],
+		];
+		expect(sustainedSpeechStart(windows)).toBe(888.6);
+		expect(computeTrimStartSeconds(windows)).toBeCloseTo(858.6);
+	});
+
+	it("keeps a long leading window even when a big gap follows", () => {
+		// 40s of real speech then a 10-minute lull is someone genuinely
+		// talking early — anchor on them, don't seek past.
+		expect(sustainedSpeechStart([[600, 640], [1240, 1250]])).toBe(600);
+	});
+
+	it("keeps a short leading window when more speech follows soon", () => {
+		expect(sustainedSpeechStart([[600, 602], [640, 700]])).toBe(600);
+	});
+
+	it("treats several nearby leading blips as one blip", () => {
+		// Three "hello?"s seconds apart still total under the sustained
+		// threshold, so the stretch as a whole is skipped.
+		expect(
+			sustainedSpeechStart([
+				[1, 3],
+				[8, 10],
+				[15, 17],
+				[900, 960],
+			])
+		).toBe(900);
+	});
+
+	it("falls back to the earliest stretch when none is sustained", () => {
+		// A mostly-listening participant: a few words every few minutes, never
+		// 15s in one stretch. Anchoring on any later blip would silently drop
+		// everything said before it, so this keeps the pre-heuristic anchor
+		// (and the full decode) instead.
+		const sparse: Array<[number, number]> = [
+			[10, 11],
+			[400, 403],
+			[900, 910],
+			[1500, 1502],
+		];
+		expect(sustainedSpeechStart(sparse)).toBe(10);
+		expect(computeTrimStartSeconds(sparse)).toBeUndefined();
+		expect(sustainedSpeechStart([[500, 501], [900, 901]])).toBe(500);
+	});
+
+	it("ignores non-finite windows", () => {
+		expect(sustainedSpeechStart([[Number.NaN, 5], [900, 940]])).toBe(900);
+		expect(sustainedSpeechStart([])).toBeUndefined();
 	});
 });
 

@@ -37,14 +37,13 @@ attendee names on your agenda instead of a raw email address. Each of the scopes
 below is requested **only** when you enable its toggle under _Settings → Google →
 Advanced → Optional permissions_. Turn a toggle off and that scope is never requested
 at sign-in; turn one back on and you must re-authenticate before Google grants it.
-All three are read-only, and the plugin works fine without any of them — attendees
+Both are read-only, and the plugin works fine without any of them — attendees
 simply show a name derived from their email address.
 
 | Scope | Setting that enables it | Why the plugin requests it | How the data is used |
 | --- | --- | --- | --- |
 | `https://www.googleapis.com/auth/cloud-identity.groups.readonly` | "Expand Google Group invitees" | Read the membership of a Google Group that appears as a calendar attendee | When an invite lists a group (e.g. `team@company.com`), show the individual people on it instead of the group's raw address. **Read-only** — the plugin never creates, edits, or deletes groups or memberships. |
 | `https://www.googleapis.com/auth/directory.readonly` | "Resolve attendee names from your Workspace directory" | Read display names from your organization's Google Workspace directory | Look up a real display name for attendees your calendar invite doesn't already label. Only returns data for people inside your own Workspace domain, and some Workspace admins disable it for third-party apps entirely. |
-| `https://www.googleapis.com/auth/contacts.other.readonly` | "Resolve attendee names from Google 'Other contacts'" | Read display names from your own "Other contacts" (auto-populated from your Gmail correspondence) | A second, independent source for attendee display names, useful when the directory lookup above is blocked by a Workspace admin. **Read-only** — the plugin never adds, edits, or deletes contacts. |
 
 Resolved names may be kept in a local cache file (`directory-cache.json`) inside your
 vault so the plugin doesn't re-query Google for every meeting. That cache never leaves
@@ -185,5 +184,5 @@ including the Limited Use requirements.
 The use of raw or derived user data received from Google Workspace APIs — including
 any data aggregated, anonymized, or derived from those scopes — will not be used to
 develop, improve, or train generalized AI or ML models. This applies to all data
-obtained via `calendar.readonly`, `directory.readonly`,
-`cloud-identity.groups.readonly`, and `contacts.other.readonly`.
+obtained via `calendar.readonly`, `directory.readonly`, and
+`cloud-identity.groups.readonly`.

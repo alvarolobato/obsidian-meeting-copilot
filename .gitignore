@@ -27,3 +27,7 @@ data.json
 # Swift Package Manager
 swift-helper/.build/
 swift-helper/*.resolved
+
+# Real Workspace cast for the OAuth verification demo (real names/addresses).
+# Kept out of the public repo — the committed docs use placeholders instead.
+.demo-local/

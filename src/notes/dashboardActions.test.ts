@@ -5,6 +5,7 @@ import {
 	mergeGroupsByKey,
 	parseNoteTasks,
 	parseTaskOwner,
+	setTaskLineDone,
 	sortActionNoteGroups,
 	splitByHorizon,
 	taskAgeDays,
@@ -414,5 +415,97 @@ describe("mergeGroupsByKey", () => {
 		]);
 		expect(merged).toHaveLength(1);
 		expect(merged[0]!.tasks.map((t) => t.text).sort()).toEqual(["a", "b"]);
+	});
+});
+
+describe("setTaskLineDone", () => {
+	it("ticks a line, adding today's completion date", () => {
+		expect(
+			setTaskLineDone("- [ ] **Ask Sophie** about evals", true, "2026-09-04")
+		).toBe("- [x] **Ask Sophie** about evals ✅ 2026-09-04");
+	});
+
+	it("keeps a creation stamp", () => {
+		expect(
+			setTaskLineDone("- [ ] do it ➕ 2026-08-02", true, "2026-09-04")
+		).toBe("- [x] do it ➕ 2026-08-02 ✅ 2026-09-04");
+	});
+
+	// Obsidian's own "toggle checkbox" command un-ticks a line without
+	// touching its `✅` date, so a task can reach the dashboard open but
+	// stamped with an older one. Re-stamping today is what keeps it in the
+	// grace period — a stale date reads as "completed some other day" and the
+	// scan drops the row immediately, leaving nothing to un-tick.
+	it("re-stamps a stale completion date with today on a tick", () => {
+		expect(
+			setTaskLineDone("- [ ] do it ✅ 2026-08-28", true, "2026-09-04")
+		).toBe("- [x] do it ✅ 2026-09-04");
+		expect(
+			setTaskLineDone(
+				"- [ ] do it ➕ 2026-08-02 ✅ 2026-08-28 ^ref-3",
+				true,
+				"2026-09-04"
+			)
+		).toBe("- [x] do it ➕ 2026-08-02 ✅ 2026-09-04 ^ref-3");
+	});
+
+	it("keeps a trailing block reference last", () => {
+		expect(setTaskLineDone("- [ ] do it ^abc-1", true, "2026-09-04")).toBe(
+			"- [x] do it ✅ 2026-09-04 ^abc-1"
+		);
+	});
+
+	it("un-ticks a line, removing the completion date it added", () => {
+		expect(
+			setTaskLineDone(
+				"- [x] **Ask Sophie** about evals ➕ 2026-08-02 ✅ 2026-09-04",
+				false,
+				"2026-09-04"
+			)
+		).toBe("- [ ] **Ask Sophie** about evals ➕ 2026-08-02");
+	});
+
+	it("round-trips a tick and an un-tick back to the original line", () => {
+		const open = "	* [ ] ==**Talk to Oja** (if free)== ➕ 2026-08-02 ^ref-9";
+		const done = setTaskLineDone(open, true, "2026-09-04");
+		expect(done).toBe(
+			"	* [x] ==**Talk to Oja** (if free)== ➕ 2026-08-02 ✅ 2026-09-04 ^ref-9"
+		);
+		expect(setTaskLineDone(done, false, "2026-09-04")).toBe(open);
+	});
+
+	it("only touches the checkbox, not a later bracket in the text", () => {
+		expect(
+			setTaskLineDone("- [ ] see [x] in the doc", true, "2026-09-04")
+		).toBe("- [x] see [x] in the doc ✅ 2026-09-04");
+	});
+
+	// A `✅ YYYY-MM-DD` the user typed into the middle of the task text is
+	// their content, not the dashboard's stamp: un-ticking must not eat it,
+	// and ticking must still append a real stamp (otherwise the task reads as
+	// "completed on some other day" and drops off the dashboard entirely).
+	it("only adds or removes a trailing completion stamp", () => {
+		const pasted = "- [ ] chase the ✅ 2026-01-01 rollout sign-off";
+		const ticked = setTaskLineDone(pasted, true, "2026-09-04");
+		expect(ticked).toBe(
+			"- [x] chase the ✅ 2026-01-01 rollout sign-off ✅ 2026-09-04"
+		);
+		expect(setTaskLineDone(ticked, false, "2026-09-04")).toBe(pasted);
+	});
+
+	it("keeps a mid-text stamp when un-ticking behind a block ref", () => {
+		expect(
+			setTaskLineDone(
+				"- [x] ship ✅ 2026-01-01 notes ✅ 2026-09-04 ^ref-2",
+				false,
+				"2026-09-04"
+			)
+		).toBe("- [ ] ship ✅ 2026-01-01 notes ^ref-2");
+	});
+
+	it("leaves a non-task line alone", () => {
+		expect(setTaskLineDone("just a bullet", true, "2026-09-04")).toBe(
+			"just a bullet"
+		);
 	});
 });

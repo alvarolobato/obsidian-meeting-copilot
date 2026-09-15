@@ -441,6 +441,39 @@ final class AudioMixer: @unchecked Sendable {
         append(buffer, to: micStream)
     }
 
+    /// Pads the microphone stream with silence up to `elapsedSeconds` of its
+    /// timeline. The two streams are mixed and sidecar'd *positionally* (frame
+    /// N of one lines up with frame N of the other — there are no timestamps
+    /// to realign on later), and the tap path already backfills its own silent
+    /// gaps to hold that invariant. A mic engine that delivered nothing and is
+    /// then replaced would otherwise restart the mic timeline at frame 0 while
+    /// system audio is already many seconds in, shifting every `.me` segment
+    /// early against `.them` for the rest of the meeting. Call this *before*
+    /// the replacement engine starts so the zeros land ahead of its first
+    /// buffer. No-op when the stream is already at or past that position.
+    func padMicrophoneSilence(toElapsedSeconds elapsedSeconds: TimeInterval) {
+        guard elapsedSeconds.isFinite, elapsedSeconds > 0 else { return }
+        let target = AVAudioFramePosition((elapsedSeconds * AudioMixer.targetSampleRate).rounded(.down))
+        micStream.lock.lock()
+        // Bounded by wall-clock within one process, but clamp to an hour like
+        // the tap's gap backfill so a bad value can't write an absurd run of
+        // zeros.
+        let missing = min(target - micStream.framesWritten, AVAudioFramePosition(3600 * AudioMixer.targetSampleRate))
+        micStream.lock.unlock()
+        var remaining = missing
+        while remaining > 0 {
+            let n = AVAudioFrameCount(min(remaining, AVAudioFramePosition(AudioMixer.chunkFrames)))
+            guard let buf = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: n) else { return }
+            buf.frameLength = n
+            // The backing store isn't guaranteed cleared.
+            if let data = buf.floatChannelData?[0] {
+                memset(data, 0, Int(n) * MemoryLayout<Float>.size)
+            }
+            append(buf, to: micStream)
+            remaining -= AVAudioFramePosition(n)
+        }
+    }
+
     // MARK: - Finalize: mix system + mic into output
 
     /// Closes both live streams (flushing the resamplers' tails), then mixes

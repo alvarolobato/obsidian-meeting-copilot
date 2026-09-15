@@ -76,7 +76,7 @@ describe("resolveAttendeeLabel", () => {
 		// A real PersonDirectory (via createPeopleDirectory) short-circuits a
 		// disabled directory to a cheap cache check, not a network call — so
 		// resolveAttendeeLabel must not gate on `cache.disabled` itself, or an
-		// otherContactsSync-covered person would never be looked up again
+		// an already-cached person would never be resolved again
 		// this session once the directory API had failed once for anyone.
 		const resolveDisplayName = vi.fn(async () => "Should Still Be Called");
 		const people: PersonDirectory = { resolveDisplayName };
@@ -184,14 +184,14 @@ describe("createPeopleDirectory", () => {
 		warnSpy.mockRestore();
 	});
 
-	it("still resolves a directory-cache hit once nameCache.disabled is set (e.g. by otherContactsSync)", async () => {
+	it("still resolves a directory-cache hit once nameCache.disabled is set", async () => {
 		let networkCalls = 0;
 		__setRequestUrl(() => {
 			networkCalls++;
 			return { status: 200, json: { people: [] }, text: "" };
 		});
 		const cache = new DirectoryCache(null, () => 1_000, 0);
-		// Simulate otherContactsSync having already found this person via a
+		// Simulate this person having already been resolved via a
 		// completely different (unblocked) API.
 		cache.setPerson("ruflin@elastic.co", "Nicolas Ruflin");
 		const nameCache = new PersonNameCache();
