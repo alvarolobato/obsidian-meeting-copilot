@@ -19,6 +19,7 @@ export const en = {
 		cleanupRecordings: "Clean up old recordings",
 		cancelTranscription: "Cancel transcription",
 		fixMeetingMetadata: "Fix meeting metadata for this note",
+		showWelcome: "Show welcome screen",
 	},
 	menu: {
 		fixMetadataFile: "Fix meeting metadata",
@@ -507,6 +508,11 @@ export const en = {
 			transcription: "Transcription",
 			enrichment: "Enrichment",
 		},
+		showWelcome: {
+			name: "Welcome screen",
+			desc: "Re-open the getting-started screen shown on first install.",
+			button: "Show",
+		},
 		calendarHeading: "Google Calendar integration",
 		googleHeading: "Google Calendar",
 		modelsHeading: "Models",
@@ -888,6 +894,90 @@ export const en = {
 			placeholderCodex: "gpt-5.5",
 			placeholderOpencode: "anthropic/claude-sonnet-5",
 			placeholderPi: "anthropic/claude-sonnet-5",
+		},
+	},
+	welcome: {
+		title: "Welcome to Meeting Copilot",
+		tabs: {
+			start: "Where to start",
+			setup: "Set up",
+		},
+		start: {
+			intro: "Meeting Copilot adds three icons to the left ribbon. That's where everything starts.",
+			// Row names reuse `ribbon.*` (the icons' own tooltips), so the
+			// welcome screen can't drift from what hovering the icon says.
+			record: {
+				desc: "Start recording, for the meeting note you have open or as an ad-hoc meeting. Click again to stop.",
+			},
+			agenda: {
+				desc: "Your upcoming meetings in a sidebar. Create a note or start recording from any event.",
+			},
+			dashboard: {
+				desc: "Past meetings, transcript status, and open action items in one tab.",
+			},
+			flowHeading: "After you stop recording",
+			flowSteps: [
+				"Both audio channels are saved to your vault",
+				"Whisper transcribes on your Mac",
+				"AI drafts a summary of the discussion",
+				"Your next steps and the group's follow-ups are identified",
+				"Everything lands in the meeting note",
+			],
+			next: "Next: set up →",
+		},
+		setup: {
+			intro: "Two connections and you're set. Both can be changed later in settings.",
+			statusDone: "Ready",
+			statusPending: "Connecting…",
+			statusTodo: "Not set up",
+			google: {
+				heading: "Google Calendar",
+				desc: "Read-only access to your events, so the agenda, meeting notes, and start/stop prompts work. Skip it if you only record ad-hoc meetings.",
+				connect: "Connect",
+				reconnect: "Reconnect",
+				cancel: "Cancel",
+			},
+			llm: {
+				heading: "AI endpoint",
+				desc: "Used to summarize transcripts into notes and action items. Any OpenAI-compatible endpoint — including a local one.",
+				baseUrl: "API base URL",
+				baseUrlPlaceholder: "https://api.openai.com/v1",
+				apiKey: "API key",
+				apiKeyPlaceholder: "sk-… (leave blank for local servers)",
+				cliNote: (backend: string) =>
+					`Enrichment is set to ${backend}, which uses your own signed-in CLI — no endpoint needed here.`,
+			},
+			transcription: {
+				heading: "Transcription",
+				descLocal:
+					"Runs on-device by default — nothing to configure, and audio never leaves your Mac.",
+				descRemote:
+					"Set to a remote engine, which needs an endpoint. Set the API base URL above, or give transcription its own in settings.",
+			},
+			downloads: {
+				heading: "Downloads on first use",
+				intro: "Obsidian installs only the plugin itself. The rest downloads into the plugin's folder the first time it's needed.",
+				helper: {
+					name: "Recorder helper",
+					desc: "Records system audio and your mic, lists microphones, and transcribes on your Mac, with its Whisper runtime. From this version's GitHub release, on your first recording. A notice shows while it downloads.",
+				},
+				vad: {
+					name: "Voice detector",
+					desc: "Spots when someone is speaking, to keep transcripts clean. From the same release, fetched quietly the first time a transcription separates your voice from others.",
+				},
+				model: {
+					name: (size: string) => `Whisper model (${size})`,
+					desc: (tab: string, button: string) =>
+						`From Hugging Face, when you press ${button} under Settings → ${tab}, or on your first local transcription.`,
+				},
+				verified:
+					"Every download is checked against a SHA-256 checksum built into this plugin version and rejected if it doesn't match. The helper and voice detector come from this version's release, never a \"latest\" build.",
+				permissions:
+					"Once the helper is installed, macOS asks for microphone and system audio access. Allow both, then quit and reopen Obsidian.",
+				learnMore: "More about these downloads",
+			},
+			openSettings: "Open full settings",
+			done: "Done",
 		},
 	},
 	oauth: {
