@@ -101,7 +101,14 @@ Meeting Copilot is desktop-only and uses Node.js APIs beyond Obsidian's vault AP
 - **Clipboard** — writes a meeting link when you choose *Copy meeting link*. It never reads the clipboard.
 - **Local storage** — Google OAuth tokens and any client secret are kept in Obsidian's per-vault local storage, so they're never written to the synced `data.json`. All other settings use the normal plugin data file.
 
-**macOS permissions** — Microphone and Screen & System Audio Recording for the helper, Automation for Google Meet detection, and Notifications for meeting prompts.
+**macOS permissions** — macOS asks for these on behalf of **Obsidian**, because the helper runs as part of it. Look for Obsidian, not `system-recorder`, under *System Settings → Privacy & Security*:
+
+- **Microphone** — records your side of the meeting.
+- **Screen & System Audio Recording** (called *Screen Recording* on older macOS) — captures system audio.
+- **Automation** — Google Meet detection only.
+- **Notifications** — meeting prompts.
+
+After granting Microphone or Screen Recording, quit and reopen Obsidian.
 
 ## Attribution
 
