@@ -302,17 +302,17 @@ export class WhisperCppBackend implements TranscriptionBackend {
 			// polling starts), escalate to SIGKILL after a grace period so an
 			// abort can't hold the transcription-queue slot forever. `once` so a
 			// second abort event can't double-kill.
-			let killTimer: ReturnType<typeof setTimeout> | undefined;
+			let killTimer: number | undefined;
 			const onAbort = (): void => {
 				child.kill("SIGTERM");
-				killTimer = setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS);
+				killTimer = window.setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS);
 			};
 			if (signal) signal.addEventListener("abort", onAbort, { once: true });
 
 			const settle = (fn: () => void): void => {
 				if (settled) return;
 				settled = true;
-				if (killTimer) clearTimeout(killTimer);
+				if (killTimer) window.clearTimeout(killTimer);
 				if (signal) signal.removeEventListener("abort", onAbort);
 				fn();
 			};

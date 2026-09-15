@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { TFile, type App, type TFolder } from "obsidian";
+import { TFile, TFolder, type App } from "obsidian";
 import {
 	__resetRecentNoteCache,
 	ADHOC_ID_PREFIX,
@@ -52,8 +52,9 @@ function makeTFile(path: string): TFile {
 	file.basename = dot === -1 ? file.name : file.name.slice(0, dot);
 	file.extension = dot === -1 ? "" : file.name.slice(dot + 1);
 	// Mirrors real Obsidian: a root TFile's parent path is "/", not "".
-	// eslint-disable-next-line obsidianmd/no-tfile-tfolder-cast -- building a test fixture, not narrowing a real runtime value
-	file.parent = { path: slash === -1 ? "/" : path.slice(0, slash) } as unknown as TFolder;
+	const parent = new TFolder();
+	parent.path = slash === -1 ? "/" : path.slice(0, slash);
+	file.parent = parent;
 	// Real Obsidian always populates `stat`; tests override it to exercise
 	// mtime-based tiebreaks/fallbacks.
 	file.stat = { mtime: 0, ctime: 0, size: 0 };

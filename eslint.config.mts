@@ -23,11 +23,27 @@ export default tseslint.config(
 		},
 	},
 	...obsidianmd.configs.recommended,
+	{
+		// Unit tests and their stand-ins run under Node (vitest), not in an
+		// Obsidian window: the popout-window rules don't apply, and the mock
+		// re-exports the real `moment` package that Obsidian bundles at runtime.
+		files: ["**/*.test.ts", "test/**/*.ts"],
+		rules: {
+			"obsidianmd/prefer-window-timers": "off",
+			"obsidianmd/no-global-this": "off",
+			"@typescript-eslint/no-restricted-imports": "off",
+			"import/no-extraneous-dependencies": "off",
+		},
+	},
 	globalIgnores([
 		"node_modules",
 		"dist",
 		"esbuild.config.mjs",
-		"eslint.config.js",
+		"eslint.config.mts",
+		"deploy-local.mjs",
+		"scripts/**",
+		// Agent worktrees nested in the main checkout.
+		".claude/**",
 		"version-bump.mjs",
 		"versions.json",
 		"main.js",

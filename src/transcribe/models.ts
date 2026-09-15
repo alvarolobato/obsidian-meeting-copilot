@@ -42,9 +42,9 @@ export async function fetchModelIds(
 	timeoutMs = DEFAULT_TIMEOUT_MS
 ): Promise<string[]> {
 	const url = `${baseUrl.replace(/\/+$/, "")}/models`;
-	let timer: ReturnType<typeof setTimeout> | undefined;
+	let timer: number | undefined;
 	const timeout = new Promise<never>((_, reject) => {
-		timer = setTimeout(
+		timer = window.setTimeout(
 			() =>
 				reject(
 					new Error(
@@ -64,7 +64,7 @@ export async function fetchModelIds(
 	try {
 		res = await Promise.race([request, timeout]);
 	} finally {
-		if (timer) clearTimeout(timer);
+		if (timer) window.clearTimeout(timer);
 	}
 	if (res.status < 200 || res.status >= 300) {
 		throw new Error(`HTTP ${res.status}`);

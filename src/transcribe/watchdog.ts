@@ -29,7 +29,7 @@ export interface WatchdogTimer {
 export function startInactivityWatchdog(
 	timeoutMs: number,
 	onTimeout: () => void,
-	timer: WatchdogTimer = globalThis as unknown as WatchdogTimer
+	timer: WatchdogTimer = window as unknown as WatchdogTimer
 ): InactivityWatchdog {
 	let handle: number | undefined;
 	let stopped = false;

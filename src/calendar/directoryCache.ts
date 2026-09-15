@@ -77,7 +77,7 @@ export class DirectoryCache {
 	people = new Map<string, CachedPerson>();
 	groups = new Map<string, CachedGroup>();
 	private dirty = false;
-	private saveTimer: ReturnType<typeof setTimeout> | null = null;
+	private saveTimer: number | null = null;
 	/** When set, People network calls should wait (429 / soft rate limit). */
 	peopleRateLimitedUntil = 0;
 	/** Recent People API request timestamps; seeds a fresh {@link PeopleApiRateLimiter}
@@ -302,7 +302,7 @@ export class DirectoryCache {
 
 	private scheduleSave(): void {
 		if (!this.store || this.saveTimer !== null) return;
-		this.saveTimer = setTimeout(() => {
+		this.saveTimer = window.setTimeout(() => {
 			this.saveTimer = null;
 			void this.flush();
 		}, this.saveDebounceMs);
@@ -311,7 +311,7 @@ export class DirectoryCache {
 	/** Flush pending writes immediately (e.g. on unload). */
 	async flush(): Promise<void> {
 		if (this.saveTimer !== null) {
-			clearTimeout(this.saveTimer);
+			window.clearTimeout(this.saveTimer);
 			this.saveTimer = null;
 		}
 		if (!this.dirty || !this.store) return;
@@ -381,5 +381,5 @@ export class PeopleApiRateLimiter {
 
 export async function sleep(ms: number): Promise<void> {
 	if (ms <= 0) return;
-	await new Promise((resolve) => setTimeout(resolve, ms));
+	await new Promise((resolve) => window.setTimeout(resolve, ms));
 }
