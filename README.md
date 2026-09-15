@@ -49,7 +49,7 @@ See [Setup](docs/setup.md) for Google Calendar, AI endpoint, transcription, and 
 Meeting Copilot talks to these remote services, only for the features you enable:
 
 - **Google Calendar API** — reads your calendar (read-only) to build the agenda.
-- **Google Cloud Identity Groups API + People API** — expands Google Group invitees into the individual people on the group, then resolves those people's display names from your Workspace directory — read-only, each independently toggleable under Advanced settings (on by default); see [Setup](docs/setup.md).
+- **Google Cloud Identity Groups API + People API** — expands Google Group invitees into the individual people on the group, then resolves those people's display names from your Workspace directory — read-only, each independently toggleable under *Settings → Meeting Copilot → General → Optional permissions* (on by default); see [Setup](docs/setup.md).
 - **OpenAI-compatible endpoint** (your choice of provider, local or remote) — used for remote transcription and AI enrichment, only if you configure one. Not needed for on-device Whisper with enrichment off.
 - **AI command-line tool** (optional) — if you pick Claude Code, Codex, OpenCode, or pi as the enrichment backend, the plugin runs that tool on your Mac, and the tool sends the note to its own provider.
 - **GitHub Releases** — downloads the `system-recorder` helper, its `whisper` runtime, and the `fvad.wasm` voice-activity detector the first time each is needed (see [Helper downloads](#helper-downloads)).
