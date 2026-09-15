@@ -708,10 +708,16 @@ ul.mc-action-tasks {
 }
 
 /* Obsidian's hover/tap states (`.dropdown:not(:disabled):not(.mod-disabled):hover`)
- * out-rank the rule above, so keep the chip background there too. */
+ * out-rank the rule above, so keep the chip background there too. The rule
+ * above's `box-shadow: none` out-ranks Obsidian's `.dropdown:focus-visible`, so
+ * its keyboard focus ring is restored below. */
 .mc-dash-perpage select.dropdown:not(:disabled):not(.mod-disabled):hover,
 .mc-dash-perpage select.dropdown.mobile-tap:not(.mod-disabled) {
 	background-color: var(--mc-cal-chip);
+}
+
+.mc-dash-perpage select.dropdown:focus-visible {
+	box-shadow: 0 0 0 3px var(--background-modifier-border-focus);
 }
 
 .mc-pagination {

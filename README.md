@@ -63,12 +63,12 @@ Obsidian installs only `main.js`, `manifest.json`, and `styles.css`. Recording a
 
 | File | What it is | Downloaded from | When |
 | --- | --- | --- | --- |
-| `system-recorder` | Swift helper that records system audio and the mic, lists microphones, and runs on-device transcription ([source](swift-helper/)) | This repository's GitHub release for the installed plugin version | First recording |
+| `system-recorder` | Swift helper that records system audio and the mic, lists microphones, and runs on-device transcription ([source](swift-helper/)) | This repository's GitHub release for the installed plugin version | First recording, or refreshing the microphone list in settings |
 | `whisper` | whisper.cpp runtime library the helper links | Same release | With the helper |
 | `fvad.wasm` | WebRTC voice-activity detector ([`@echogarden/fvad-wasm`](https://www.npmjs.com/package/@echogarden/fvad-wasm)) | Same release | First transcription that separates your voice from others |
 | `models/*.bin` | On-device Whisper model | Hugging Face | When you press *Download* under *Settings → Transcription*, or on the first local transcription |
 
-- **Verified before use.** Every file is checked against a SHA-256 checksum built into that plugin version. A file that doesn't match is discarded and never run.
+- **Checksum-verified.** Every download is checked against a SHA-256 checksum built into that plugin version, and discarded if it doesn't match. The recorder helper is re-checked each time it's used. The other files are re-downloaded if their size changes.
 - **Pinned to the plugin version.** The plugin never fetches a "latest" build. The helper only changes when you update the plugin itself; models are downloaded once and reused.
 - **Built in the open.** Release files are built from this repository by [GitHub Actions](.github/workflows/release.yml) and carry signed build provenance. Check one with `gh attestation verify system-recorder -R alvarolobato/obsidian-meeting-copilot`.
 - **Visible.** A notice shows while the helper or runtime downloads. Model download progress shows in settings.
@@ -79,16 +79,21 @@ Meeting Copilot is desktop-only and uses Node.js APIs beyond Obsidian's vault AP
 
 **Filesystem**
 
-- **Plugin folder** — stores and verifies the helper files and models listed above.
+- **Plugin folder** — stores the helper files and models listed above, plus `directory-cache.json`: the Google Workspace names and group members already looked up, so they aren't requested again. It syncs to your other devices if you sync `.obsidian/plugins`.
 - **System temp folder** — short-lived working files while recording, transcribing, and running an AI command-line tool, removed afterwards.
 - **Your vault** — recordings, transcripts, and meeting notes are saved in the vault folders you configure.
 
 **Processes**
 
 - **`system-recorder`** — records audio, lists microphones, and runs on-device transcription.
-- **`pgrep`** — checks whether a Zoom call is running (the `CptHost` process), when Zoom detection is on.
+- **`pgrep`** — checks whether a Zoom call is running (the `CptHost` process). Runs every 10 seconds while meeting detection and Zoom detection are on (both on by default).
 - **`osascript`** — checks Chrome, Brave, Edge, or Arc tabs for an active Google Meet call, only when Google Meet detection is on (off by default). macOS asks once for Automation permission.
-- **Your AI command-line tool** (`claude`, `codex`, `opencode`, or `pi`) — only if you pick one as the enrichment backend. The plugin looks for it on your `PATH` and in common install folders in your home directory.
+- **Your AI command-line tool** (`claude`, `codex`, `opencode`, or `pi`) — only if you pick one as the enrichment backend: to enrich notes and to list its models. The plugin looks for it on your `PATH`, in common install folders in your home directory, and in npm's global folder (found with `npm config get prefix`).
+- **`open`** — opens the Notifications or Screen & System Audio Recording pane in macOS System Settings, when you use the button that offers to.
+
+**Local network listener**
+
+- **Google sign-in** — while you sign in, a temporary web server listens on `127.0.0.1` (a random port, not reachable from other machines) to receive the callback from your browser. It closes as soon as sign-in finishes or is cancelled.
 
 **Obsidian and browser APIs**
 
@@ -96,7 +101,7 @@ Meeting Copilot is desktop-only and uses Node.js APIs beyond Obsidian's vault AP
 - **Clipboard** — writes a meeting link when you choose *Copy meeting link*. It never reads the clipboard.
 - **Local storage** — Google OAuth tokens and any client secret are kept in Obsidian's per-vault local storage, so they're never written to the synced `data.json`. All other settings use the normal plugin data file.
 
-**macOS permissions** — microphone and system audio recording for the helper, Automation for Google Meet detection, and notifications for meeting prompts.
+**macOS permissions** — Microphone and Screen & System Audio Recording for the helper, Automation for Google Meet detection, and Notifications for meeting prompts.
 
 ## Attribution
 
