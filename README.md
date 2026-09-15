@@ -6,7 +6,9 @@ Integrated meeting transcription, note-taking, and summarization for Obsidian on
 
 ## Installation
 
-**BRAT (recommended):** install [BRAT](https://github.com/TfTHacker/obsidian42-brat), then add:
+**Community plugins:** in Obsidian, open *Settings → Community plugins → Browse*, search for **Meeting Copilot**, then install and enable it.
+
+**BRAT (beta builds):** install [BRAT](https://github.com/TfTHacker/obsidian42-brat), then add:
 
 ```
 alvarolobato/obsidian-meeting-copilot
@@ -14,7 +16,7 @@ alvarolobato/obsidian-meeting-copilot
 
 **Manual:** download `main.js`, `manifest.json`, and `styles.css` from the [latest release](https://github.com/alvarolobato/obsidian-meeting-copilot/releases/latest) into `.obsidian/plugins/meeting-copilot/`, then enable the plugin.
 
-On first recording, the `system-recorder` helper (and its `whisper` runtime) download automatically. Grant the macOS prompts, then quit and reopen Obsidian.
+On first recording, the plugin downloads its `system-recorder` helper and `whisper` runtime (see [Helper downloads](#helper-downloads)). Grant the macOS prompts, then quit and reopen Obsidian.
 
 Optional: [Tasks](https://github.com/obsidian-tasks-group/obsidian-tasks) (action-item tracking). The meetings dashboard and agenda are both built-in views — no Dataview or other query plugin needed.
 
@@ -33,6 +35,7 @@ See [Setup](docs/setup.md) for Google Calendar, AI endpoint, transcription, and 
 - [Setup](docs/setup.md) — calendar, endpoint, transcription, enrichment, usage
 - [Development](docs/development.md) — build, release, debugging
 - [Organizing meeting notes](docs/organizing-meeting-notes.md)
+- [Privacy policy](docs/privacy-policy.md) and [terms of service](docs/terms-of-service.md)
 
 ## Requirements
 
@@ -48,9 +51,52 @@ Meeting Copilot talks to these remote services, only for the features you enable
 - **Google Calendar API** — reads your calendar (read-only) to build the agenda.
 - **Google Cloud Identity Groups API + People API** — expands Google Group invitees into the individual people on the group, then resolves those people's display names from your Workspace directory — read-only, each independently toggleable under Advanced settings (on by default); see [Setup](docs/setup.md).
 - **OpenAI-compatible endpoint** (your choice of provider, local or remote) — used for remote transcription and AI enrichment, only if you configure one. Not needed for on-device Whisper with enrichment off.
-- **GitHub Releases** — downloads the `system-recorder` helper binary, its `whisper` runtime, and (on demand) local Whisper models the first time each is needed.
+- **AI command-line tool** (optional) — if you pick Claude Code, Codex, OpenCode, or pi as the enrichment backend, the plugin runs that tool on your Mac, and the tool sends the note to its own provider.
+- **GitHub Releases** — downloads the `system-recorder` helper, its `whisper` runtime, and the `fvad.wasm` voice-activity detector the first time each is needed (see [Helper downloads](#helper-downloads)).
+- **Hugging Face** — downloads the on-device Whisper model you pick (from [`ggerganov/whisper.cpp`](https://huggingface.co/ggerganov/whisper.cpp)), only when you use local transcription.
 
-OAuth tokens and any client secret are stored in per-vault local storage on your device, never in synced `data.json`.
+The plugin has no server of its own and collects no telemetry. See the [privacy policy](docs/privacy-policy.md).
+
+## Helper downloads
+
+Obsidian installs only `main.js`, `manifest.json`, and `styles.css`. Recording and on-device transcription need native macOS code, so the plugin downloads these files into its own plugin folder (`.obsidian/plugins/meeting-copilot/`) the first time they're needed:
+
+| File | What it is | Downloaded from | When |
+| --- | --- | --- | --- |
+| `system-recorder` | Swift helper that records system audio and the mic, lists microphones, and runs on-device transcription ([source](swift-helper/)) | This repository's GitHub release for the installed plugin version | First recording |
+| `whisper` | whisper.cpp runtime library the helper links | Same release | With the helper |
+| `fvad.wasm` | WebRTC voice-activity detector ([`@echogarden/fvad-wasm`](https://www.npmjs.com/package/@echogarden/fvad-wasm)) | Same release | First transcription that separates your voice from others |
+| `models/*.bin` | On-device Whisper model | Hugging Face | When you press *Download* under *Settings → Transcription*, or on the first local transcription |
+
+- **Verified before use.** Every file is checked against a SHA-256 checksum built into that plugin version. A file that doesn't match is discarded and never run.
+- **Pinned to the plugin version.** The plugin never fetches a "latest" build. The helper only changes when you update the plugin itself; models are downloaded once and reused.
+- **Built in the open.** Release files are built from this repository by [GitHub Actions](.github/workflows/release.yml) and carry signed build provenance. Check one with `gh attestation verify system-recorder -R alvarolobato/obsidian-meeting-copilot`.
+- **Visible.** A notice shows while the helper or runtime downloads. Model download progress shows in settings.
+
+## File and system access
+
+Meeting Copilot is desktop-only and uses Node.js APIs beyond Obsidian's vault API. It uses them only for the following.
+
+**Filesystem**
+
+- **Plugin folder** — stores and verifies the helper files and models listed above.
+- **System temp folder** — short-lived working files while recording, transcribing, and running an AI command-line tool, removed afterwards.
+- **Your vault** — recordings, transcripts, and meeting notes are saved in the vault folders you configure.
+
+**Processes**
+
+- **`system-recorder`** — records audio, lists microphones, and runs on-device transcription.
+- **`pgrep`** — checks whether a Zoom call is running (the `CptHost` process), when Zoom detection is on.
+- **`osascript`** — checks Chrome, Brave, Edge, or Arc tabs for an active Google Meet call, only when Google Meet detection is on (off by default). macOS asks once for Automation permission.
+- **Your AI command-line tool** (`claude`, `codex`, `opencode`, or `pi`) — only if you pick one as the enrichment backend. The plugin looks for it on your `PATH` and in common install folders in your home directory.
+
+**Obsidian and browser APIs**
+
+- **Vault-wide file list** — finds meeting notes for the agenda, dashboard, and notes-with-issues list, matches recordings to their notes, and finds old recordings for retention cleanup.
+- **Clipboard** — writes a meeting link when you choose *Copy meeting link*. It never reads the clipboard.
+- **Local storage** — Google OAuth tokens and any client secret are kept in Obsidian's per-vault local storage, so they're never written to the synced `data.json`. All other settings use the normal plugin data file.
+
+**macOS permissions** — microphone and system audio recording for the helper, Automation for Google Meet detection, and notifications for meeting prompts.
 
 ## Attribution
 

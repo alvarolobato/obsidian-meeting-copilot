@@ -284,10 +284,9 @@
 /* Text inputs and text areas get at least half the row (number inputs are
  * left alone — they only match input[type="text"]/[type="password"]).
  * min-width keeps text and password boxes the same size across rows even when
- * their labels differ in length. */
-.meeting-copilot-settings .setting-item-control:has(> input[type="text"]),
-.meeting-copilot-settings .setting-item-control:has(> input[type="password"]),
-.meeting-copilot-settings .setting-item-control:has(> textarea) {
+ * their labels differ in length. The class is set by `tagSettingControls` in
+ * settings.ts rather than matched with `:has()`, which invalidates broadly. */
+.meeting-copilot-settings .setting-item-control.mc-control-wide {
     flex: 1 1 50%;
     min-width: 50%;
 }
@@ -307,8 +306,7 @@
 }
 
 /* Model pickers: filterable combobox (text + AbstractInputSuggest). */
-.meeting-copilot-settings .setting-item-control:has(> .meeting-copilot-model-combobox),
-.meeting-copilot-settings .setting-item-control:has(> .meeting-copilot-model-dropdown) {
+.meeting-copilot-settings .setting-item-control.mc-control-model {
     flex: 0 0 40%;
     min-width: 40%;
 }
@@ -690,13 +688,13 @@ ul.mc-action-tasks {
  * hand-drawn chevron at the same visual weight, on the same chip
  * background/height/radius as `.mc-icon-btn` below, so the whole toolbar
  * reads as one control group instead of two different button styles. */
-.mc-dash-perpage select {
+.mc-dash-perpage select.dropdown {
 	height: 30px;
 	padding: 0 22px 0 10px;
-	background-color: var(--mc-cal-chip) !important;
+	background-color: var(--mc-cal-chip);
 	background-image:
 		linear-gradient(45deg, transparent 50%, var(--mc-cal-muted) 50%),
-		linear-gradient(135deg, var(--mc-cal-muted) 50%, transparent 50%) !important;
+		linear-gradient(135deg, var(--mc-cal-muted) 50%, transparent 50%);
 	background-position:
 		right 13px center,
 		right 9px center;
@@ -707,6 +705,13 @@ ul.mc-action-tasks {
 	color: var(--mc-cal-text);
 	font-size: 12px;
 	box-shadow: none;
+}
+
+/* Obsidian's hover/tap states (`.dropdown:not(:disabled):not(.mod-disabled):hover`)
+ * out-rank the rule above, so keep the chip background there too. */
+.mc-dash-perpage select.dropdown:not(:disabled):not(.mod-disabled):hover,
+.mc-dash-perpage select.dropdown.mobile-tap:not(.mod-disabled) {
+	background-color: var(--mc-cal-chip);
 }
 
 .mc-pagination {

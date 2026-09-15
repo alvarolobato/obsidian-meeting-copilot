@@ -85,9 +85,9 @@ async function tryFetch(
 	apiKey: string,
 	timeoutMs: number
 ): Promise<Map<string, ModelCapability> | null> {
-	let timer: ReturnType<typeof setTimeout> | undefined;
+	let timer: number | undefined;
 	const timeout = new Promise<never>((_, reject) => {
-		timer = setTimeout(() => reject(new Error("timeout")), timeoutMs);
+		timer = window.setTimeout(() => reject(new Error("timeout")), timeoutMs);
 	});
 	try {
 		const res = await Promise.race([
@@ -104,6 +104,6 @@ async function tryFetch(
 	} catch {
 		return null;
 	} finally {
-		if (timer) clearTimeout(timer);
+		if (timer) window.clearTimeout(timer);
 	}
 }

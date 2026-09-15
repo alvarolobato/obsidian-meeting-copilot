@@ -16,6 +16,10 @@ on:
 
 permissions:
   contents: write
+  # Signed build provenance (artifact attestations) for the release assets.
+  id-token: write
+  attestations: write
+  artifact-metadata: write
 
 jobs:
   release:
@@ -151,6 +155,20 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
         run: npm run build
+
+      # Signed build provenance for every release asset, so anyone can confirm a
+      # download was built from this repository by this workflow:
+      #   gh attestation verify main.js -R alvarolobato/obsidian-meeting-copilot
+      - name: Attest release assets
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            main.js
+            manifest.json
+            styles.css
+            system-recorder
+            whisper
+            fvad.wasm
 
       - name: Create or update GitHub release
         env:

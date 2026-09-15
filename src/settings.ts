@@ -553,10 +553,34 @@ export function migrateSettings(
 }
 
 
+/**
+ * Tags setting controls so styles.css can size them without `:has()`, which
+ * forces broad selector invalidation. Mirrors the cascade the `:has()` rules
+ * had: a control holding a text, password, or textarea input is wide (that rule
+ * out-ranked the model one), otherwise one holding a model picker is model-sized.
+ */
+export function tagSettingControls(root: HTMLElement): void {
+	root.querySelectorAll<HTMLElement>(".setting-item-control").forEach((control) => {
+		const wide =
+			control.querySelector(
+				':scope > input[type="text"], :scope > input[type="password"], :scope > textarea'
+			) !== null;
+		const model =
+			!wide &&
+			control.querySelector(
+				":scope > .meeting-copilot-model-combobox, :scope > .meeting-copilot-model-dropdown"
+			) !== null;
+		control.toggleClass("mc-control-wide", wide);
+		control.toggleClass("mc-control-model", model);
+	});
+}
+
 export class SystemRecordingSettingTab extends PluginSettingTab {
     plugin: SystemRecordingPlugin;
     /** Which settings pane is currently shown; preserved across `display()` re-renders. */
     private activeTab: SettingsTabId = "general";
+    /** Re-tags control sizing classes whenever any part of the pane re-renders. */
+    private controlTagger: MutationObserver | null = null;
     /** Model ids fetched from the primary enrichment endpoint (populated by "Load models"). */
     private models: string[] = [];
     /** Model ids from the fallback enrichment endpoint (when configured + loaded). */
@@ -659,6 +683,12 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         return null;
     }
 
+    hide(): void {
+        this.controlTagger?.disconnect();
+        this.controlTagger = null;
+        super.hide();
+    }
+
     display(): void {
         const { containerEl } = this;
         const s = t();
@@ -666,6 +696,11 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         const scrollTop = containerEl.scrollTop;
         containerEl.empty();
         containerEl.addClass("meeting-copilot-settings");
+        // Sections re-render in place (engine/backend bodies, model rows), so
+        // watch the pane rather than tagging after each render path.
+        this.controlTagger?.disconnect();
+        this.controlTagger = new MutationObserver(() => tagSettingControls(containerEl));
+        this.controlTagger.observe(containerEl, { childList: true, subtree: true });
 
         // Opening (or re-rendering) the tab is a fresh chance to auto-probe:
         // clear the per-session "already probed" guard so a verdict invalidated
@@ -708,7 +743,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         // pane: it's reference information you go looking for, and above the
         // tabs it pushed the whole pane down and read like a heading for them.
         containerEl
-            .createEl("div", { cls: "meeting-copilot-version" })
+            .createDiv({ cls: "meeting-copilot-version" })
             .setText(
                 `${this.plugin.manifest.name} v${describeVersion(
                     this.plugin.manifest.version,
@@ -1209,14 +1244,12 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                         if (this.cliModelsLoaded && this.cliModels.length > 0) {
                             const input = text.inputEl;
                             const listId = `mc-cli-models-${backend}`;
-                            const dl = input.ownerDocument.createElement("datalist");
-                            dl.id = listId;
+                            const dl = input.parentElement?.createEl("datalist", {
+                                attr: { id: listId },
+                            });
                             for (const m of this.cliModels) {
-                                const opt = input.ownerDocument.createElement("option");
-                                opt.value = m;
-                                dl.appendChild(opt);
+                                dl?.createEl("option", { value: m });
                             }
-                            input.parentElement?.appendChild(dl);
                             input.setAttribute("list", listId);
                         }
                     });

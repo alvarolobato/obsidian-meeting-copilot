@@ -69,9 +69,9 @@ export async function chatComplete(p: ChatParams): Promise<string> {
 	}
 	if (p.signal?.aborted) throw new ChatAbortError();
 	const timeoutMs = p.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-	let timer: ReturnType<typeof setTimeout> | undefined;
+	let timer: number | undefined;
 	const timeout = new Promise<never>((_, reject) => {
-		timer = setTimeout(
+		timer = window.setTimeout(
 			() => reject(new EnrichTimeoutError(timeoutMs)),
 			timeoutMs
 		);
@@ -103,7 +103,7 @@ export async function chatComplete(p: ChatParams): Promise<string> {
 	try {
 		res = await Promise.race([request, timeout, aborted]);
 	} finally {
-		if (timer) clearTimeout(timer);
+		if (timer) window.clearTimeout(timer);
 		if (onAbort) p.signal?.removeEventListener("abort", onAbort);
 	}
 

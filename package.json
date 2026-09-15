@@ -1,7 +1,7 @@
 {
 	"name": "obsidian-meeting-copilot",
 	"version": "0.9.1",
-	"description": "Integrated meeting transcription, note-taking, and summarization for Obsidian on macOS: Google Calendar sync, dual-channel recording, transcription, and AI summaries.",
+	"description": "Record, transcribe, and summarize meetings on macOS with Google Calendar sync, dual-channel audio capture, on-device or remote transcription, and AI notes.",
 	"main": "main.js",
 	"type": "module",
 	"scripts": {
@@ -21,7 +21,7 @@
 		"@eslint/json": "0.14.0",
 		"@types/node": "^22.19.19",
 		"esbuild": "0.25.5",
-		"eslint-plugin-obsidianmd": "0.1.9",
+		"eslint-plugin-obsidianmd": "^0.4.2",
 		"globals": "14.0.0",
 		"jiti": "2.6.1",
 		"tslib": "2.4.0",

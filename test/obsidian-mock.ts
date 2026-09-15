@@ -1,7 +1,6 @@
 // Minimal `obsidian` stand-in for unit tests. Obsidian bundles moment at
 // runtime; here we re-export the real moment package so date formatting in
 // template rendering can be exercised without the Obsidian app.
-/* eslint-disable no-restricted-imports, import/no-extraneous-dependencies */
 import moment from "moment";
 
 export { moment };
@@ -16,6 +15,18 @@ export class TFile {
 	basename = "";
 	extension = "";
 	parent: unknown = null;
+}
+
+export class TFolder {
+	path = "";
+	name = "";
+	parent: unknown = null;
+	children: unknown[] = [];
+}
+
+/** Obsidian's display-language getter; tests always run in English. */
+export function getLanguage(): string {
+	return "en";
 }
 
 /** Obsidian's normalizePath: forward slashes, no leading/trailing/duplicate slashes. */
