@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_SETTINGS } from "../settings";
 import { LOCAL_MODELS } from "../transcribe/localModels";
 import {
 	googleStepStatus,
 	HELPER_DOWNLOADS_URL,
+	isLoopbackUrl,
 	llmStepStatus,
 	modelDownloadSizeRange,
+	predatesWelcome,
+	PRE_WELCOME_VERSION,
 	setupComplete,
 	shouldShowWelcome,
 	transcriptionNeedsSetup,
@@ -17,6 +21,7 @@ function snapshot(over: Partial<SetupSnapshot> = {}): SetupSnapshot {
 		googleAuthenticating: false,
 		enrichBackend: "api",
 		apiBaseUrl: "",
+		apiKey: "",
 		transcriptionBackend: "local",
 		sttBaseUrl: "",
 		...over,
@@ -34,6 +39,25 @@ describe("shouldShowWelcome", () => {
 
 	it("does not reopen on upgrade — it is setup, not a changelog", () => {
 		expect(shouldShowWelcome({ welcomeShownVersion: "0.1.0" })).toBe(false);
+	});
+
+	it("stays closed for a vault stamped as predating the welcome screen", () => {
+		expect(shouldShowWelcome({ welcomeShownVersion: PRE_WELCOME_VERSION })).toBe(false);
+	});
+});
+
+describe("predatesWelcome", () => {
+	it("is false on a fresh install (no data.json)", () => {
+		expect(predatesWelcome(null)).toBe(false);
+	});
+
+	it("is true for data.json from a build without the welcome field", () => {
+		expect(predatesWelcome({ apiBaseUrl: "https://api.openai.com/v1", apiKey: "sk-x" })).toBe(true);
+	});
+
+	it("is false once the field exists, even when still empty", () => {
+		expect(predatesWelcome({ welcomeShownVersion: "" })).toBe(false);
+		expect(predatesWelcome({ welcomeShownVersion: "0.9.2" })).toBe(false);
 	});
 });
 
@@ -68,20 +92,41 @@ describe("llmStepStatus", () => {
 		expect(llmStepStatus(snapshot())).toBe("todo");
 	});
 
-	it("is done for the API backend once a base URL is set", () => {
+	it("is todo on a fresh install: the default URL is OpenAI's, with no key", () => {
+		expect(DEFAULT_SETTINGS.apiKey).toBe("");
 		expect(
-			llmStepStatus(snapshot({ apiBaseUrl: "https://api.openai.com/v1" }))
+			llmStepStatus(
+				snapshot({
+					apiBaseUrl: DEFAULT_SETTINGS.apiBaseUrl,
+					apiKey: DEFAULT_SETTINGS.apiKey,
+				})
+			)
+		).toBe("todo");
+	});
+
+	it("is done for a remote endpoint once it has a key", () => {
+		expect(
+			llmStepStatus(
+				snapshot({ apiBaseUrl: "https://api.openai.com/v1", apiKey: "sk-test" })
+			)
 		).toBe("done");
+	});
+
+	it("ignores a whitespace-only key", () => {
+		expect(
+			llmStepStatus(snapshot({ apiBaseUrl: "https://api.openai.com/v1", apiKey: "  " }))
+		).toBe("todo");
 	});
 
 	it("ignores a whitespace-only base URL", () => {
 		expect(llmStepStatus(snapshot({ apiBaseUrl: "   " }))).toBe("todo");
 	});
 
-	it("does not require an API key — local servers have none", () => {
+	it("does not require an API key on this machine — local servers have none", () => {
 		expect(
 			llmStepStatus(snapshot({ apiBaseUrl: "http://localhost:11434/v1" }))
 		).toBe("done");
+		expect(llmStepStatus(snapshot({ apiBaseUrl: "http://127.0.0.1:1234/v1" }))).toBe("done");
 	});
 
 	it("is done for a CLI backend, which needs no endpoint from us", () => {
@@ -132,12 +177,12 @@ describe("setupComplete", () => {
 		).toBe(false);
 	});
 
-	it("is true with Google connected and an endpoint set", () => {
+	it("is true with Google connected and an endpoint with a key", () => {
 		expect(
 			setupComplete(
 				snapshot({
 					googleAuthenticated: true,
-					apiBaseUrl: "https://api.openai.com/v1",
+					apiBaseUrl: "https://api.openai.com/v1", apiKey: "sk-test",
 				})
 			)
 		).toBe(true);
@@ -188,5 +233,20 @@ describe("HELPER_DOWNLOADS_URL", () => {
 		expect(HELPER_DOWNLOADS_URL).toBe(
 			"https://github.com/alvarolobato/obsidian-meeting-copilot#helper-downloads"
 		);
+	});
+});
+
+describe("isLoopbackUrl", () => {
+	it("recognizes this machine", () => {
+		expect(isLoopbackUrl("http://localhost:11434/v1")).toBe(true);
+		expect(isLoopbackUrl("http://127.0.0.1:1234")).toBe(true);
+		expect(isLoopbackUrl("http://[::1]:8080/v1")).toBe(true);
+		expect(isLoopbackUrl("http://llm.localhost/v1")).toBe(true);
+	});
+
+	it("rejects remote hosts and unparseable input", () => {
+		expect(isLoopbackUrl("https://api.openai.com/v1")).toBe(false);
+		expect(isLoopbackUrl("https://localhost.example.com/v1")).toBe(false);
+		expect(isLoopbackUrl("not a url")).toBe(false);
 	});
 });

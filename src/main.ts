@@ -222,7 +222,12 @@ import {
     TRANSCRIPT_CLEANUP_SYSTEM_PROMPT,
 } from "./enrich/transcriptCleanup";
 import { RenameModal } from "./ui/renameModal";
-import { shouldShowWelcome, type SetupSnapshot } from "./ui/welcome";
+import {
+	PRE_WELCOME_VERSION,
+	predatesWelcome,
+	shouldShowWelcome,
+	type SetupSnapshot,
+} from "./ui/welcome";
 import { WelcomeModal, type WelcomeHost } from "./ui/welcomeModal";
 import { t } from "./i18n";
 import { TypedEventBus } from "./util/eventBus";
@@ -923,6 +928,11 @@ export default class SystemRecordingPlugin extends Plugin {
             DEFAULT_SETTINGS,
             migrateSettings(raw as Record<string, unknown> | null)
         );
+        // A vault set up before the welcome screen existed isn't a fresh
+        // install: stamp it so the upgrade doesn't open first-run onboarding.
+        if (predatesWelcome(raw as Record<string, unknown> | null)) {
+            this.settings.welcomeShownVersion = PRE_WELCOME_VERSION;
+        }
         // Ensure per-CLI maps are independent copies, not shared with DEFAULT_SETTINGS
         this.settings.enrichCliPaths = { ...DEFAULT_SETTINGS.enrichCliPaths, ...this.settings.enrichCliPaths };
         this.settings.enrichCliModels = { ...DEFAULT_SETTINGS.enrichCliModels, ...this.settings.enrichCliModels };
@@ -2040,6 +2050,7 @@ export default class SystemRecordingPlugin extends Plugin {
 			googleAuthenticating: this.isAuthenticating(),
 			enrichBackend: this.settings.enrichBackend,
 			apiBaseUrl: this.settings.apiBaseUrl,
+			apiKey: this.settings.apiKey,
 			transcriptionBackend: this.settings.transcriptionBackend,
 			sttBaseUrl: this.settings.sttApiBaseUrl,
 		};
@@ -2049,6 +2060,11 @@ export default class SystemRecordingPlugin extends Plugin {
 		return {
 			snapshot: () => this.welcomeSnapshot(),
 			isCalendarAuthenticated: () => this.isCalendarAuthenticated(),
+			hasGoogleCredentials: () => this.hasGoogleCredentials(),
+			openCredentialsSettings: () => {
+				new Notice(t().oauth.setCredentialsFirst);
+				this.openPluginSettings("general");
+			},
 			isAuthenticating: () => this.isAuthenticating(),
 			authenticateCalendar: () => this.authenticateCalendar(),
 			cancelAuthenticate: () => this.cancelAuthenticate(),

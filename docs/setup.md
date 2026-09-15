@@ -33,7 +33,7 @@ Optional **Fallback endpoint**: if the primary returns a service-level error (ne
 
 ## Transcription
 
-*Settings → Meeting Copilot → Transcription*:
+*Settings → Meeting Copilot → AI*:
 
 - **Local (on-device Whisper)** *(default)* — pick a local model (downloads once, SHA-256 verified). Audio never leaves your Mac.
 - **Remote (API endpoint)** — pick a model (`gpt-4o-transcribe` is most accurate; `whisper-1-ts` adds word timestamps), language, optional AI post-processing and custom dictionary.

@@ -26,6 +26,10 @@ export interface WelcomeHost {
 	/** Live setup state, re-read on every render. */
 	snapshot(): SetupSnapshot;
 	isCalendarAuthenticated(): boolean;
+	/** False when no OAuth client is bundled or configured, so sign-in can't start. */
+	hasGoogleCredentials(): boolean;
+	/** Explains the missing credentials and opens settings where they're entered. */
+	openCredentialsSettings(): void;
 	isAuthenticating(): boolean;
 	authenticateCalendar(): Promise<void>;
 	cancelAuthenticate(): void;
@@ -217,6 +221,13 @@ export class WelcomeModal extends Modal {
 			)
 				.setCta()
 				.onClick(() => {
+					// Sign-in can't start without OAuth credentials. Close first so
+					// settings doesn't open stacked on top of this modal.
+					if (!this.host.hasGoogleCredentials()) {
+						this.close();
+						this.host.openCredentialsSettings();
+						return;
+					}
 					void this.host
 						.authenticateCalendar()
 						.then(() => this.renderActiveTab());
@@ -312,7 +323,7 @@ export class WelcomeModal extends Modal {
 				)
 			),
 			s.model.desc(
-				settings.tabs.transcription,
+				settings.tabs.aiBackend,
 				settings.localModelDownload.download
 			)
 		);

@@ -34,8 +34,24 @@ export interface WelcomeGateState {
 }
 
 /**
- * True only on a genuinely fresh install — `data.json` absent (so the field
- * falls back to its "" default) or written by a build that predates it.
+ * Marks a vault that was set up before the welcome screen existed, so upgrading
+ * doesn't show it first-install onboarding. See {@link predatesWelcome}.
+ */
+export const PRE_WELCOME_VERSION = "pre-welcome";
+
+/**
+ * True when `data.json` was written by a build that predates the welcome
+ * screen: the vault is already set up, not a fresh install. A fresh install
+ * has no `data.json` at all, so `raw` is null.
+ */
+export function predatesWelcome(raw: Record<string, unknown> | null): boolean {
+	return raw !== null && !("welcomeShownVersion" in raw);
+}
+
+/**
+ * True only on a genuinely fresh install: no `data.json` yet, so the field
+ * keeps its "" default. Vaults upgrading from a build without the field are
+ * stamped {@link PRE_WELCOME_VERSION} when settings load.
  *
  * Deliberately *not* a version comparison: this is a setup wizard, not a
  * changelog, so an upgrade must not re-open it. Storing the version rather
@@ -57,6 +73,7 @@ export interface SetupSnapshot {
 	/** "api" uses the shared endpoint below; any other value is a local CLI. */
 	enrichBackend: string;
 	apiBaseUrl: string;
+	apiKey: string;
 	transcriptionBackend: "remote" | "local";
 	/** Transcription-specific endpoint; empty means "reuse `apiBaseUrl`". */
 	sttBaseUrl: string;
@@ -69,13 +86,31 @@ export function googleStepStatus(s: SetupSnapshot): SetupStepStatus {
 
 /**
  * A CLI backend shells out to an already-authenticated tool, so it needs no
- * endpoint from us. The API backend only needs a base URL — the key is
- * legitimately blank for local servers (Ollama, LM Studio), so requiring one
- * would show a permanent "todo" to users who are in fact fully set up.
+ * endpoint from us. The API backend needs a base URL, plus a key unless the
+ * URL points at this machine. The default base URL is OpenAI's, so a URL alone
+ * doesn't mean anything was set up, while local servers (Ollama, LM Studio)
+ * legitimately have no key.
  */
 export function llmStepStatus(s: SetupSnapshot): SetupStepStatus {
 	if (s.enrichBackend !== "api") return "done";
-	return s.apiBaseUrl.trim() ? "done" : "todo";
+	const url = s.apiBaseUrl.trim();
+	if (!url) return "todo";
+	return s.apiKey.trim() || isLoopbackUrl(url) ? "done" : "todo";
+}
+
+/** True for an http(s) URL on this machine (localhost, 127.x, ::1). */
+export function isLoopbackUrl(url: string): boolean {
+	try {
+		const host = new URL(url).hostname.replace(/^\[|\]$/g, "");
+		return (
+			host === "localhost" ||
+			host.endsWith(".localhost") ||
+			host === "::1" ||
+			/^127\./.test(host)
+		);
+	} catch {
+		return false;
+	}
 }
 
 /**

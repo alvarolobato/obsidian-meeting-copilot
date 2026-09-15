@@ -907,7 +907,7 @@ export const en = {
 			// Row names reuse `ribbon.*` (the icons' own tooltips), so the
 			// welcome screen can't drift from what hovering the icon says.
 			record: {
-				desc: "Record something that isn't on your calendar. Click again to stop.",
+				desc: "Start recording, for the meeting note you have open or as an ad-hoc meeting. Click again to stop.",
 			},
 			agenda: {
 				desc: "Your upcoming meetings in a sidebar. Create a note or start recording from any event.",
@@ -971,7 +971,7 @@ export const en = {
 						`From Hugging Face, when you press ${button} under Settings → ${tab}, or on your first local transcription.`,
 				},
 				verified:
-					"Every file is checked against a SHA-256 checksum built into this plugin version and rejected if it doesn't match. Files are pinned to this version, never a \"latest\" build.",
+					"Every download is checked against a SHA-256 checksum built into this plugin version and rejected if it doesn't match. The helper and voice detector come from this version's release, never a \"latest\" build.",
 				permissions:
 					"Once the helper is installed, macOS asks for microphone and system audio access. Allow both, then quit and reopen Obsidian.",
 				learnMore: "More about these downloads",
