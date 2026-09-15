@@ -17,18 +17,20 @@ The plugin downloads `system-recorder` from the GitHub release matching `manifes
 
 ## Releasing
 
-Push a semver tag (no `v` prefix):
+From an up-to-date, clean `main`:
 
 ```bash
-git tag -a 0.5.1 -m "0.5.1"
-git push origin 0.5.1
+npm version 0.5.1 -m "chore: release %s"
+git push origin main --follow-tags
 ```
 
-[`.github/workflows/release.yml`](../.github/workflows/release.yml) builds, signs, pins checksums, and publishes `main.js`, `manifest.json`, `styles.css`, `system-recorder`, `whisper`, and `fvad.wasm`. After a successful release it also commits the synced `manifest.json`, `versions.json`, and `package.json` to `main` (via [`scripts/sync-release-version.mjs`](../scripts/sync-release-version.mjs)) so the community directory sees the current version at repo HEAD. Every asset gets a signed build-provenance attestation; check one with `gh attestation verify <file> -R alvarolobato/obsidian-meeting-copilot`. `src/binary.ts` checksum placeholders remain on `main` — only release artifacts pin the real helper/dylib shas.
+`npm version` writes the version into `package.json`, `manifest.json`, and `versions.json` (via [`scripts/sync-release-version.mjs`](../scripts/sync-release-version.mjs)), commits, and creates the tag (no `v` prefix). The tagged commit already holds the release version, so the published `manifest.json` matches the repository's, which the community directory checks.
+
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) first checks that the tag matches those files ([`scripts/check-release-version.mjs`](../scripts/check-release-version.mjs)), then builds, signs, pins checksums, and publishes `main.js`, `manifest.json`, `styles.css`, `system-recorder`, `whisper`, and `fvad.wasm`. Every asset gets a signed build-provenance attestation; check one with `gh attestation verify <file> -R alvarolobato/obsidian-meeting-copilot`. `src/binary.ts` checksum placeholders remain on `main` — only release artifacts pin the real helper/dylib shas.
 
 ## Debugging notifications
 
-Off by default. In the DevTools console (`Cmd+Opt+I`):
+Local and custom builds only: release builds ignore the flag, so shipped code never reads `localStorage` directly. Off by default. In the DevTools console (`Cmd+Opt+I`):
 
 ```js
 localStorage.setItem("mc:notif-debug", "1")

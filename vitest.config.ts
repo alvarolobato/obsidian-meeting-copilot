@@ -16,6 +16,8 @@ export default defineConfig({
 		__MC_GOOGLE_CLIENT_ID_XOR__: "[]",
 		__MC_GOOGLE_CLIENT_SECRET_XOR__: "[]",
 		__MC_GOOGLE_XOR_KEY__: "[]",
+		// Tests exercise the local-build behaviour of release-gated code.
+		__MC_RELEASE__: "false",
 	},
 	test: {
 		include: ["src/**/*.test.ts"],

@@ -1,6 +1,7 @@
 /**
- * Set manifest.json, versions.json, and package.json to a release tag.
- * Used by release.yml (build artifacts) and to sync main after a tag push.
+ * Set manifest.json, versions.json, and package.json to a release version.
+ * Run by `npm version` (the package.json "version" script) before it commits
+ * and tags, so the tagged commit already holds the version it releases.
  */
 import { readFileSync, writeFileSync } from "fs";
 

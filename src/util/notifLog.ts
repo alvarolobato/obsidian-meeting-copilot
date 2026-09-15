@@ -1,7 +1,9 @@
 /**
  * Lightweight, runtime-toggleable logging for the notification pipeline.
- * **Off by default** (shipped builds stay silent). Enable it live — no rebuild —
- * from the Obsidian DevTools console (Cmd+Opt+I):
+ * **Off by default**, and **local/custom builds only**: release builds compile
+ * the flag check out (`__MC_RELEASE__`), so shipped code never reads
+ * `localStorage` directly. Enable it live — no rebuild — from the Obsidian
+ * DevTools console (Cmd+Opt+I):
  *
  *   localStorage.setItem("mc:notif-debug", "1")   // logging takes effect at once
  *   localStorage.removeItem("mc:notif-debug")      // to turn it back off
@@ -20,10 +22,22 @@
 
 import { formatLogData } from "./logLine";
 
+// Set by esbuild's `define`: true only for release.yml builds. vitest defines it false.
+declare const __MC_RELEASE__: boolean;
+
 const DEBUG_KEY = "mc:notif-debug";
 
-/** True when notification tracing is enabled via the `mc:notif-debug` localStorage flag. */
+/**
+ * True when notification tracing is enabled via the `mc:notif-debug`
+ * localStorage flag. Always false in release builds: `!__MC_RELEASE__` becomes
+ * `false` at build time, so {@link readDebugFlag} is unused and dropped from
+ * the bundle.
+ */
 export function notifDebugEnabled(): boolean {
+	return !__MC_RELEASE__ && readDebugFlag();
+}
+
+function readDebugFlag(): boolean {
 	try {
 		return window.localStorage.getItem(DEBUG_KEY) === "1";
 	} catch {
