@@ -64,14 +64,14 @@ Obsidian installs only `main.js`, `manifest.json`, and `styles.css`. Recording a
 | File | What it is | Downloaded from | When |
 | --- | --- | --- | --- |
 | `system-recorder` | Swift helper that records system audio and the mic, lists microphones, and runs on-device transcription ([source](swift-helper/)) | This repository's GitHub release for the installed plugin version | First recording, or refreshing the microphone list in settings |
-| `whisper` | whisper.cpp runtime library the helper links | Same release | With the helper |
+| `whisper` | whisper.cpp runtime library the helper links, saved as `whisper.framework/Versions/Current/whisper` | Same release | With the helper |
 | `fvad.wasm` | WebRTC voice-activity detector ([`@echogarden/fvad-wasm`](https://www.npmjs.com/package/@echogarden/fvad-wasm)) | Same release | First transcription that separates your voice from others |
 | `models/*.bin` | On-device Whisper model | Hugging Face | When you press *Download* under *Settings → Transcription*, or on the first local transcription |
 
-- **Checksum-verified.** Every download is checked against a SHA-256 checksum built into that plugin version, and discarded if it doesn't match. The recorder helper is re-checked each time it's used. The other files are re-downloaded if their size changes.
+- **Checksum-verified.** Every download is checked against a SHA-256 checksum built into that plugin version, and discarded if it doesn't match. The recorder helper is re-checked before each recording, on-device transcription, or microphone refresh. The other files aren't re-hashed after download; they're downloaded again only if their size changes.
 - **Pinned to the plugin version.** The plugin never fetches a "latest" build. The helper only changes when you update the plugin itself; models are downloaded once and reused.
 - **Built in the open.** Release files are built from this repository by [GitHub Actions](.github/workflows/release.yml) and carry signed build provenance. Check one with `gh attestation verify system-recorder -R alvarolobato/obsidian-meeting-copilot`.
-- **Visible.** A notice shows while the helper or runtime downloads. Model download progress shows in settings.
+- **Visible.** A notice shows while the helper or runtime downloads, and model download progress shows in settings. The small voice-activity detector downloads without a notice.
 
 ## File and system access
 
@@ -86,9 +86,9 @@ Meeting Copilot is desktop-only and uses Node.js APIs beyond Obsidian's vault AP
 **Processes**
 
 - **`system-recorder`** — records audio, lists microphones, and runs on-device transcription.
-- **`pgrep`** — checks whether a Zoom call is running (the `CptHost` process). Runs every 10 seconds while meeting detection and Zoom detection are on (both on by default).
+- **`pgrep`** — checks whether a Zoom call is running (the `CptHost` process). Runs every 10 seconds by default (configurable) while meeting detection and Zoom detection are on (both on by default).
 - **`osascript`** — checks Chrome, Brave, Edge, or Arc tabs for an active Google Meet call, only when Google Meet detection is on (off by default). macOS asks once for Automation permission.
-- **Your AI command-line tool** (`claude`, `codex`, `opencode`, or `pi`) — only if you pick one as the enrichment backend: to enrich notes and to list its models. The plugin looks for it on your `PATH`, in common install folders in your home directory, and in npm's global folder (found with `npm config get prefix`).
+- **Your AI command-line tool** (`claude`, `codex`, `opencode`, or `pi`) — only if you pick one as the enrichment backend: to enrich notes and to list its models. The plugin looks for it at the path you set, on your `PATH`, in common install locations (Homebrew, `/usr/local/bin`, and version managers such as Volta, asdf, fnm, and nvm), and in npm's global folder (found with `npm config get prefix`).
 - **`open`** — opens the Notifications or Screen & System Audio Recording pane in macOS System Settings, when you use the button that offers to.
 
 **Local network listener**

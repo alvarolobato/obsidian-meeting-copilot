@@ -772,6 +772,9 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                 )}`
             );
 
+        // Tag now, not only from the observer's microtask: the scroll position is
+        // restored against this layout, and untagged controls are shorter.
+        tagSettingControls(containerEl);
         containerEl.scrollTop = scrollTop;
     }
 
