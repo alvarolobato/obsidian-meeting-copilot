@@ -1,11 +1,14 @@
 import { App, Modal, Setting, setIcon } from "obsidian";
 import { t } from "../i18n";
+import { LOCAL_MODELS } from "../transcribe/localModels";
 import { RECORD_ICON } from "./icons";
 import { AGENDA_ICON } from "./agenda/MeetingAgendaView";
 import { DASHBOARD_ICON } from "./dashboard/MeetingDashboardView";
 import {
 	googleStepStatus,
+	HELPER_DOWNLOADS_URL,
 	llmStepStatus,
+	modelDownloadSizeRange,
 	transcriptionNeedsSetup,
 	type SetupSnapshot,
 	type SetupStepStatus,
@@ -41,7 +44,8 @@ export interface WelcomeHost {
  * First-install onboarding: one pane orienting the user around the ribbon
  * icons, one pane collecting the only two things that need configuring
  * (Google Calendar and an AI endpoint — transcription is on-device by
- * default, so it needs nothing).
+ * default, so it needs nothing), plus a short note on what the plugin
+ * downloads the first time it's used.
  *
  * Re-openable at any time from the "Show welcome screen" command or the
  * General settings tab, which is also how it gets tested.
@@ -107,31 +111,21 @@ export class WelcomeModal extends Modal {
 
 	private renderStart(el: HTMLElement): void {
 		const s = t().welcome.start;
+		const ribbon = t().ribbon;
 		el.createEl("p", { text: s.intro, cls: "mc-welcome-intro" });
 
 		// The real ribbon icons, rendered from the same constants the ribbon
-		// registers — so this can never drift from what's actually in the
-		// sidebar the way a screenshot would.
+		// registers and named with the same tooltip strings — so this can never
+		// drift from what's actually in the sidebar the way a screenshot would.
 		const list = el.createDiv({ cls: "mc-welcome-ribbon" });
-		const rows: Array<[string, { name: string; desc: string }]> = [
-			[RECORD_ICON, s.record],
-			[AGENDA_ICON, s.agenda],
-			[DASHBOARD_ICON, s.dashboard],
-		];
-		for (const [icon, copy] of rows) {
-			const row = list.createDiv({ cls: "mc-welcome-ribbon-row" });
-			const iconEl = row.createDiv({ cls: "mc-welcome-ribbon-icon" });
-			setIcon(iconEl, icon);
-			const text = row.createDiv({ cls: "mc-welcome-ribbon-text" });
-			text.createEl("div", {
-				text: copy.name,
-				cls: "mc-welcome-ribbon-name",
-			});
-			text.createEl("div", {
-				text: copy.desc,
-				cls: "mc-welcome-ribbon-desc",
-			});
-		}
+		this.renderIconRow(list, RECORD_ICON, ribbon.toggleRecording, s.record.desc);
+		this.renderIconRow(list, AGENDA_ICON, ribbon.openAgenda, s.agenda.desc);
+		this.renderIconRow(
+			list,
+			DASHBOARD_ICON,
+			ribbon.openDashboard,
+			s.dashboard.desc
+		);
 
 		el.createEl("h3", { text: s.flowHeading, cls: "mc-welcome-subhead" });
 		const flow = el.createDiv({ cls: "mc-welcome-flow" });
@@ -152,6 +146,21 @@ export class WelcomeModal extends Modal {
 		);
 	}
 
+	/** An icon tile with a name and a one-line description beside it. */
+	private renderIconRow(
+		list: HTMLElement,
+		icon: string,
+		name: string,
+		desc: string
+	): void {
+		const row = list.createDiv({ cls: "mc-welcome-ribbon-row" });
+		const iconEl = row.createDiv({ cls: "mc-welcome-ribbon-icon" });
+		setIcon(iconEl, icon);
+		const text = row.createDiv({ cls: "mc-welcome-ribbon-text" });
+		text.createEl("div", { text: name, cls: "mc-welcome-ribbon-name" });
+		text.createEl("div", { text: desc, cls: "mc-welcome-ribbon-desc" });
+	}
+
 	// MARK: - "Set up" pane
 
 	private renderSetup(el: HTMLElement): void {
@@ -162,6 +171,7 @@ export class WelcomeModal extends Modal {
 		this.renderGoogleStep(el, snap);
 		this.renderLlmStep(el, snap);
 		this.renderTranscriptionNote(el, snap);
+		this.renderDownloadsNote(el);
 
 		new Setting(el)
 			.addButton((b) =>
@@ -276,16 +286,59 @@ export class WelcomeModal extends Modal {
 		});
 	}
 
-	/** A titled block with a status pill, returning the body to fill in. */
+	/**
+	 * What the plugin fetches on first use, and from where. Informational, so
+	 * no status pill: nothing here is something the user has to configure,
+	 * but a surprise download (or a macOS permission prompt) right after
+	 * installing reads as suspicious unless it was explained up front.
+	 */
+	private renderDownloadsNote(el: HTMLElement): void {
+		const s = t().welcome.setup.downloads;
+		const settings = t().settings;
+		const step = this.createStep(el, s.heading);
+		step.createEl("p", { text: s.intro, cls: "mc-welcome-step-desc" });
+
+		const list = step.createDiv({
+			cls: "mc-welcome-ribbon mc-welcome-downloads",
+		});
+		this.renderIconRow(list, "cpu", s.helper.name, s.helper.desc);
+		this.renderIconRow(list, "audio-waveform", s.vad.name, s.vad.desc);
+		this.renderIconRow(
+			list,
+			"download",
+			s.model.name(
+				modelDownloadSizeRange(
+					Object.values(LOCAL_MODELS).map((m) => m.sizeBytes)
+				)
+			),
+			s.model.desc(
+				settings.tabs.transcription,
+				settings.localModelDownload.download
+			)
+		);
+
+		step.createEl("p", { text: s.verified, cls: "mc-welcome-step-desc" });
+		step.createEl("p", { text: s.permissions, cls: "mc-welcome-step-desc" });
+		step.createEl("p", { cls: "mc-welcome-step-desc" }).createEl("a", {
+			text: s.learnMore,
+			href: HELPER_DOWNLOADS_URL,
+		});
+	}
+
+	/**
+	 * A titled block, returning the body to fill in. With a `status` it gets a
+	 * pill next to the heading; without one it's a plain informational note.
+	 */
 	private createStep(
 		el: HTMLElement,
 		heading: string,
-		status: SetupStepStatus
+		status?: SetupStepStatus
 	): HTMLElement {
 		const s = t().welcome.setup;
 		const step = el.createDiv({ cls: "mc-welcome-step" });
 		const head = step.createDiv({ cls: "mc-welcome-step-head" });
 		head.createEl("h3", { text: heading, cls: "mc-welcome-step-title" });
+		if (!status) return step;
 		const label =
 			status === "done"
 				? s.statusDone

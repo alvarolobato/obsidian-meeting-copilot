@@ -1827,6 +1827,16 @@ ul.mc-action-tasks {
 	font-size: var(--font-ui-small);
 }
 
+/* "Downloads on first use" — same row layout as the ribbon legend, smaller */
+.mc-welcome-downloads {
+	gap: var(--size-4-2);
+	margin: var(--size-4-3) 0;
+}
+.mc-welcome-downloads .mc-welcome-ribbon-icon {
+	height: 28px;
+	width: 28px;
+}
+
 /* Numbered post-recording flow */
 .mc-welcome-flow {
 	display: flex;

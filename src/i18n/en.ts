@@ -904,16 +904,15 @@ export const en = {
 		},
 		start: {
 			intro: "Meeting Copilot adds three icons to the left ribbon. That's where everything starts.",
+			// Row names reuse `ribbon.*` (the icons' own tooltips), so the
+			// welcome screen can't drift from what hovering the icon says.
 			record: {
-				name: "Start/Stop on-demand meeting",
 				desc: "Record something that isn't on your calendar. Click again to stop.",
 			},
 			agenda: {
-				name: "Open meeting agenda",
 				desc: "Your upcoming meetings in a sidebar. Create a note or start recording from any event.",
 			},
 			dashboard: {
-				name: "Open meetings dashboard",
 				desc: "Past meetings, transcript status, and open action items in one tab.",
 			},
 			flowHeading: "After you stop recording",
@@ -954,6 +953,28 @@ export const en = {
 					"Runs on-device by default — nothing to configure, and audio never leaves your Mac.",
 				descRemote:
 					"Set to a remote engine, which needs an endpoint. Set the API base URL above, or give transcription its own in settings.",
+			},
+			downloads: {
+				heading: "Downloads on first use",
+				intro: "Obsidian installs only the plugin itself. The rest downloads into the plugin's folder the first time it's needed.",
+				helper: {
+					name: "Recorder helper",
+					desc: "Records system audio and your mic, lists microphones, and transcribes on your Mac, with its Whisper runtime. From this version's GitHub release, on your first recording. A notice shows while it downloads.",
+				},
+				vad: {
+					name: "Voice detector",
+					desc: "Spots when someone is speaking, to keep transcripts clean. From the same release, fetched quietly the first time a transcription separates your voice from others.",
+				},
+				model: {
+					name: (size: string) => `Whisper model (${size})`,
+					desc: (tab: string, button: string) =>
+						`From Hugging Face, when you press ${button} under Settings → ${tab}, or on your first local transcription.`,
+				},
+				verified:
+					"Every file is checked against a SHA-256 checksum built into this plugin version and rejected if it doesn't match. Files are pinned to this version, never a \"latest\" build.",
+				permissions:
+					"Once the helper is installed, macOS asks for microphone and system audio access. Allow both, then quit and reopen Obsidian.",
+				learnMore: "More about these downloads",
 			},
 			openSettings: "Open full settings",
 			done: "Done",

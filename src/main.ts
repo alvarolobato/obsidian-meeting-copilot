@@ -1498,7 +1498,7 @@ export default class SystemRecordingPlugin extends Plugin {
 				// where they can fix it (the now always-expanded Advanced
 				// Credentials section) instead of leaving them to hunt for it.
 				new Notice(e.message);
-				this.openPluginSettings();
+				this.openPluginSettings("calendar");
 			} else {
 				new Notice(e instanceof Error ? e.message : String(e));
 			}

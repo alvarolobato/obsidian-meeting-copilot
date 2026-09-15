@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { LOCAL_MODELS } from "../transcribe/localModels";
 import {
 	googleStepStatus,
+	HELPER_DOWNLOADS_URL,
 	llmStepStatus,
+	modelDownloadSizeRange,
 	setupComplete,
 	shouldShowWelcome,
 	transcriptionNeedsSetup,
@@ -150,5 +153,40 @@ describe("setupComplete", () => {
 				})
 			)
 		).toBe(false);
+	});
+});
+
+describe("modelDownloadSizeRange", () => {
+	it("spans smallest to largest, sharing the unit", () => {
+		expect(modelDownloadSizeRange([574_041_195, 190_085_487, 539_212_467])).toBe(
+			"190–574 MB"
+		);
+	});
+
+	it("keeps both units when the range crosses into GB", () => {
+		expect(modelDownloadSizeRange([190_085_487, 1_500_000_000])).toBe(
+			"190 MB–1.5 GB"
+		);
+	});
+
+	it("collapses to a single size when every model is the same size", () => {
+		expect(modelDownloadSizeRange([190_085_487, 190_085_487])).toBe("190 MB");
+	});
+
+	it("is empty with no models", () => {
+		expect(modelDownloadSizeRange([])).toBe("");
+	});
+
+	it("produces a real range from the shipped registry", () => {
+		const sizes = Object.values(LOCAL_MODELS).map((m) => m.sizeBytes);
+		expect(modelDownloadSizeRange(sizes)).toMatch(/^\d+–\d+ MB$/);
+	});
+});
+
+describe("HELPER_DOWNLOADS_URL", () => {
+	it("points at the README's helper-downloads section on GitHub", () => {
+		expect(HELPER_DOWNLOADS_URL).toBe(
+			"https://github.com/alvarolobato/obsidian-meeting-copilot#helper-downloads"
+		);
 	});
 });

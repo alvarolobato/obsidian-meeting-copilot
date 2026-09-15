@@ -4,6 +4,29 @@
  * lives in {@link ../ui/welcomeModal.ts}.
  */
 
+import { formatBytes } from "../transcribe/localModels";
+
+/** README section explaining what the plugin downloads, and from where. */
+export const HELPER_DOWNLOADS_URL =
+	"https://github.com/alvarolobato/obsidian-meeting-copilot#helper-downloads";
+
+/**
+ * The download-size span across the offered local models, for the welcome
+ * screen's downloads note ("190–574 MB"). Derived from the registry rather
+ * than written into the copy, so adding or swapping a model can't leave the
+ * welcome screen quoting stale sizes. Shares the unit when both ends use it;
+ * returns "" for an empty list.
+ */
+export function modelDownloadSizeRange(sizes: readonly number[]): string {
+	if (sizes.length === 0) return "";
+	const lo = formatBytes(Math.min(...sizes));
+	const hi = formatBytes(Math.max(...sizes));
+	if (lo === hi) return lo;
+	const [loNum, loUnit] = lo.split(" ");
+	const [hiNum, hiUnit] = hi.split(" ");
+	return loUnit === hiUnit ? `${loNum}–${hiNum} ${hiUnit}` : `${lo}–${hi}`;
+}
+
 /** The slice of settings that decides whether the welcome screen auto-opens. */
 export interface WelcomeGateState {
 	/** Plugin version that last showed the welcome screen; "" until it has. */
