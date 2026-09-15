@@ -153,8 +153,8 @@ async function streamFetchToFile(
 	onProgress?: (received: number, total: number) => void,
 	signal?: AbortSignal
 ): Promise<void> {
-	// eslint-disable-next-line no-restricted-globals -- requestUrl buffers the full body; a 500 MB model must stream to disk
-	const res = await fetch(url, { signal });
+	// Not requestUrl: it buffers the full body, and a 500 MB model must stream to disk.
+	const res = await window.fetch(url, { signal });
 	if (!res.ok || !res.body) {
 		// Cancel the (unconsumed) body so a non-2xx can't leak a socket.
 		await res.body?.cancel().catch(() => undefined);

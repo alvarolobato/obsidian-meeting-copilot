@@ -72,9 +72,9 @@ export function listInputDevices(
         // A hung helper must not block the caller (the settings UI, or a
         // recording start's availability pre-check) for long. SIGKILL after a
         // short grace so a wedged process is actually reaped.
-        const timer = setTimeout(() => {
+        const timer = window.setTimeout(() => {
             proc.kill();
-            setTimeout(() => {
+            window.setTimeout(() => {
                 if (proc.exitCode === null && proc.signalCode === null) {
                     proc.kill("SIGKILL");
                 }
@@ -87,12 +87,12 @@ export function listInputDevices(
             out += d.toString();
         });
         proc.on("error", (err: Error) => {
-            clearTimeout(timer);
+            window.clearTimeout(timer);
             log("list-devices error", { message: err.message });
             done([]);
         });
         proc.on("close", () => {
-            clearTimeout(timer);
+            window.clearTimeout(timer);
             done(parseDeviceList(out));
         });
     });

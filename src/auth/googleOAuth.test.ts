@@ -210,7 +210,8 @@ describe("GoogleOAuth.authenticate cancellation", () => {
 	});
 
 	afterEach(() => {
-		delete (globalThis as unknown as { window?: unknown }).window;
+		// Put back test/setup-window.ts's alias rather than leaving `window` undefined.
+		(globalThis as unknown as { window: unknown }).window = globalThis;
 	});
 
 	it("throws AbortError immediately if the signal is already aborted", async () => {
@@ -253,7 +254,8 @@ describe("GoogleOAuth.authenticate scope composition", () => {
 	});
 
 	afterEach(() => {
-		delete (globalThis as unknown as { window?: unknown }).window;
+		// Put back test/setup-window.ts's alias rather than leaving `window` undefined.
+		(globalThis as unknown as { window: unknown }).window = globalThis;
 	});
 
 	/** Starts authenticate(), lets it open the browser, then cancels — we only

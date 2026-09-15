@@ -562,10 +562,55 @@ export function migrateSettings(
 }
 
 
+/** A direct child of a `.setting-item-control`, as {@link controlSizeClass} sees it. */
+export interface SettingControlChild {
+	tagName: string;
+	getAttribute(name: string): string | null;
+	classList: { contains(token: string): boolean };
+}
+
+/**
+ * The sizing class for a setting control, from its direct children. Mirrors the
+ * cascade the old CSS parent-selector rules had: a text, password, or textarea
+ * input makes the control wide (that rule out-ranked the model one, so a
+ * text-input model combobox is wide too), otherwise a model picker makes it
+ * model-sized, and anything else gets no class.
+ */
+export function controlSizeClass(
+	children: ArrayLike<SettingControlChild>
+): "mc-control-wide" | "mc-control-model" | null {
+	const list = Array.from(children);
+	const isWide = (c: SettingControlChild): boolean => {
+		if (c.tagName === "TEXTAREA") return true;
+		const type = c.getAttribute("type");
+		return c.tagName === "INPUT" && (type === "text" || type === "password");
+	};
+	if (list.some(isWide)) return "mc-control-wide";
+	const isModel = (c: SettingControlChild): boolean =>
+		c.classList.contains("meeting-copilot-model-combobox") ||
+		c.classList.contains("meeting-copilot-model-dropdown");
+	return list.some(isModel) ? "mc-control-model" : null;
+}
+
+/**
+ * Tags every setting control under `root` with its {@link controlSizeClass}, so
+ * styles.css can size controls without a parent selector (which forces broad
+ * style invalidation).
+ */
+export function tagSettingControls(root: HTMLElement): void {
+	root.querySelectorAll<HTMLElement>(".setting-item-control").forEach((control) => {
+		const size = controlSizeClass(control.children);
+		control.toggleClass("mc-control-wide", size === "mc-control-wide");
+		control.toggleClass("mc-control-model", size === "mc-control-model");
+	});
+}
+
 export class SystemRecordingSettingTab extends PluginSettingTab {
     plugin: SystemRecordingPlugin;
     /** Which settings pane is currently shown; preserved across `display()` re-renders. */
     private activeTab: SettingsTabId = "general";
+    /** Re-tags control sizing classes whenever any part of the pane re-renders. */
+    private controlTagger: MutationObserver | null = null;
     /** Model ids fetched from the primary enrichment endpoint (populated by "Load models"). */
     private models: string[] = [];
     /** Model ids from the fallback enrichment endpoint (when configured + loaded). */
@@ -668,6 +713,12 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         return null;
     }
 
+    hide(): void {
+        this.controlTagger?.disconnect();
+        this.controlTagger = null;
+        super.hide();
+    }
+
     display(): void {
         const { containerEl } = this;
         const s = t();
@@ -675,6 +726,11 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         const scrollTop = containerEl.scrollTop;
         containerEl.empty();
         containerEl.addClass("meeting-copilot-settings");
+        // Sections re-render in place (engine/backend bodies, model rows), so
+        // watch the pane rather than tagging after each render path.
+        this.controlTagger?.disconnect();
+        this.controlTagger = new MutationObserver(() => tagSettingControls(containerEl));
+        this.controlTagger.observe(containerEl, { childList: true, subtree: true });
 
         // Opening (or re-rendering) the tab is a fresh chance to auto-probe:
         // clear the per-session "already probed" guard so a verdict invalidated
@@ -717,7 +773,7 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
         // pane: it's reference information you go looking for, and above the
         // tabs it pushed the whole pane down and read like a heading for them.
         containerEl
-            .createEl("div", { cls: "meeting-copilot-version" })
+            .createDiv({ cls: "meeting-copilot-version" })
             .setText(
                 `${this.plugin.manifest.name} v${describeVersion(
                     this.plugin.manifest.version,
@@ -725,6 +781,9 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                 )}`
             );
 
+        // Tag now, not only from the observer's microtask: the scroll position is
+        // restored against this layout, and untagged controls are shorter.
+        tagSettingControls(containerEl);
         containerEl.scrollTop = scrollTop;
     }
 
@@ -1236,14 +1295,12 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
                         if (this.cliModelsLoaded && this.cliModels.length > 0) {
                             const input = text.inputEl;
                             const listId = `mc-cli-models-${backend}`;
-                            const dl = input.ownerDocument.createElement("datalist");
-                            dl.id = listId;
+                            const dl = input.parentElement?.createEl("datalist", {
+                                attr: { id: listId },
+                            });
                             for (const m of this.cliModels) {
-                                const opt = input.ownerDocument.createElement("option");
-                                opt.value = m;
-                                dl.appendChild(opt);
+                                dl?.createEl("option", { value: m });
                             }
-                            input.parentElement?.appendChild(dl);
                             input.setAttribute("list", listId);
                         }
                     });

@@ -5816,14 +5816,14 @@ export default class SystemRecordingPlugin extends Plugin {
                 );
             }
         );
-        let timer: ReturnType<typeof setTimeout> | undefined;
+        let timer: number | undefined;
         const cap = new Promise<void>((resolve) => {
-            timer = setTimeout(resolve, FVAD_PROVISION_TIMEOUT_MS);
+            timer = window.setTimeout(resolve, FVAD_PROVISION_TIMEOUT_MS);
         });
         try {
             await Promise.race([provision, cap]);
         } finally {
-            if (timer) clearTimeout(timer);
+            if (timer) window.clearTimeout(timer);
         }
     }
 
@@ -6533,7 +6533,7 @@ export default class SystemRecordingPlugin extends Plugin {
      */
     private pickTranscriptFile(): Promise<File | null> {
         return new Promise((resolve) => {
-            const input = document.createElement("input");
+            const input = createEl("input");
             input.type = "file";
             input.accept = ".vtt,.txt,.srt,.md,text/plain,text/vtt";
             input.onchange = () => resolve(input.files?.[0] ?? null);
@@ -8443,7 +8443,7 @@ export default class SystemRecordingPlugin extends Plugin {
         for (let i = 0; i < tries; i++) {
             const f = this.app.vault.getAbstractFileByPath(vaultPath);
             if (f instanceof TFile) return f;
-            await new Promise((r) => setTimeout(r, delayMs));
+            await new Promise((r) => window.setTimeout(r, delayMs));
         }
         const f = this.app.vault.getAbstractFileByPath(vaultPath);
         return f instanceof TFile ? f : null;

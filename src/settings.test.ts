@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_SETTINGS, migrateSettings } from "./settings";
+import { DEFAULT_SETTINGS, migrateSettings, controlSizeClass } from "./settings";
 import { DEFAULT_ENRICH_PROMPT, effectiveEnrichPrompt } from "./enrich/prompt";
 
 describe("migrateSettings", () => {
@@ -212,5 +212,43 @@ describe("migrateSettings", () => {
 			enrichMaxTranscriptTokens: 50_000,
 		});
 		expect(migrated.enrichMaxTranscriptTokens).toBe(50_000);
+	});
+});
+
+describe("controlSizeClass", () => {
+	const el = (tagName: string, attrs: Record<string, string> = {}, classes: string[] = []) => ({
+		tagName,
+		getAttribute: (name: string) => attrs[name] ?? null,
+		classList: { contains: (token: string) => classes.includes(token) },
+	});
+
+	it("makes text, password, and textarea controls wide", () => {
+		expect(controlSizeClass([el("INPUT", { type: "text" })])).toBe("mc-control-wide");
+		expect(controlSizeClass([el("INPUT", { type: "password" })])).toBe("mc-control-wide");
+		expect(controlSizeClass([el("TEXTAREA")])).toBe("mc-control-wide");
+	});
+
+	it("sizes a model dropdown as a model picker", () => {
+		expect(
+			controlSizeClass([el("SELECT", {}, ["dropdown", "meeting-copilot-model-dropdown"])])
+		).toBe("mc-control-model");
+	});
+
+	it("keeps a text-input model combobox wide, as the old cascade did", () => {
+		expect(
+			controlSizeClass([el("INPUT", { type: "text" }, ["meeting-copilot-model-combobox"])])
+		).toBe("mc-control-wide");
+	});
+
+	it("leaves number inputs, toggles, buttons, and empty controls alone", () => {
+		expect(controlSizeClass([el("INPUT", { type: "number" })])).toBeNull();
+		expect(controlSizeClass([el("INPUT")])).toBeNull();
+		expect(controlSizeClass([el("DIV", {}, ["checkbox-container"])])).toBeNull();
+		expect(controlSizeClass([el("BUTTON")])).toBeNull();
+		expect(controlSizeClass([])).toBeNull();
+	});
+
+	it("uses any direct child, not just the first", () => {
+		expect(controlSizeClass([el("BUTTON"), el("INPUT", { type: "text" })])).toBe("mc-control-wide");
 	});
 });

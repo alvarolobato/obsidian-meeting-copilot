@@ -1,3 +1,4 @@
+import { getLanguage } from "obsidian";
 import { en, type Messages } from "./en";
 
 // English is the base language. Additional locales can be added here, e.g.
@@ -5,10 +6,10 @@ import { en, type Messages } from "./en";
 // automatically for users whose Obsidian language matches.
 const LOCALES: Record<string, Messages> = { en };
 
-/** Obsidian stores the active display language in localStorage under "language". */
+/** The active Obsidian display language (`getLanguage()`, available since 1.8.7). */
 function currentLocale(): string {
 	try {
-		return window.localStorage.getItem("language") || "en";
+		return getLanguage() || "en";
 	} catch {
 		return "en";
 	}

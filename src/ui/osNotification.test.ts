@@ -94,7 +94,8 @@ function setupWindow(config: {
 }
 
 afterEach(() => {
-	delete (globalThis as unknown as { window?: unknown }).window;
+	// Put back test/setup-window.ts's alias rather than leaving `window` undefined.
+	(globalThis as unknown as { window: unknown }).window = globalThis;
 });
 
 describe("notifyOs", () => {

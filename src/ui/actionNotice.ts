@@ -5,7 +5,7 @@ import { Notice } from "obsidian";
  * Clicking the button runs `onClick` and dismisses the notice.
  */
 export function actionNotice(message: string, buttonLabel: string, onClick: () => void): Notice {
-	const frag = window.activeDocument.createDocumentFragment();
+	const frag = createFragment();
 	const container = frag.createDiv();
 	container.createSpan({ text: message });
 	const btn = container.createEl("button", {
@@ -40,7 +40,7 @@ export function multiActionNotice(
 	actions: NoticeAction[],
 	onDismiss?: () => void
 ): Notice {
-	const frag = window.activeDocument.createDocumentFragment();
+	const frag = createFragment();
 	const container = frag.createDiv();
 	container.createSpan({ text: message });
 	const buttons = container.createDiv({ cls: "system-recording-notice-actions" });

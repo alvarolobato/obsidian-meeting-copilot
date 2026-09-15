@@ -249,13 +249,13 @@ async function spawnAndCollect(
 ): Promise<SpawnResult> {
 	return new Promise((resolve, reject) => {
 		let settled = false;
-		let timer: ReturnType<typeof setTimeout> | undefined;
+		let timer: number | undefined;
 		let onAbort: () => void;
 
 		const settle = (fn: () => void) => {
 			if (settled) return;
 			settled = true;
-			if (timer) clearTimeout(timer);
+			if (timer) window.clearTimeout(timer);
 			opts.signal?.removeEventListener("abort", onAbort);
 			fn();
 		};
@@ -293,7 +293,7 @@ async function spawnAndCollect(
 				/* ignore */
 			}
 			try { child.stdin?.destroy(); } catch { /* ignore */ }
-			setTimeout(() => {
+			window.setTimeout(() => {
 				try {
 					child.kill("SIGKILL");
 				} catch {
@@ -304,7 +304,7 @@ async function spawnAndCollect(
 
 		// Hard timeout
 		if (opts.timeoutMs) {
-			timer = setTimeout(() => {
+			timer = window.setTimeout(() => {
 				killChild();
 				settle(() =>
 					reject(
