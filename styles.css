@@ -285,7 +285,7 @@
  * left alone — they only match input[type="text"]/[type="password"]).
  * min-width keeps text and password boxes the same size across rows even when
  * their labels differ in length. The class is set by `tagSettingControls` in
- * settings.ts rather than matched with `:has()`, which invalidates broadly. */
+ * settings.ts rather than matched with a CSS parent selector, which invalidates broadly. */
 .meeting-copilot-settings .setting-item-control.mc-control-wide {
     flex: 1 1 50%;
     min-width: 50%;

@@ -553,25 +553,46 @@ export function migrateSettings(
 }
 
 
+/** A direct child of a `.setting-item-control`, as {@link controlSizeClass} sees it. */
+export interface SettingControlChild {
+	tagName: string;
+	getAttribute(name: string): string | null;
+	classList: { contains(token: string): boolean };
+}
+
 /**
- * Tags setting controls so styles.css can size them without `:has()`, which
- * forces broad selector invalidation. Mirrors the cascade the `:has()` rules
- * had: a control holding a text, password, or textarea input is wide (that rule
- * out-ranked the model one), otherwise one holding a model picker is model-sized.
+ * The sizing class for a setting control, from its direct children. Mirrors the
+ * cascade the old CSS parent-selector rules had: a text, password, or textarea
+ * input makes the control wide (that rule out-ranked the model one, so a
+ * text-input model combobox is wide too), otherwise a model picker makes it
+ * model-sized, and anything else gets no class.
+ */
+export function controlSizeClass(
+	children: ArrayLike<SettingControlChild>
+): "mc-control-wide" | "mc-control-model" | null {
+	const list = Array.from(children);
+	const isWide = (c: SettingControlChild): boolean => {
+		if (c.tagName === "TEXTAREA") return true;
+		const type = c.getAttribute("type");
+		return c.tagName === "INPUT" && (type === "text" || type === "password");
+	};
+	if (list.some(isWide)) return "mc-control-wide";
+	const isModel = (c: SettingControlChild): boolean =>
+		c.classList.contains("meeting-copilot-model-combobox") ||
+		c.classList.contains("meeting-copilot-model-dropdown");
+	return list.some(isModel) ? "mc-control-model" : null;
+}
+
+/**
+ * Tags every setting control under `root` with its {@link controlSizeClass}, so
+ * styles.css can size controls without a parent selector (which forces broad
+ * style invalidation).
  */
 export function tagSettingControls(root: HTMLElement): void {
 	root.querySelectorAll<HTMLElement>(".setting-item-control").forEach((control) => {
-		const wide =
-			control.querySelector(
-				':scope > input[type="text"], :scope > input[type="password"], :scope > textarea'
-			) !== null;
-		const model =
-			!wide &&
-			control.querySelector(
-				":scope > .meeting-copilot-model-combobox, :scope > .meeting-copilot-model-dropdown"
-			) !== null;
-		control.toggleClass("mc-control-wide", wide);
-		control.toggleClass("mc-control-model", model);
+		const size = controlSizeClass(control.children);
+		control.toggleClass("mc-control-wide", size === "mc-control-wide");
+		control.toggleClass("mc-control-model", size === "mc-control-model");
 	});
 }
 
