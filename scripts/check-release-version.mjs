@@ -30,7 +30,7 @@ if (versions[tag] !== manifest.minAppVersion) {
 if (problems.length > 0) {
 	console.error(
 		`Tag ${tag} doesn't match the committed version files:\n  - ${problems.join("\n  - ")}\n` +
-			`Cut releases from main with:\n  npm version ${tag} -m "chore: release %s"\n  git push origin main --follow-tags`
+			`Cut releases from main with:\n  npm version ${tag} -m "chore: release %s"\n  git push origin ${tag}\n  git push origin main   # after the release succeeds`
 	);
 	process.exit(1);
 }

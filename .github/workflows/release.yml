@@ -2,12 +2,14 @@ name: Release
 
 # Cut a release from an up-to-date, clean main:
 #   npm version 1.0.5 -m "chore: release %s"
-#   git push origin main --follow-tags
+#   git push origin 1.0.5    # starts this workflow
+#   git push origin main     # only after the release succeeds
 # `npm version` writes the version into package.json, manifest.json, and
 # versions.json, commits, and creates the tag (no "v" prefix; see .npmrc). The
 # tagged commit therefore already holds the release version: Obsidian and BRAT
 # expect the tag to equal manifest.json "version", and the community directory
-# warns when the release manifest differs from the repository's.
+# warns when the release manifest differs from the repository's. Pushing main
+# last keeps it from advertising a version whose release failed.
 on:
   push:
     tags:

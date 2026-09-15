@@ -244,7 +244,8 @@ both load on strict-codesigning macOS — and publishes a GitHub Release with
 ```bash
 git switch main && git pull
 npm version 0.2.0 -m "chore: release %s"   # writes package/manifest/versions, commits, tags
-git push origin main --follow-tags
+git push origin 0.2.0                      # starts release.yml (builds from the tag)
+git push origin main                       # only after the release succeeds
 ```
 
 `npm version` runs `scripts/sync-release-version.mjs` before committing, so the
@@ -252,6 +253,10 @@ tagged commit, `main`, and the published `manifest.json` all hold the same
 version. The Obsidian community directory warns when the release manifest
 differs from the repository's. `release.yml` refuses a tag whose committed files
 don't match (`scripts/check-release-version.mjs`) and never commits to `main`.
+Push the tag before `main` so `main` never advertises a version whose release
+failed. On failure: delete the tag locally and remotely, `git reset --hard
+origin/main`, land the fix, and run `npm version` again. Tags up to 0.9.2 can't be
+re-run via `workflow_dispatch` (their commits hold the previous version).
 `src/binary.ts` checksum placeholders stay on `main` — only release builds pin
 real helper/dylib shas. `ci.yml` runs typecheck/lint/test/build on PRs and pushes to `main`,
 plus a macOS job that builds the Swift helper. Keep GitHub Action versions
