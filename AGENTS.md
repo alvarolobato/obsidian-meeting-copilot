@@ -233,7 +233,7 @@ Security → Screen Recording and restart Obsidian.
 
 ## Releases
 
-Releases are cut by pushing a semver tag; `release.yml` builds everything on a
+Releases are cut by pushing a semver tag created with `npm version` (below); `release.yml` builds everything on a
 macOS runner, **ad-hoc signs** the freshly built binary **and** the `whisper`
 dylib and pins each one's sha (plus the dylib's byte size) into the bundle from
 the *signed* artifact — so `main.js` and the uploaded assets always agree and
@@ -242,13 +242,21 @@ both load on strict-codesigning macOS — and publishes a GitHub Release with
 `fvad.wasm` (the bundled WebRTC-VAD module — a missing copy degrades gracefully).
 
 ```bash
-git tag -a 0.2.0 -m "0.2.0"
-git push origin 0.2.0
+git switch main && git pull
+npm version 0.2.0 -m "chore: release %s"   # writes package/manifest/versions, commits, tags
+git push origin 0.2.0                      # starts release.yml (builds from the tag)
+git push origin main                       # only after the release succeeds
 ```
 
-`release.yml` syncs `manifest.json` / `package.json` / `versions.json` to the
-tag for release artifacts, then commits those three files back to `main` so
-HEAD matches the shipped version (needed for the Obsidian community directory).
+`npm version` runs `scripts/sync-release-version.mjs` before committing, so the
+tagged commit, `main`, and the published `manifest.json` all hold the same
+version. The Obsidian community directory warns when the release manifest
+differs from the repository's. `release.yml` refuses a tag whose committed files
+don't match (`scripts/check-release-version.mjs`) and never commits to `main`.
+Push the tag before `main` so `main` never advertises a version whose release
+failed. On failure: delete the tag locally and remotely, `git reset --hard
+origin/main`, land the fix, and run `npm version` again. Tags up to 0.9.2 can't be
+re-run via `workflow_dispatch` (their commits hold the previous version).
 `src/binary.ts` checksum placeholders stay on `main` — only release builds pin
 real helper/dylib shas. `ci.yml` runs typecheck/lint/test/build on PRs and pushes to `main`,
 plus a macOS job that builds the Swift helper. Keep GitHub Action versions
@@ -323,7 +331,9 @@ current (e.g. `actions/checkout@v5`, `actions/setup-node@v5`).
 - **i18n:** English is the base. Add UI strings to `src/i18n/en.ts` and use
   `t()`; don't hardcode user-facing strings.
 - **Notification tracing (`src/util/notifLog.ts`):** off by default, gated on the
-  `mc:notif-debug` localStorage flag (read at plugin load). When set it prints
+  `mc:notif-debug` localStorage flag (read at plugin load), in non-release builds
+  only: release builds fold the check out via the `__MC_RELEASE__` define, so
+  shipped code never reads `localStorage` directly. When set it prints
   `[mc:notif] …` traces (via `console.warn`, so console-export tools capture
   them) and registers a dev-only "Debug test meeting notification" command in
   `main.ts`. Nothing ships to end users while the flag is off; changing it needs

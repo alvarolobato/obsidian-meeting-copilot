@@ -143,6 +143,9 @@ const context = await esbuild.context({
 	minify: prod,
 	define: {
 		__MC_BUILD__: JSON.stringify(buildInfo),
+		// Lets release-only branches fold away at build time (e.g. the notification
+		// debug flag in src/util/notifLog.ts).
+		__MC_RELEASE__: JSON.stringify(buildInfo.isRelease),
 	},
 });
 

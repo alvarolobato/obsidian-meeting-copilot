@@ -1,9 +1,15 @@
 name: Release
 
-# Cut a release by pushing a version tag that matches the manifest version, e.g.:
-#   git tag 1.0.5 && git push origin 1.0.5
-# The tag name becomes the release version (no "v" prefix — Obsidian & BRAT
-# expect the release tag to equal manifest.json "version").
+# Cut a release from an up-to-date, clean main:
+#   npm version 1.0.5 -m "chore: release %s"
+#   git push origin 1.0.5    # starts this workflow
+#   git push origin main     # only after the release succeeds
+# `npm version` writes the version into package.json, manifest.json, and
+# versions.json, commits, and creates the tag (no "v" prefix; see .npmrc). The
+# tagged commit therefore already holds the release version: Obsidian and BRAT
+# expect the tag to equal manifest.json "version", and the community directory
+# warns when the release manifest differs from the repository's. Pushing main
+# last keeps it from advertising a version whose release failed.
 on:
   push:
     tags:
@@ -64,10 +70,12 @@ jobs:
           npm run lint
           npm test
 
-      - name: Sync manifest/versions to the release tag
+      # The tagged commit must already hold the version (see the header), so the
+      # published manifest.json is byte-for-byte the repository's at the tag.
+      - name: Check committed version matches the tag
         env:
           TAG: ${{ steps.v.outputs.tag }}
-        run: node scripts/sync-release-version.mjs
+        run: node scripts/check-release-version.mjs
 
       - name: Build Swift helper (arm64)
         run: npm run build:swift
@@ -187,21 +195,3 @@ jobs:
               main.js manifest.json styles.css system-recorder whisper fvad.wasm
           fi
 
-      # Community directory reads manifest.json at main HEAD; keep it aligned
-      # with the tag we just shipped. binary.ts placeholders stay on main.
-      - name: Sync version files on main
-        env:
-          TAG: ${{ steps.v.outputs.tag }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git checkout main
-          TAG="${TAG}" node scripts/sync-release-version.mjs
-          git add manifest.json versions.json package.json
-          if git diff --staged --quiet; then
-            echo "main already synced to ${TAG}"
-          else
-            git commit -m "chore: sync manifest and versions to ${TAG}"
-            git push origin main
-          fi

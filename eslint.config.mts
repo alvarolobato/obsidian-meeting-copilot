@@ -44,7 +44,6 @@ export default tseslint.config(
 		"scripts/**",
 		// Agent worktrees nested in the main checkout.
 		".claude/**",
-		"version-bump.mjs",
 		"versions.json",
 		"main.js",
 		"vitest.config.ts",
