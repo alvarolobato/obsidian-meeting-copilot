@@ -16,7 +16,7 @@ It appears once. To see it again, run **Show welcome screen** from the command p
 
 Client secret and OAuth tokens are stored in per-vault local storage on this device — not in synced `data.json`. Declined meetings are ignored. If the connection expires, the agenda shows **Reconnect**.
 
-Auth also requests two **optional** scopes, each toggleable independently under *Settings → Meeting Copilot → Calendar → Optional permissions* (all on by default). They only improve attendee display names on the agenda — calendar access itself never needs them:
+Auth also requests two **optional** scopes, each toggleable independently under *Settings → Meeting Copilot → General → Optional permissions* (all on by default). They only improve attendee display names on the agenda — calendar access itself never needs them:
 
 - **Expand Google Group invitees** (`cloud-identity.groups.readonly`) — expands a Google Group on a calendar invite (e.g. `elg@…`) into the individual people on it, instead of showing the group's raw address.
 - **Resolve attendee names from your Workspace directory** (`directory.readonly`) — looks up a real display name for attendees Calendar didn't already label. Some Workspace domains disable this for third-party apps entirely (a `people lookup blocked by Workspace admin policy` line in the console log, referencing [this Google setting](https://support.google.com/a/answer/6343701)) — when that happens, those attendees fall back to a name guessed from their email address.
