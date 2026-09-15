@@ -157,8 +157,8 @@ export class WelcomeModal extends Modal {
 		const iconEl = row.createDiv({ cls: "mc-welcome-ribbon-icon" });
 		setIcon(iconEl, icon);
 		const text = row.createDiv({ cls: "mc-welcome-ribbon-text" });
-		text.createEl("div", { text: name, cls: "mc-welcome-ribbon-name" });
-		text.createEl("div", { text: desc, cls: "mc-welcome-ribbon-desc" });
+		text.createDiv({ text: name, cls: "mc-welcome-ribbon-name" });
+		text.createDiv({ text: desc, cls: "mc-welcome-ribbon-desc" });
 	}
 
 	// MARK: - "Set up" pane
