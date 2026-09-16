@@ -174,6 +174,8 @@ const FOLLOW_UPS_HEADING = "## Follow-ups";
  */
 const PAST_WINDOW_DAYS = 2;
 import { chatComplete, ChatAbortError, EnrichTimeoutError } from "./enrich/llm";
+import { apiEnrichConfigured } from "./enrich/endpointConfig";
+import { listModels } from "./enrich/models";
 import {
     cliChatComplete,
     CLIAbortError,
@@ -2051,6 +2053,7 @@ export default class SystemRecordingPlugin extends Plugin {
 			enrichBackend: this.settings.enrichBackend,
 			apiBaseUrl: this.settings.apiBaseUrl,
 			apiKey: this.settings.apiKey,
+			enrichModel: this.settings.enrichModel,
 			transcriptionBackend: this.settings.transcriptionBackend,
 			sttBaseUrl: this.settings.sttApiBaseUrl,
 		};
@@ -2074,6 +2077,27 @@ export default class SystemRecordingPlugin extends Plugin {
 			setApiCredentials: async (baseUrl, apiKey) => {
 				this.settings.apiBaseUrl = baseUrl;
 				this.settings.apiKey = apiKey;
+				await this.saveSettings();
+			},
+			setEnrichBackend: async (backend) => {
+				this.settings.enrichBackend = backend;
+				await this.saveSettings();
+			},
+			getCliPath: (cli) => this.settings.enrichCliPaths[cli],
+			setCliPath: async (cli, path) => {
+				this.settings.enrichCliPaths[cli] = path;
+				await this.saveSettings();
+			},
+			getEnrichModel: () => this.settings.enrichModel,
+			setEnrichModel: async (model) => {
+				this.settings.enrichModel = model;
+				await this.saveSettings();
+			},
+			loadEnrichModels: () =>
+				listModels(this.settings.apiBaseUrl, this.settings.apiKey),
+			getCliModel: (cli) => this.settings.enrichCliModels[cli],
+			setCliModel: async (cli, model) => {
+				this.settings.enrichCliModels[cli] = model;
 				await this.saveSettings();
 			},
 			openSettings: (tab) => this.openPluginSettings(tab),
@@ -6578,7 +6602,10 @@ export default class SystemRecordingPlugin extends Plugin {
             return "";
         }
         const { apiBaseUrl, apiKey, enrichModel } = this.settings;
-        if (this.settings.enrichBackend === "api" && (!apiBaseUrl || !apiKey || !enrichModel)) {
+        if (
+            this.settings.enrichBackend === "api" &&
+            !apiEnrichConfigured({ apiBaseUrl, apiKey, enrichModel })
+        ) {
             new Notice(t().notices.transcriptImportNoEndpoint);
             return "";
         }
@@ -7590,7 +7617,7 @@ export default class SystemRecordingPlugin extends Plugin {
         }
         if (this.settings.enrichBackend === "api") {
             const { apiBaseUrl, apiKey, enrichModel } = this.settings;
-            if (!apiBaseUrl || !apiKey || !enrichModel) {
+            if (!apiEnrichConfigured({ apiBaseUrl, apiKey, enrichModel })) {
                 new Notice(t().notices.enrichNotConfigured);
                 return;
             }
@@ -7685,7 +7712,10 @@ export default class SystemRecordingPlugin extends Plugin {
         const { apiBaseUrl, apiKey, enrichModel } = this.settings;
         // Config can change between enqueue and run; re-check and bail quietly.
         if (!this.settings.enableEnrichment) return;
-        if (this.settings.enrichBackend === "api" && (!apiBaseUrl || !apiKey || !enrichModel)) {
+        if (
+            this.settings.enrichBackend === "api" &&
+            !apiEnrichConfigured({ apiBaseUrl, apiKey, enrichModel })
+        ) {
             return;
         }
         let enrichedOk = false;

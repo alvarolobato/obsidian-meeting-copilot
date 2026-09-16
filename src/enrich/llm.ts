@@ -88,9 +88,13 @@ export async function chatComplete(p: ChatParams): Promise<string> {
 	const request = requestUrl({
 		url,
 		method: "POST",
+		// Omit Authorization entirely when no key is set: a blank `Bearer ` can
+		// make otherwise-open endpoints reject the call, which is exactly the
+		// keyless local-server case the endpoint rule allows (same idiom as
+		// transcribe/models.ts and transcribe/probe.ts).
 		headers: {
 			"Content-Type": "application/json",
-			Authorization: `Bearer ${p.apiKey}`,
+			...(p.apiKey ? { Authorization: `Bearer ${p.apiKey}` } : {}),
 		},
 		body: JSON.stringify(payload),
 		throw: false,

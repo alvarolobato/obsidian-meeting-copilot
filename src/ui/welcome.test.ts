@@ -2,11 +2,12 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS } from "../settings";
 import { LOCAL_MODELS } from "../transcribe/localModels";
 import {
+	ENRICH_BACKEND_OPTIONS,
 	googleStepStatus,
 	HELPER_DOWNLOADS_URL,
-	isLoopbackUrl,
 	llmStepStatus,
 	modelDownloadSizeRange,
+	modelLoadOutcome,
 	predatesWelcome,
 	PRE_WELCOME_VERSION,
 	setupComplete,
@@ -22,6 +23,7 @@ function snapshot(over: Partial<SetupSnapshot> = {}): SetupSnapshot {
 		enrichBackend: "api",
 		apiBaseUrl: "",
 		apiKey: "",
+		enrichModel: "",
 		transcriptionBackend: "local",
 		sttBaseUrl: "",
 		...over,
@@ -88,51 +90,46 @@ describe("googleStepStatus", () => {
 });
 
 describe("llmStepStatus", () => {
-	it("is todo for the API backend with no endpoint", () => {
-		expect(llmStepStatus(snapshot())).toBe("todo");
+	const ready = { apiBaseUrl: "https://api.openai.com/v1", apiKey: "sk-test", enrichModel: "gpt-4o" };
+
+	it("is done once the endpoint has a URL, key, and model", () => {
+		expect(llmStepStatus(snapshot(ready))).toBe("done");
 	});
 
-	it("is todo on a fresh install: the default URL is OpenAI's, with no key", () => {
+	it("is todo on a fresh install: the default URL has no key or model", () => {
 		expect(DEFAULT_SETTINGS.apiKey).toBe("");
 		expect(
 			llmStepStatus(
 				snapshot({
 					apiBaseUrl: DEFAULT_SETTINGS.apiBaseUrl,
 					apiKey: DEFAULT_SETTINGS.apiKey,
+					enrichModel: DEFAULT_SETTINGS.enrichModel,
 				})
 			)
 		).toBe("todo");
 	});
 
-	it("is done for a remote endpoint once it has a key", () => {
+	it("is todo while any one of URL, key, or model is missing", () => {
+		expect(llmStepStatus(snapshot({ ...ready, apiBaseUrl: "" }))).toBe("todo");
+		expect(llmStepStatus(snapshot({ ...ready, apiKey: "" }))).toBe("todo");
+		expect(llmStepStatus(snapshot({ ...ready, enrichModel: "" }))).toBe("todo");
+	});
+
+	it("is done for a keyless local server, which enrichment also accepts", () => {
 		expect(
 			llmStepStatus(
-				snapshot({ apiBaseUrl: "https://api.openai.com/v1", apiKey: "sk-test" })
+				snapshot({ apiBaseUrl: "http://localhost:11434/v1", apiKey: "", enrichModel: "llama3" })
 			)
 		).toBe("done");
 	});
 
-	it("ignores a whitespace-only key", () => {
-		expect(
-			llmStepStatus(snapshot({ apiBaseUrl: "https://api.openai.com/v1", apiKey: "  " }))
-		).toBe("todo");
-	});
-
-	it("ignores a whitespace-only base URL", () => {
-		expect(llmStepStatus(snapshot({ apiBaseUrl: "   " }))).toBe("todo");
-	});
-
-	it("does not require an API key on this machine — local servers have none", () => {
-		expect(
-			llmStepStatus(snapshot({ apiBaseUrl: "http://localhost:11434/v1" }))
-		).toBe("done");
-		expect(llmStepStatus(snapshot({ apiBaseUrl: "http://127.0.0.1:1234/v1" }))).toBe("done");
+	it("ignores whitespace-only values", () => {
+		expect(llmStepStatus(snapshot({ ...ready, apiKey: "   " }))).toBe("todo");
+		expect(llmStepStatus(snapshot({ ...ready, enrichModel: "  " }))).toBe("todo");
 	});
 
 	it("is done for a CLI backend, which needs no endpoint from us", () => {
-		expect(llmStepStatus(snapshot({ enrichBackend: "claude-cli" }))).toBe(
-			"done"
-		);
+		expect(llmStepStatus(snapshot({ enrichBackend: "claude-cli" }))).toBe("done");
 	});
 });
 
@@ -182,7 +179,7 @@ describe("setupComplete", () => {
 			setupComplete(
 				snapshot({
 					googleAuthenticated: true,
-					apiBaseUrl: "https://api.openai.com/v1", apiKey: "sk-test",
+					apiBaseUrl: "https://api.openai.com/v1", apiKey: "sk-test", enrichModel: "gpt-4o",
 				})
 			)
 		).toBe(true);
@@ -236,17 +233,59 @@ describe("HELPER_DOWNLOADS_URL", () => {
 	});
 });
 
-describe("isLoopbackUrl", () => {
-	it("recognizes this machine", () => {
-		expect(isLoopbackUrl("http://localhost:11434/v1")).toBe(true);
-		expect(isLoopbackUrl("http://127.0.0.1:1234")).toBe(true);
-		expect(isLoopbackUrl("http://[::1]:8080/v1")).toBe(true);
-		expect(isLoopbackUrl("http://llm.localhost/v1")).toBe(true);
+
+describe("ENRICH_BACKEND_OPTIONS", () => {
+	it("offers the endpoint plus every CLI the settings tab knows", () => {
+		expect([...ENRICH_BACKEND_OPTIONS]).toEqual([
+			"api",
+			...Object.keys(DEFAULT_SETTINGS.enrichCliPaths),
+		]);
 	});
 
-	it("rejects remote hosts and unparseable input", () => {
-		expect(isLoopbackUrl("https://api.openai.com/v1")).toBe(false);
-		expect(isLoopbackUrl("https://localhost.example.com/v1")).toBe(false);
-		expect(isLoopbackUrl("not a url")).toBe(false);
+	it("lists the endpoint first, as the default backend", () => {
+		expect(ENRICH_BACKEND_OPTIONS[0]).toBe("api");
+		expect(DEFAULT_SETTINGS.enrichBackend).toBe("api");
+	});
+});
+
+describe("modelLoadOutcome", () => {
+	const live = {
+		isOpen: true,
+		seq: 2,
+		currentSeq: 2,
+		asked: "url\u0000key",
+		current: "url\u0000key",
+		backend: "api",
+		rowAttached: true,
+	};
+
+	it("reports for the load the user is waiting on", () => {
+		expect(modelLoadOutcome(live)).toBe("report");
+	});
+
+	it("ignores a load that finished after the modal closed", () => {
+		expect(modelLoadOutcome({ ...live, isOpen: false })).toBe("ignore");
+	});
+
+	it("ignores a load superseded by a newer one", () => {
+		expect(modelLoadOutcome({ ...live, seq: 1, currentSeq: 2 })).toBe("ignore");
+	});
+
+	it("frees the button when the credentials changed mid-flight", () => {
+		expect(modelLoadOutcome({ ...live, current: "other\u0000key" })).toBe("reenable");
+	});
+
+	it("stays silent when the pane moved to a CLI backend", () => {
+		expect(modelLoadOutcome({ ...live, backend: "claude-cli" })).toBe("ignore");
+	});
+
+	it("stays silent when its row was detached by a re-render", () => {
+		expect(modelLoadOutcome({ ...live, rowAttached: false })).toBe("ignore");
+	});
+
+	it("prefers ignore over reenable once superseded, so the newer load keeps the button", () => {
+		expect(
+			modelLoadOutcome({ ...live, seq: 1, currentSeq: 2, current: "other\u0000key" })
+		).toBe("ignore");
 	});
 });

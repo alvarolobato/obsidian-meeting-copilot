@@ -4,6 +4,8 @@
  * lives in {@link ../ui/welcomeModal.ts}.
  */
 
+import type { EnrichCLI } from "../enrich/cliBridge";
+import { apiEnrichConfigured } from "../enrich/endpointConfig";
 import { formatBytes } from "../transcribe/localModels";
 
 /** README section explaining what the plugin downloads, and from where. */
@@ -62,6 +64,59 @@ export function shouldShowWelcome(state: WelcomeGateState): boolean {
 	return !state.welcomeShownVersion;
 }
 
+/** An enrichment backend: the shared API endpoint, or one of the local CLIs. */
+export type EnrichBackendId = "api" | EnrichCLI;
+
+/**
+ * Backends offered by the welcome screen's picker, in display order. Shared
+ * with the settings tab's dropdown through `t().settings.enrichBackend.options`
+ * so the two surfaces can't drift apart.
+ */
+export const ENRICH_BACKEND_OPTIONS: readonly EnrichBackendId[] = [
+	"api",
+	"claude-cli",
+	"codex-cli",
+	"opencode-cli",
+	"pi-cli",
+];
+
+/** What a finished model load is still allowed to do. */
+export type LoadOutcome = "report" | "reenable" | "ignore";
+
+/** The state a finished load is judged against. */
+export interface LoadContext {
+	/** The modal is still open. */
+	isOpen: boolean;
+	/** Sequence number this load was given when it started. */
+	seq: number;
+	/** Sequence number of the newest load started since. */
+	currentSeq: number;
+	/** Credentials this load asked about. */
+	asked: string;
+	/** Credentials on screen now. */
+	current: string;
+	/** Backend selected now: a CLI means the endpoint fields are gone. */
+	backend: string;
+	/** The model row this load captured is still in the document. */
+	rowAttached: boolean;
+}
+
+/**
+ * Decides what a completed load may do, kept pure so the races are testable
+ * without a DOM:
+ * - `ignore` — say nothing: the modal closed, a newer load owns the UI, or the
+ *   pane no longer shows this endpoint. Results are still worth caching.
+ * - `reenable` — the credentials changed: free the button so the new endpoint
+ *   can be checked, but don't report on the old one.
+ * - `report` — this load is still the one the user is waiting for.
+ */
+export function modelLoadOutcome(c: LoadContext): LoadOutcome {
+	if (!c.isOpen || c.seq !== c.currentSeq) return "ignore";
+	if (c.asked !== c.current) return "reenable";
+	if (!c.rowAttached || c.backend !== "api") return "ignore";
+	return "report";
+}
+
 /** Where a given setup step stands, driving the pill next to its heading. */
 export type SetupStepStatus = "done" | "pending" | "todo";
 
@@ -74,6 +129,8 @@ export interface SetupSnapshot {
 	enrichBackend: string;
 	apiBaseUrl: string;
 	apiKey: string;
+	/** Chat model for the shared endpoint; enrichment refuses to run without one. */
+	enrichModel: string;
 	transcriptionBackend: "remote" | "local";
 	/** Transcription-specific endpoint; empty means "reuse `apiBaseUrl`". */
 	sttBaseUrl: string;
@@ -86,31 +143,13 @@ export function googleStepStatus(s: SetupSnapshot): SetupStepStatus {
 
 /**
  * A CLI backend shells out to an already-authenticated tool, so it needs no
- * endpoint from us. The API backend needs a base URL, plus a key unless the
- * URL points at this machine. The default base URL is OpenAI's, so a URL alone
- * doesn't mean anything was set up, while local servers (Ollama, LM Studio)
- * legitimately have no key.
+ * endpoint from us. The API backend is "ready" exactly when
+ * {@link apiEnrichConfigured} says so — the same rule the enrichment gates
+ * use, so the pill can't claim Ready while enrichment refuses to run.
  */
 export function llmStepStatus(s: SetupSnapshot): SetupStepStatus {
 	if (s.enrichBackend !== "api") return "done";
-	const url = s.apiBaseUrl.trim();
-	if (!url) return "todo";
-	return s.apiKey.trim() || isLoopbackUrl(url) ? "done" : "todo";
-}
-
-/** True for an http(s) URL on this machine (localhost, 127.x, ::1). */
-export function isLoopbackUrl(url: string): boolean {
-	try {
-		const host = new URL(url).hostname.replace(/^\[|\]$/g, "");
-		return (
-			host === "localhost" ||
-			host.endsWith(".localhost") ||
-			host === "::1" ||
-			/^127\./.test(host)
-		);
-	} catch {
-		return false;
-	}
+	return apiEnrichConfigured(s) ? "done" : "todo";
 }
 
 /**

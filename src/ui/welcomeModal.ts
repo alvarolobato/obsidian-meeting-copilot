@@ -1,13 +1,18 @@
-import { App, Modal, Setting, setIcon } from "obsidian";
+import { App, Modal, Notice, Setting, setIcon } from "obsidian";
 import { t } from "../i18n";
+import { CLAUDE_CLI_MODELS, CODEX_CLI_MODELS, type EnrichCLI } from "../enrich/cliBridge";
+import { cliModelPlaceholder, cliPathPlaceholder } from "../settings";
 import { LOCAL_MODELS } from "../transcribe/localModels";
 import { RECORD_ICON } from "./icons";
 import { AGENDA_ICON } from "./agenda/MeetingAgendaView";
 import { DASHBOARD_ICON } from "./dashboard/MeetingDashboardView";
 import {
+	ENRICH_BACKEND_OPTIONS,
 	googleStepStatus,
+	modelLoadOutcome,
 	HELPER_DOWNLOADS_URL,
 	llmStepStatus,
+	type EnrichBackendId,
 	modelDownloadSizeRange,
 	transcriptionNeedsSetup,
 	type SetupSnapshot,
@@ -38,6 +43,19 @@ export interface WelcomeHost {
 	getApiKey(): string;
 	/** Persists the shared AI endpoint credentials. */
 	setApiCredentials(baseUrl: string, apiKey: string): Promise<void>;
+	/** Switches enrichment between the shared endpoint and a local CLI. */
+	setEnrichBackend(backend: EnrichBackendId): Promise<void>;
+	/** Per-CLI binary path override; empty means auto-detect. */
+	getCliPath(cli: EnrichCLI): string;
+	setCliPath(cli: EnrichCLI, path: string): Promise<void>;
+	/** Per-CLI model; empty means the CLI's own default. */
+	getCliModel(cli: EnrichCLI): string;
+	setCliModel(cli: EnrichCLI, model: string): Promise<void>;
+	/** Chat model used for enrichment through the shared endpoint. */
+	getEnrichModel(): string;
+	setEnrichModel(model: string): Promise<void>;
+	/** Lists the endpoint's models; throws with the reason, so it doubles as a credential check. */
+	loadEnrichModels(): Promise<string[]>;
 	/** Opens the plugin's settings, optionally on a specific tab. */
 	openSettings(tab?: "general" | "aiBackend"): void;
 	/** Human-readable label for the current enrichment backend. */
@@ -60,6 +78,12 @@ export class WelcomeModal extends Modal {
 	private tabButtons = new Map<WelcomeTabId, HTMLButtonElement>();
 	/** Guards the async auth callbacks below from repainting a closed modal. */
 	private isOpen = false;
+	/** Models last loaded from the endpoint; kept across re-renders of the pane. */
+	private apiModels: string[] = [];
+	/** Credentials that produced {@link apiModels}, so a changed URL/key discards them. */
+	private apiModelsFor: string | null = null;
+	/** Identifies the newest model load; older ones finish into the void. */
+	private loadSeq = 0;
 
 	constructor(
 		app: App,
@@ -240,31 +264,49 @@ export class WelcomeModal extends Modal {
 
 	private renderLlmStep(el: HTMLElement, snap: SetupSnapshot): void {
 		const s = t().welcome.setup;
+		const settings = t().settings;
 		const step = this.createStep(el, s.llm.heading, llmStepStatus(snap));
+		const pill = step.querySelector<HTMLElement>(".mc-welcome-pill");
+		step.createEl("p", { text: s.llm.desc, cls: "mc-welcome-step-desc" });
 
-		// A CLI backend authenticates itself; showing endpoint fields would
-		// invite the user to fill in something that is never read.
-		if (snap.enrichBackend !== "api") {
-			step.createEl("p", {
-				text: s.llm.cliNote(this.host.enrichBackendLabel()),
-				cls: "mc-welcome-step-desc",
+		// The picker comes first: which backend you pick decides which fields
+		// below are worth filling in, and a CLI needs no endpoint at all.
+		new Setting(step).setName(s.llm.backend).addDropdown((dd) => {
+			for (const option of ENRICH_BACKEND_OPTIONS) {
+				dd.addOption(option, settings.enrichBackend.options[option]);
+			}
+			dd.setValue(snap.enrichBackend).onChange((value) => {
+				void this.host
+					.setEnrichBackend(value as EnrichBackendId)
+					// Re-render so the fields (and the pill) match the new backend.
+					.then(() => this.renderActiveTab());
 			});
+		});
+
+		// A CLI authenticates itself; showing endpoint fields would invite the
+		// user to fill in something that is never read.
+		if (snap.enrichBackend !== "api") {
+			this.renderCliFields(step, snap.enrichBackend as EnrichCLI);
 			return;
 		}
 
-		step.createEl("p", { text: s.llm.desc, cls: "mc-welcome-step-desc" });
+		// Declared before the credential fields: their onChange closes over it.
+		// Detached for now: the credential fields below close over it, but it is
+		// attached *after* the check button so the pane reads in flow order —
+		// URL, key, check the endpoint, then pick a model from what it returned.
+		const modelRow = createDiv({ cls: "mc-welcome-model-row" });
 
-		new Setting(step).setName(s.llm.baseUrl).addText((text) =>
+		new Setting(step).setName(s.llm.baseUrl).addText((text) => {
 			text
 				.setPlaceholder(s.llm.baseUrlPlaceholder)
 				.setValue(this.host.getApiBaseUrl())
 				.onChange((value) => {
-					void this.host.setApiCredentials(
-						value.trim(),
-						this.host.getApiKey()
-					);
-				})
-		);
+					void this.host
+						.setApiCredentials(value.trim(), this.host.getApiKey())
+						.then(() => this.onCredentialsEdited(modelRow, pill));
+				});
+			this.refreshOnBlur(text.inputEl, pill);
+		});
 
 		new Setting(step).setName(s.llm.apiKey).addText((text) => {
 			text.inputEl.type = "password";
@@ -272,12 +314,276 @@ export class WelcomeModal extends Modal {
 				.setPlaceholder(s.llm.apiKeyPlaceholder)
 				.setValue(this.host.getApiKey())
 				.onChange((value) => {
-					void this.host.setApiCredentials(
-						this.host.getApiBaseUrl(),
-						value.trim()
-					);
+					void this.host
+						.setApiCredentials(this.host.getApiBaseUrl(), value.trim())
+						.then(() => this.onCredentialsEdited(modelRow, pill));
 				});
+			this.refreshOnBlur(text.inputEl, pill);
 		});
+
+		// Loading the models is the only honest check that the URL and key work,
+		// so the same button doubles as "test these credentials".
+		new Setting(step)
+			// Welcome-specific wording: the settings description promises a
+			// fallback-endpoint probe, which this pane doesn't do.
+			.setName(s.llm.checkEndpoint)
+			.setDesc(s.llm.checkEndpointDesc)
+			.addButton((b) =>
+				b
+					.setButtonText(settings.testConnection.button)
+					.setCta()
+					.onClick(async () => {
+						if (!this.host.getApiBaseUrl().trim()) {
+							new Notice(settings.testConnection.noBaseUrl);
+							return;
+						}
+						b.setButtonText(settings.testConnection.testing);
+						b.setDisabled(true);
+						// The credentials this request is for. If they change while
+						// it's in flight, the answer describes an endpoint the user
+						// has already moved on from. The sequence number covers the
+						// rest: a re-render (tab or backend switch) replaces this
+						// button with an enabled one, so a second load can start with
+						// the *same* credentials, and only the newest may report.
+						const asked = this.credentialsKey();
+						const seq = ++this.loadSeq;
+						try {
+							const models = await this.host.loadEnrichModels();
+							// Cache first: even a load the user has moved past is a
+							// valid answer for those credentials, and the next render
+							// of that endpoint can use it.
+							if (this.credentialsKey() === asked) {
+								this.apiModels = models;
+								this.apiModelsFor = asked;
+							}
+							const outcome = modelLoadOutcome({
+								isOpen: this.isOpen,
+								seq,
+								currentSeq: this.loadSeq,
+								asked,
+								current: this.credentialsKey(),
+								backend: this.host.snapshot().enrichBackend,
+								rowAttached: modelRow.isConnected,
+							});
+							if (outcome !== "report") {
+								// Free the button only when this load still owns it.
+								if (outcome === "reenable") {
+									b.setButtonText(settings.testConnection.button);
+									b.setDisabled(false);
+								}
+								return;
+							}
+							new Notice(
+								models.length
+									? settings.testConnection.success(models.length)
+									: settings.testConnection.empty
+							);
+							this.renderModelRow(modelRow, pill);
+							this.updatePill(pill, llmStepStatus(this.host.snapshot()));
+							b.setButtonText(settings.testConnection.button);
+							b.setDisabled(false);
+						} catch (e) {
+							// A superseded load must stay silent: a newer one owns
+							// the button and the result the user is waiting for.
+							if (!this.isOpen || seq !== this.loadSeq) return;
+							// Don't report a failure for credentials the user has
+							// already changed — but still re-enable the button, or
+							// the new endpoint could never be checked.
+							if (this.credentialsKey() !== asked) {
+								b.setButtonText(settings.testConnection.button);
+								b.setDisabled(false);
+								return;
+							}
+							new Notice(
+								settings.testConnection.failure(
+									e instanceof Error ? e.message : String(e)
+								)
+							);
+							b.setButtonText(settings.testConnection.button);
+							b.setDisabled(false);
+						}
+					})
+			);
+
+		step.appendChild(modelRow);
+		this.renderModelRow(modelRow, pill);
+	}
+
+	/**
+	 * The model control, in its own container so it can be rebuilt alone when
+	 * the credentials change — a full re-render here would race the blur/click
+	 * transition, and leaving it alone would offer the old endpoint's models.
+	 */
+	private renderModelRow(row: HTMLElement, pill: HTMLElement | null): void {
+		const settings = t().settings;
+		row.empty();
+		const model = new Setting(row).setName(settings.enrichModel.name);
+		const current = this.host.getEnrichModel();
+		const loaded = this.endpointModels();
+		if (loaded.length > 0) {
+			model.addDropdown((dd) => {
+				// Nothing is selected until the user picks: showing the first model
+				// as though it were chosen would leave enrichment with no model.
+				if (!current) dd.addOption("", settings.modelCombobox.placeholderEmpty);
+				// Keep a model the endpoint no longer lists selectable rather than
+				// silently switching the user to another one.
+				const options =
+					current && !loaded.includes(current) ? [current, ...loaded] : loaded;
+				for (const m of options) dd.addOption(m, m);
+				dd.setValue(current).onChange((value) => {
+					void this.host
+						.setEnrichModel(value)
+						.then(() => this.updatePill(pill, llmStepStatus(this.host.snapshot())));
+				});
+			});
+			return;
+		}
+		// Welcome-specific wording: the settings copy names the settings tab's
+		// own button, which isn't what sits above this row here.
+		model.setDesc(t().welcome.setup.llm.modelDesc).addText((text) => {
+			// Committed on blur, not per keystroke: a half-typed id ("gpt-") would
+			// otherwise be persisted and picked up by an auto-enrich that fires
+			// mid-typing. Mirrors the settings tab's model field.
+			text
+				.setPlaceholder(settings.modelCombobox.placeholderEmpty)
+				.setValue(current);
+			this.refreshOnBlur(text.inputEl, pill, () =>
+				this.host.setEnrichModel(text.getValue().trim())
+			);
+		});
+	}
+
+	/** After a credential edit: refresh the pill and drop now-stale models. */
+	private onCredentialsEdited(row: HTMLElement, pill: HTMLElement | null): void {
+		if (!this.isOpen) return;
+		this.updatePill(pill, llmStepStatus(this.host.snapshot()));
+		if (this.discardStaleModels()) this.renderModelRow(row, pill);
+	}
+
+	/**
+	 * Updates the step's status pill in place after a field is edited. It must
+	 * not re-render the pane: `blur` fires *before* the next element gets its
+	 * click, so rebuilding here would remove the button being clicked (e.g.
+	 * moving from the API key field to "Load models") and drop the click.
+	 */
+	private refreshOnBlur(
+		input: HTMLElement,
+		pill: HTMLElement | null,
+		commit?: () => Promise<void> | void
+	): void {
+		input.addEventListener("blur", () => {
+			if (!this.isOpen) return;
+			void Promise.resolve(commit?.()).then(() => {
+				if (this.isOpen) {
+					this.updatePill(pill, llmStepStatus(this.host.snapshot()));
+				}
+			});
+		});
+	}
+
+	/** Repaints one status pill's label and colour without touching any controls. */
+	private updatePill(pill: HTMLElement | null, status: SetupStepStatus): void {
+		if (!pill) return;
+		const s = t().welcome.setup;
+		pill.setText(
+			status === "done"
+				? s.statusDone
+				: status === "pending"
+					? s.statusPending
+					: s.statusTodo
+		);
+		pill.className = `mc-welcome-pill is-${status}`;
+	}
+
+	/**
+	 * Models loaded from the endpoint, but only while the credentials still
+	 * match the ones that produced them — otherwise a changed URL or key would
+	 * leave the previous endpoint's models on offer.
+	 */
+	private endpointModels(): string[] {
+		if (this.apiModelsFor !== this.credentialsKey()) {
+			this.apiModels = [];
+			this.apiModelsFor = null;
+		}
+		return this.apiModels;
+	}
+
+	/** Identifies the endpoint credentials a model list belongs to. */
+	private credentialsKey(): string {
+		return `${this.host.getApiBaseUrl()}\u0000${this.host.getApiKey()}`;
+	}
+
+	/**
+	 * Drops a model list that no longer matches the credentials on screen.
+	 * Returns true when something was discarded, so the caller can rebuild the
+	 * model row instead of leaving the old endpoint's models selectable.
+	 */
+	private discardStaleModels(): boolean {
+		if (this.apiModels.length === 0) return false;
+		if (this.apiModelsFor === this.credentialsKey()) return false;
+		this.apiModels = [];
+		this.apiModelsFor = null;
+		return true;
+	}
+
+	/**
+	 * Path + model for a CLI backend, mirroring the settings tab's fields (and
+	 * reusing its strings) so the welcome screen is enough to finish setup.
+	 * Claude and Codex have fixed model lists; OpenCode and Pi are free text,
+	 * since their models are fetched live from the CLI in settings.
+	 */
+	private renderCliFields(step: HTMLElement, cli: EnrichCLI): void {
+		const s = t().welcome.setup;
+		const settings = t().settings;
+		step.createEl("p", {
+			text: s.llm.cliNote(settings.enrichBackend.options[cli]),
+			cls: "mc-welcome-step-desc",
+		});
+
+		new Setting(step)
+			.setName(settings.enrichCliPath.name)
+			.setDesc(settings.enrichCliPath.desc)
+			.addText((text) =>
+				text
+					.setPlaceholder(cliPathPlaceholder(cli, t()))
+					.setValue(this.host.getCliPath(cli))
+					.onChange((value) => {
+						void this.host.setCliPath(cli, value.trim());
+					})
+			);
+
+		const model = new Setting(step)
+			.setName(settings.enrichCliModel.name)
+			.setDesc(settings.enrichCliModel.desc);
+		if (cli === "claude-cli" || cli === "codex-cli") {
+			// Widened to string[] on purpose: the two curated lists are `as const`
+			// tuples with disjoint literal types, so a union of them makes
+			// `includes` expect their intersection — i.e. `never`.
+			const models: readonly string[] =
+				cli === "claude-cli" ? CLAUDE_CLI_MODELS : CODEX_CLI_MODELS;
+			model.addDropdown((dd) => {
+				const chosen = this.host.getCliModel(cli);
+				dd.addOption("", settings.enrichCliModel.defaultOption);
+				// A hand-edited or retired model isn't in the curated list, and a
+				// dropdown can't select an option it never had — it would show the
+				// default while the CLI still ran the stored value.
+				const options =
+					chosen && !models.includes(chosen) ? [chosen, ...models] : [...models];
+				for (const m of options) dd.addOption(m, m);
+				dd.setValue(chosen).onChange((value) => {
+					void this.host.setCliModel(cli, value);
+				});
+			});
+			return;
+		}
+		model.addText((text) =>
+			text
+				.setPlaceholder(cliModelPlaceholder(cli, t()))
+				.setValue(this.host.getCliModel(cli))
+				.onChange((value) => {
+					void this.host.setCliModel(cli, value.trim());
+				})
+		);
 	}
 
 	private renderTranscriptionNote(el: HTMLElement, snap: SetupSnapshot): void {

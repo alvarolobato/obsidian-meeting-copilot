@@ -1899,7 +1899,33 @@ ul.mc-action-tasks {
 }
 .mc-welcome-step .setting-item {
 	border-top: none;
-	padding-bottom: 0;
+	padding-bottom: var(--size-4-2);
+}
+
+/* The model picker follows the check button, so it needs a visible gap: without
+ * it the dropdown reads as part of the button row and the two controls collide
+ * at narrow widths. */
+.mc-welcome-model-row {
+	margin-top: var(--size-4-2);
+}
+
+.mc-welcome-model-row .setting-item {
+	flex-wrap: wrap;
+	gap: var(--size-4-2);
+	padding-top: 0;
+}
+
+/* Keep the model control readable instead of squeezed against its label. */
+.mc-welcome-model-row .setting-item-control {
+	flex: 1 1 55%;
+	justify-content: flex-start;
+	min-width: 55%;
+}
+
+.mc-welcome-model-row .setting-item-control select,
+.mc-welcome-model-row .setting-item-control input[type="text"] {
+	max-width: 100%;
+	width: 100%;
 }
 .mc-welcome-pill {
 	border-radius: var(--radius-s);

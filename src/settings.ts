@@ -19,6 +19,7 @@ import {
 } from "./notes/meetingNote";
 import { DEFAULT_ENRICH_PROMPT } from "./enrich/prompt";
 import { listModels } from "./enrich/models";
+import { ENRICH_BACKEND_OPTIONS } from "./ui/welcome";
 import {
 	inferSttApiType,
 	isTimestampCapableFamily,
@@ -317,7 +318,7 @@ const SETTINGS_TABS: readonly SettingsTabId[] = [
 ] as const;
 
 /** Return the appropriate placeholder string for a per-CLI model text field. */
-function cliModelPlaceholder(cli: EnrichCLI, s: ReturnType<typeof t>): string {
+export function cliModelPlaceholder(cli: EnrichCLI, s: ReturnType<typeof t>): string {
 	switch (cli) {
 		case "claude-cli":
 			return s.settings.enrichCliModel.placeholderClaude;
@@ -331,7 +332,7 @@ function cliModelPlaceholder(cli: EnrichCLI, s: ReturnType<typeof t>): string {
 }
 
 /** Return the appropriate placeholder string for a per-CLI path text field. */
-function cliPathPlaceholder(cli: EnrichCLI, s: ReturnType<typeof t>): string {
+export function cliPathPlaceholder(cli: EnrichCLI, s: ReturnType<typeof t>): string {
 	switch (cli) {
 		case "claude-cli":
 			return s.settings.enrichCliPath.placeholderClaude;
@@ -1064,12 +1065,11 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
             .setName(s.settings.enrichBackend.name)
             .setDesc(s.settings.enrichBackend.desc)
             .addDropdown((dd) => {
+                // Same list the welcome screen offers, so the two can't drift.
+                for (const option of ENRICH_BACKEND_OPTIONS) {
+                    dd.addOption(option, s.settings.enrichBackend.options[option]);
+                }
                 dd
-                    .addOption("api", s.settings.enrichBackend.options.api)
-                    .addOption("claude-cli", s.settings.enrichBackend.options["claude-cli"])
-                    .addOption("codex-cli", s.settings.enrichBackend.options["codex-cli"])
-                    .addOption("opencode-cli", s.settings.enrichBackend.options["opencode-cli"])
-                    .addOption("pi-cli", s.settings.enrichBackend.options["pi-cli"])
                     .setValue(this.plugin.settings.enrichBackend)
                     .onChange(async (value) => {
                         this.plugin.settings.enrichBackend = value as "api" | EnrichCLI;
@@ -1229,14 +1229,25 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 
             if (backend === "claude-cli" || backend === "codex-cli") {
                 // Hardcoded lists — no need to load; always show a plain dropdown.
-                const models = [...(backend === "claude-cli" ? CLAUDE_CLI_MODELS : CODEX_CLI_MODELS)];
+                // Typed as string[]: the curated lists are `as const` tuples with
+                // disjoint literals, so a union of them narrows `includes` to never.
+                const models: string[] = [
+                    ...(backend === "claude-cli" ? CLAUDE_CLI_MODELS : CODEX_CLI_MODELS),
+                ];
                 const currentModel = this.plugin.settings.enrichCliModels[backend];
                 new Setting(el)
                     .setName(s.settings.enrichCliModel.name)
                     .setDesc(s.settings.enrichCliModel.desc)
                     .addDropdown((dd) => {
-                        dd.addOption("", "— default —");
-                        for (const m of models) dd.addOption(m, m);
+                        dd.addOption("", s.settings.enrichCliModel.defaultOption);
+                        // A stored model that isn't in the curated list (hand-edited,
+                        // or retired since) can't be selected by setValue, so it would
+                        // read as "default" while the CLI still ran it.
+                        const options =
+                            currentModel && !models.includes(currentModel)
+                                ? [currentModel, ...models]
+                                : models;
+                        for (const m of options) dd.addOption(m, m);
                         dd.setValue(currentModel || "")
                             .onChange(async (value) => {
                                 this.plugin.settings.enrichCliModels[backend] = value;
