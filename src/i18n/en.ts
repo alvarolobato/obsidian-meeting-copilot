@@ -943,6 +943,8 @@ export const en = {
 				desc: "Used to summarize transcripts into notes and action items. Use an OpenAI-compatible endpoint (including a local one), or a CLI you're already signed in to.",
 				backend: "Enrichment backend",
 				checkEndpoint: "Check this endpoint",
+				modelDesc:
+					"Type a model id, or check the endpoint below to pick from the models it offers.",
 				checkEndpointDesc:
 					"Loads the models this endpoint offers — the quickest way to confirm the URL and key work.",
 				baseUrl: "API base URL",

@@ -81,6 +81,8 @@ export class WelcomeModal extends Modal {
 	private apiModels: string[] = [];
 	/** Credentials that produced {@link apiModels}, so a changed URL/key discards them. */
 	private apiModelsFor: string | null = null;
+	/** Identifies the newest model load; older ones finish into the void. */
+	private loadSeq = 0;
 
 	constructor(
 		app: App,
@@ -335,14 +337,23 @@ export class WelcomeModal extends Modal {
 						b.setDisabled(true);
 						// The credentials this request is for. If they change while
 						// it's in flight, the answer describes an endpoint the user
-						// has already moved on from.
+						// has already moved on from. The sequence number covers the
+						// rest: a re-render (tab or backend switch) replaces this
+						// button with an enabled one, so a second load can start with
+						// the *same* credentials, and only the newest may report.
 						const asked = this.credentialsKey();
+						const seq = ++this.loadSeq;
 						try {
 							const models = await this.host.loadEnrichModels();
-							if (!this.isOpen || this.credentialsKey() !== asked) {
-								// The credentials moved on while this was in flight:
-								// the answer describes an endpoint the user has left.
-								if (this.isOpen) {
+							if (
+								!this.isOpen ||
+								seq !== this.loadSeq ||
+								this.credentialsKey() !== asked
+							) {
+								// Stale: either the credentials moved on, or a newer
+								// load owns the UI now. Only touch the button when
+								// this load is still the current one.
+								if (this.isOpen && seq === this.loadSeq) {
 									b.setButtonText(settings.testConnection.button);
 									b.setDisabled(false);
 								}
@@ -367,7 +378,9 @@ export class WelcomeModal extends Modal {
 							b.setButtonText(settings.testConnection.button);
 							b.setDisabled(false);
 						} catch (e) {
-							if (!this.isOpen) return;
+							// A superseded load must stay silent: a newer one owns
+							// the button and the result the user is waiting for.
+							if (!this.isOpen || seq !== this.loadSeq) return;
 							// Don't report a failure for credentials the user has
 							// already changed — but still re-enable the button, or
 							// the new endpoint could never be checked.
@@ -419,7 +432,9 @@ export class WelcomeModal extends Modal {
 			});
 			return;
 		}
-		model.setDesc(settings.enrichModel.desc).addText((text) => {
+		// Not the settings description: it says "use Load models above", but in
+		// this pane the action sits below this row.
+		model.setDesc(t().welcome.setup.llm.modelDesc).addText((text) => {
 			text
 				.setPlaceholder(settings.modelCombobox.placeholderEmpty)
 				.setValue(current)
@@ -524,11 +539,21 @@ export class WelcomeModal extends Modal {
 			.setName(settings.enrichCliModel.name)
 			.setDesc(settings.enrichCliModel.desc);
 		if (cli === "claude-cli" || cli === "codex-cli") {
-			const models = cli === "claude-cli" ? CLAUDE_CLI_MODELS : CODEX_CLI_MODELS;
+			// Widened to string[] on purpose: the two curated lists are `as const`
+			// tuples with disjoint literal types, so a union of them makes
+			// `includes` expect their intersection — i.e. `never`.
+			const models: readonly string[] =
+				cli === "claude-cli" ? CLAUDE_CLI_MODELS : CODEX_CLI_MODELS;
 			model.addDropdown((dd) => {
+				const chosen = this.host.getCliModel(cli);
 				dd.addOption("", settings.enrichCliModel.defaultOption);
-				for (const m of models) dd.addOption(m, m);
-				dd.setValue(this.host.getCliModel(cli)).onChange((value) => {
+				// A hand-edited or retired model isn't in the curated list, and a
+				// dropdown can't select an option it never had — it would show the
+				// default while the CLI still ran the stored value.
+				const options =
+					chosen && !models.includes(chosen) ? [chosen, ...models] : [...models];
+				for (const m of options) dd.addOption(m, m);
+				dd.setValue(chosen).onChange((value) => {
 					void this.host.setCliModel(cli, value);
 				});
 			});
