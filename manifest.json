@@ -1,7 +1,7 @@
 {
 	"id": "meeting-copilot",
 	"name": "Meeting Copilot",
-	"version": "0.9.3",
+	"version": "0.9.4",
 	"minAppVersion": "1.8.7",
 	"description": "Record, transcribe, and summarize meetings on macOS with Google Calendar sync, dual-channel audio capture, on-device or remote transcription, and AI notes.",
 	"author": "Alvaro Lobato",

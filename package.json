@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-meeting-copilot",
-	"version": "0.9.3",
+	"version": "0.9.4",
 	"description": "Record, transcribe, and summarize meetings on macOS with Google Calendar sync, dual-channel audio capture, on-device or remote transcription, and AI notes.",
 	"main": "main.js",
 	"type": "module",
