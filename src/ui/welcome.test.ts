@@ -5,7 +5,6 @@ import {
 	ENRICH_BACKEND_OPTIONS,
 	googleStepStatus,
 	HELPER_DOWNLOADS_URL,
-	isLoopbackUrl,
 	llmStepStatus,
 	modelDownloadSizeRange,
 	predatesWelcome,
@@ -23,6 +22,7 @@ function snapshot(over: Partial<SetupSnapshot> = {}): SetupSnapshot {
 		enrichBackend: "api",
 		apiBaseUrl: "",
 		apiKey: "",
+		enrichModel: "",
 		transcriptionBackend: "local",
 		sttBaseUrl: "",
 		...over,
@@ -89,51 +89,38 @@ describe("googleStepStatus", () => {
 });
 
 describe("llmStepStatus", () => {
-	it("is todo for the API backend with no endpoint", () => {
-		expect(llmStepStatus(snapshot())).toBe("todo");
+	const ready = { apiBaseUrl: "https://api.openai.com/v1", apiKey: "sk-test", enrichModel: "gpt-4o" };
+
+	it("is done once the endpoint has a URL, key, and model", () => {
+		expect(llmStepStatus(snapshot(ready))).toBe("done");
 	});
 
-	it("is todo on a fresh install: the default URL is OpenAI's, with no key", () => {
+	it("is todo on a fresh install: the default URL has no key or model", () => {
 		expect(DEFAULT_SETTINGS.apiKey).toBe("");
 		expect(
 			llmStepStatus(
 				snapshot({
 					apiBaseUrl: DEFAULT_SETTINGS.apiBaseUrl,
 					apiKey: DEFAULT_SETTINGS.apiKey,
+					enrichModel: DEFAULT_SETTINGS.enrichModel,
 				})
 			)
 		).toBe("todo");
 	});
 
-	it("is done for a remote endpoint once it has a key", () => {
-		expect(
-			llmStepStatus(
-				snapshot({ apiBaseUrl: "https://api.openai.com/v1", apiKey: "sk-test" })
-			)
-		).toBe("done");
+	it("is todo while any one of URL, key, or model is missing", () => {
+		expect(llmStepStatus(snapshot({ ...ready, apiBaseUrl: "" }))).toBe("todo");
+		expect(llmStepStatus(snapshot({ ...ready, apiKey: "" }))).toBe("todo");
+		expect(llmStepStatus(snapshot({ ...ready, enrichModel: "" }))).toBe("todo");
 	});
 
-	it("ignores a whitespace-only key", () => {
-		expect(
-			llmStepStatus(snapshot({ apiBaseUrl: "https://api.openai.com/v1", apiKey: "  " }))
-		).toBe("todo");
-	});
-
-	it("ignores a whitespace-only base URL", () => {
-		expect(llmStepStatus(snapshot({ apiBaseUrl: "   " }))).toBe("todo");
-	});
-
-	it("does not require an API key on this machine — local servers have none", () => {
-		expect(
-			llmStepStatus(snapshot({ apiBaseUrl: "http://localhost:11434/v1" }))
-		).toBe("done");
-		expect(llmStepStatus(snapshot({ apiBaseUrl: "http://127.0.0.1:1234/v1" }))).toBe("done");
+	it("ignores whitespace-only values", () => {
+		expect(llmStepStatus(snapshot({ ...ready, apiKey: "   " }))).toBe("todo");
+		expect(llmStepStatus(snapshot({ ...ready, enrichModel: "  " }))).toBe("todo");
 	});
 
 	it("is done for a CLI backend, which needs no endpoint from us", () => {
-		expect(llmStepStatus(snapshot({ enrichBackend: "claude-cli" }))).toBe(
-			"done"
-		);
+		expect(llmStepStatus(snapshot({ enrichBackend: "claude-cli" }))).toBe("done");
 	});
 });
 
@@ -183,7 +170,7 @@ describe("setupComplete", () => {
 			setupComplete(
 				snapshot({
 					googleAuthenticated: true,
-					apiBaseUrl: "https://api.openai.com/v1", apiKey: "sk-test",
+					apiBaseUrl: "https://api.openai.com/v1", apiKey: "sk-test", enrichModel: "gpt-4o",
 				})
 			)
 		).toBe(true);
@@ -237,20 +224,6 @@ describe("HELPER_DOWNLOADS_URL", () => {
 	});
 });
 
-describe("isLoopbackUrl", () => {
-	it("recognizes this machine", () => {
-		expect(isLoopbackUrl("http://localhost:11434/v1")).toBe(true);
-		expect(isLoopbackUrl("http://127.0.0.1:1234")).toBe(true);
-		expect(isLoopbackUrl("http://[::1]:8080/v1")).toBe(true);
-		expect(isLoopbackUrl("http://llm.localhost/v1")).toBe(true);
-	});
-
-	it("rejects remote hosts and unparseable input", () => {
-		expect(isLoopbackUrl("https://api.openai.com/v1")).toBe(false);
-		expect(isLoopbackUrl("https://localhost.example.com/v1")).toBe(false);
-		expect(isLoopbackUrl("not a url")).toBe(false);
-	});
-});
 
 describe("ENRICH_BACKEND_OPTIONS", () => {
 	it("offers the endpoint plus every CLI the settings tab knows", () => {

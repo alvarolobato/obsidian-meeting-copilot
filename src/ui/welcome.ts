@@ -91,6 +91,8 @@ export interface SetupSnapshot {
 	enrichBackend: string;
 	apiBaseUrl: string;
 	apiKey: string;
+	/** Chat model for the shared endpoint; enrichment refuses to run without one. */
+	enrichModel: string;
 	transcriptionBackend: "remote" | "local";
 	/** Transcription-specific endpoint; empty means "reuse `apiBaseUrl`". */
 	sttBaseUrl: string;
@@ -103,31 +105,15 @@ export function googleStepStatus(s: SetupSnapshot): SetupStepStatus {
 
 /**
  * A CLI backend shells out to an already-authenticated tool, so it needs no
- * endpoint from us. The API backend needs a base URL, plus a key unless the
- * URL points at this machine. The default base URL is OpenAI's, so a URL alone
- * doesn't mean anything was set up, while local servers (Ollama, LM Studio)
- * legitimately have no key.
+ * endpoint from us. The API backend is "ready" only when it has everything
+ * `enqueueEnrich` checks — base URL, key, and model — so the pill can't claim
+ * Ready while enrichment refuses to run.
  */
 export function llmStepStatus(s: SetupSnapshot): SetupStepStatus {
 	if (s.enrichBackend !== "api") return "done";
-	const url = s.apiBaseUrl.trim();
-	if (!url) return "todo";
-	return s.apiKey.trim() || isLoopbackUrl(url) ? "done" : "todo";
-}
-
-/** True for an http(s) URL on this machine (localhost, 127.x, ::1). */
-export function isLoopbackUrl(url: string): boolean {
-	try {
-		const host = new URL(url).hostname.replace(/^\[|\]$/g, "");
-		return (
-			host === "localhost" ||
-			host.endsWith(".localhost") ||
-			host === "::1" ||
-			/^127\./.test(host)
-		);
-	} catch {
-		return false;
-	}
+	return s.apiBaseUrl.trim() && s.apiKey.trim() && s.enrichModel.trim()
+		? "done"
+		: "todo";
 }
 
 /**

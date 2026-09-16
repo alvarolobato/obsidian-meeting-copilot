@@ -79,6 +79,8 @@ export class WelcomeModal extends Modal {
 	private isOpen = false;
 	/** Models last loaded from the endpoint; kept across re-renders of the pane. */
 	private apiModels: string[] = [];
+	/** Credentials that produced {@link apiModels}, so a changed URL/key discards them. */
+	private apiModelsFor: string | null = null;
 
 	constructor(
 		app: App,
@@ -261,6 +263,7 @@ export class WelcomeModal extends Modal {
 		const s = t().welcome.setup;
 		const settings = t().settings;
 		const step = this.createStep(el, s.llm.heading, llmStepStatus(snap));
+		const pill = step.querySelector<HTMLElement>(".mc-welcome-pill");
 		step.createEl("p", { text: s.llm.desc, cls: "mc-welcome-step-desc" });
 
 		// The picker comes first: which backend you pick decides which fields
@@ -294,7 +297,7 @@ export class WelcomeModal extends Modal {
 						this.host.getApiKey()
 					);
 				});
-			this.refreshOnBlur(text.inputEl);
+			this.refreshOnBlur(text.inputEl, pill);
 		});
 
 		new Setting(step).setName(s.llm.apiKey).addText((text) => {
@@ -308,7 +311,7 @@ export class WelcomeModal extends Modal {
 						value.trim()
 					);
 				});
-			this.refreshOnBlur(text.inputEl);
+			this.refreshOnBlur(text.inputEl, pill);
 		});
 
 		// Loading the models is the only honest check that the URL and key work,
@@ -331,6 +334,7 @@ export class WelcomeModal extends Modal {
 							const models = await this.host.loadEnrichModels();
 							if (!this.isOpen) return;
 							this.apiModels = models;
+							this.apiModelsFor = `${this.host.getApiBaseUrl()}\u0000${this.host.getApiKey()}`;
 							new Notice(
 								models.length
 									? settings.testConnection.success(models.length)
@@ -351,16 +355,21 @@ export class WelcomeModal extends Modal {
 
 		const model = new Setting(step).setName(settings.enrichModel.name);
 		const current = this.host.getEnrichModel();
-		if (this.apiModels.length > 0) {
+		const loaded = this.endpointModels();
+		if (loaded.length > 0) {
 			model.addDropdown((dd) => {
+				// Nothing is selected until the user picks: showing the first model
+				// as though it were chosen would leave enrichment with no model.
+				if (!current) dd.addOption("", settings.modelCombobox.placeholderEmpty);
 				// Keep a model the endpoint no longer lists selectable rather than
 				// silently switching the user to another one.
-				const options = this.apiModels.includes(current) || !current
-					? this.apiModels
-					: [current, ...this.apiModels];
+				const options =
+					current && !loaded.includes(current) ? [current, ...loaded] : loaded;
 				for (const m of options) dd.addOption(m, m);
-				dd.setValue(current || options[0] || "").onChange((value) => {
-					void this.host.setEnrichModel(value);
+				dd.setValue(current).onChange((value) => {
+					void this.host
+						.setEnrichModel(value)
+						.then(() => this.updatePill(pill, llmStepStatus(this.host.snapshot())));
 				});
 			});
 			return;
@@ -372,19 +381,48 @@ export class WelcomeModal extends Modal {
 				.onChange((value) => {
 					void this.host.setEnrichModel(value.trim());
 				});
-			this.refreshOnBlur(text.inputEl);
+			this.refreshOnBlur(text.inputEl, pill);
 		});
 	}
 
 	/**
-	 * Re-renders the pane when a field loses focus, so the step's status pill
-	 * reflects what was just typed. Deliberately not on every keystroke: that
-	 * would rebuild the field being typed into and steal focus.
+	 * Updates the step's status pill in place after a field is edited. It must
+	 * not re-render the pane: `blur` fires *before* the next element gets its
+	 * click, so rebuilding here would remove the button being clicked (e.g.
+	 * moving from the API key field to "Load models") and drop the click.
 	 */
-	private refreshOnBlur(input: HTMLElement): void {
+	private refreshOnBlur(input: HTMLElement, pill: HTMLElement | null): void {
 		input.addEventListener("blur", () => {
-			if (this.isOpen) this.renderActiveTab();
+			if (this.isOpen) this.updatePill(pill, llmStepStatus(this.host.snapshot()));
 		});
+	}
+
+	/** Repaints one status pill's label and colour without touching any controls. */
+	private updatePill(pill: HTMLElement | null, status: SetupStepStatus): void {
+		if (!pill) return;
+		const s = t().welcome.setup;
+		pill.setText(
+			status === "done"
+				? s.statusDone
+				: status === "pending"
+					? s.statusPending
+					: s.statusTodo
+		);
+		pill.className = `mc-welcome-pill is-${status}`;
+	}
+
+	/**
+	 * Models loaded from the endpoint, but only while the credentials still
+	 * match the ones that produced them — otherwise a changed URL or key would
+	 * leave the previous endpoint's models on offer.
+	 */
+	private endpointModels(): string[] {
+		const key = `${this.host.getApiBaseUrl()}\u0000${this.host.getApiKey()}`;
+		if (this.apiModelsFor !== key) {
+			this.apiModels = [];
+			this.apiModelsFor = null;
+		}
+		return this.apiModels;
 	}
 
 	/**

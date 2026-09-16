@@ -2052,6 +2052,7 @@ export default class SystemRecordingPlugin extends Plugin {
 			enrichBackend: this.settings.enrichBackend,
 			apiBaseUrl: this.settings.apiBaseUrl,
 			apiKey: this.settings.apiKey,
+			enrichModel: this.settings.enrichModel,
 			transcriptionBackend: this.settings.transcriptionBackend,
 			sttBaseUrl: this.settings.sttApiBaseUrl,
 		};
