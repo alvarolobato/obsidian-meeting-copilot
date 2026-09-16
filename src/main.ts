@@ -127,7 +127,9 @@ import {
 } from "./notes/dashboardActions";
 import { parseFrontmatter } from "./notes/frontmatter";
 import {
+    disambiguateIdentityLabels,
     findNoteIssues,
+    shortSeriesId,
     inferIdentityFromSiblings,
     type IdentityInference,
     type InferredIdentity,
@@ -3384,14 +3386,6 @@ export default class SystemRecordingPlugin extends Plugin {
         recurring: RecurringCandidate[]
     ): string[] {
         const n = t().notices;
-        // Truncated for display only — countCandidates already groups by
-        // seriesKey, so two candidates reaching this function with the same
-        // title necessarily have genuinely different series keys (a lineage
-        // split alone can no longer produce this collision).
-        const shortEventId = (id: string): string => {
-            const base = seriesKey(id);
-            return base.length > 10 ? `${base.slice(0, 10)}…` : base;
-        };
         const oneOnOneNameCounts = new Map<string, number>();
         for (const o of oneOnOnes) {
             oneOnOneNameCounts.set(o.name, (oneOnOneNameCounts.get(o.name) ?? 0) + 1);
@@ -3413,7 +3407,7 @@ export default class SystemRecordingPlugin extends Plugin {
             ...recurring.map((r) => {
                 const label = n.metadataFixAmbiguousRecurring(r.title, r.count);
                 return (recurringTitleCounts.get(r.title) ?? 0) > 1
-                    ? `${label} — id ${shortEventId(r.recurringEventId)}`
+                    ? `${label} — id ${shortSeriesId(r.recurringEventId)}`
                     : label;
             }),
         ];
@@ -4063,10 +4057,21 @@ export default class SystemRecordingPlugin extends Plugin {
                                 issue.reason.kind === "missing"
                                     ? issue.reason.identity
                                     : issue.reason.expected;
+                            const plainLabel = (i: InferredIdentity): string =>
+                                i.kind === "one-on-one"
+                                    ? n.metadataFixLabelOneOnOne(i.name)
+                                    : n.metadataFixLabelRecurring(i.title);
+                            // Same disambiguation the issues list uses: two
+                            // same-titled series must not both read "Retag as
+                            // the "Standup" series".
                             const label =
-                                identity.kind === "one-on-one"
-                                    ? n.metadataFixLabelOneOnOne(identity.name)
-                                    : n.metadataFixLabelRecurring(identity.title);
+                                issue.reason.kind === "missing"
+                                    ? plainLabel(identity)
+                                    : disambiguateIdentityLabels(
+                                          issue.reason.actual,
+                                          issue.reason.expected,
+                                          plainLabel
+                                      ).expected;
                             const fixTooltip =
                                 issue.reason.kind === "missing"
                                     ? id.fixTooltipTag(label)
@@ -4390,12 +4395,11 @@ export default class SystemRecordingPlugin extends Plugin {
                 typeof titleRaw === "string" && titleRaw
                     ? titleRaw
                     : entry.file.basename;
-            dates.set(
-                entry.file.path,
-                entry.stamp ? parseStampDate(entry.stamp) : null
-            );
+            const meetingDate = entry.stamp ? parseStampDate(entry.stamp) : null;
+            dates.set(entry.file.path, meetingDate);
             return {
                 path: entry.file.path,
+                date: meetingDate,
                 title,
                 fileTitle: entry.file.basename,
                 folder: folderOf(entry.file),
@@ -4654,18 +4658,21 @@ export default class SystemRecordingPlugin extends Plugin {
                 fixIdentity = issue.reason.identity;
                 fixTooltip = d.fixTooltipTag(label);
             } else if (issue.reason.kind === "outlier") {
-                const actual =
-                    issue.reason.actual.kind === "one-on-one"
-                        ? n.metadataFixLabelOneOnOne(issue.reason.actual.name)
-                        : n.metadataFixLabelRecurring(issue.reason.actual.title);
-                const expected =
-                    issue.reason.expected.kind === "one-on-one"
-                        ? n.metadataFixLabelOneOnOne(issue.reason.expected.name)
-                        : n.metadataFixLabelRecurring(issue.reason.expected.title);
+                // Both sides often render the same text (a series recreated
+                // under a new id keeps its title), so let the labels carry
+                // whatever tells them apart.
+                const labels = disambiguateIdentityLabels(
+                    issue.reason.actual,
+                    issue.reason.expected,
+                    (identity) =>
+                        identity.kind === "one-on-one"
+                            ? n.metadataFixLabelOneOnOne(identity.name)
+                            : n.metadataFixLabelRecurring(identity.title)
+                );
                 pillText = d.reasonOutlier;
-                detailText = d.detailOutlier(actual, expected);
+                detailText = d.detailOutlier(labels.actual, labels.expected);
                 fixIdentity = issue.reason.expected;
-                fixTooltip = d.fixTooltipRetag(expected);
+                fixTooltip = d.fixTooltipRetag(labels.expected);
             } else {
                 const labels = this.formatAmbiguousLabels(
                     issue.reason.oneOnOnes,

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+	disambiguateIdentityLabels,
 	findNoteIssues,
 	inferIdentityFromSiblings,
+	shortSeriesId,
 	type NoteIdentityRow,
 	type SiblingIdentity,
 } from "./metadataRepair";
@@ -25,6 +27,7 @@ function row(over: Partial<NoteIdentityRow> & Pick<NoteIdentityRow, "path">): No
 		oneOnOneWith: null,
 		oneOnOneEmail: null,
 		recurringEventId: null,
+		date: null,
 		...over,
 	};
 }
@@ -367,5 +370,208 @@ describe("findNoteIssues", () => {
 		];
 		const issues = findNoteIssues(rows, true);
 		expect(issues.map((i) => i.path)).toEqual(["b.md"]);
+	});
+});
+
+describe("disambiguateIdentityLabels", () => {
+	const label = (i: { kind: string; name?: string; title?: string }): string =>
+		i.kind === "one-on-one" ? `your 1:1 with ${i.name}` : `the "${i.title}" series`;
+	const series = (id: string, title: string) =>
+		({ kind: "recurring", recurringEventId: id, title }) as const;
+
+	it("leaves distinct labels untouched", () => {
+		const out = disambiguateIdentityLabels(
+			series("aaaa111111", "Standup"),
+			series("bbbb222222", "Retro"),
+			label as never
+		);
+		expect(out).toEqual({ actual: 'the "Standup" series', expected: 'the "Retro" series' });
+	});
+
+	it("appends ids when two series share a title", () => {
+		const out = disambiguateIdentityLabels(
+			series("28e1qt1t7j8vtunlr5nui7a3q6_R20260908T080000", "NS-LT"),
+			series("7ee4clb2gsnk6evav8o0m8jha4", "NS-LT"),
+			label as never
+		);
+		expect(out.actual).toBe('the "NS-LT" series (id 28e1qt1t7j…)');
+		expect(out.expected).toBe('the "NS-LT" series (id 7ee4clb2gs…)');
+	});
+
+	it("uses the series key, so a split lineage reads as one series", () => {
+		expect(shortSeriesId("7ee4clb2gsnk6evav8o0m8jha4_R20260908T080000")).toBe(
+			shortSeriesId("7ee4clb2gsnk6evav8o0m8jha4")
+		);
+	});
+
+	it("appends emails when two 1:1s share a name", () => {
+		const one = (email: string) =>
+			({ kind: "one-on-one", name: "Alex", email }) as const;
+		const out = disambiguateIdentityLabels(one("a@x.test"), one("b@x.test"), label as never);
+		expect(out.actual).toBe("your 1:1 with Alex (a@x.test)");
+		expect(out.expected).toBe("your 1:1 with Alex (b@x.test)");
+	});
+
+	it("leaves labels alone when nothing distinguishes them", () => {
+		const one = { kind: "one-on-one", name: "Alex", email: null } as const;
+		const out = disambiguateIdentityLabels(one, one, label as never);
+		expect(out).toEqual({ actual: "your 1:1 with Alex", expected: "your 1:1 with Alex" });
+	});
+});
+
+describe("findNoteIssues: a series split across ids", () => {
+	const d = (iso: string) => new Date(`${iso}T10:00:00Z`);
+	const occurrence = (path: string, id: string, date: string) =>
+		row({ path, title: "NS-LT", recurringEventId: id, date: d(date) });
+
+	it("does not flag notes carrying an older id of the same series", () => {
+		// The real case: one meeting recreated in September under a new id.
+		const rows = [
+			occurrence("jul-1.md", "7ee4clb2gsnk6evav8o0m8jha4", "2026-07-28"),
+			occurrence("jul-2.md", "7ee4clb2gsnk6evav8o0m8jha4", "2026-07-31"),
+			occurrence("sep-1.md", "28e1qt1t7j8vtunlr5nui7a3q6_R20260908T080000", "2026-09-09"),
+			occurrence("sep-2.md", "28e1qt1t7j8vtunlr5nui7a3q6", "2026-09-14"),
+		];
+		expect(findNoteIssues(rows, true)).toEqual([]);
+	});
+
+	it("tags a missing note with the newest id, not the most common one", () => {
+		const rows = [
+			occurrence("jul-1.md", "old111111aaaa", "2026-07-28"),
+			occurrence("jul-2.md", "old111111aaaa", "2026-07-31"),
+			occurrence("jul-3.md", "old111111aaaa", "2026-08-04"),
+			occurrence("sep-1.md", "new222222bbbb", "2026-09-09"),
+			row({ path: "untagged.md", title: "NS-LT", date: d("2026-09-16") }),
+		];
+		const issues = findNoteIssues(rows, true);
+		expect(issues).toHaveLength(1);
+		expect(issues[0]?.path).toBe("untagged.md");
+		expect(issues[0]?.reason).toEqual({
+			kind: "missing",
+			identity: {
+				kind: "recurring",
+				recurringEventId: "new222222bbbb",
+				title: "NS-LT",
+			},
+		});
+	});
+
+	it("still flags a note from a genuinely different series", () => {
+		const rows = [
+			occurrence("a.md", "aaa111", "2026-09-01"),
+			occurrence("b.md", "aaa111", "2026-09-08"),
+			row({
+				path: "c.md",
+				title: "Retro",
+				recurringEventId: "zzz999",
+				date: d("2026-09-09"),
+			}),
+		];
+		const issues = findNoteIssues(rows, true);
+		expect(issues).toHaveLength(1);
+		expect(issues[0]?.path).toBe("c.md");
+		expect(issues[0]?.reason.kind).toBe("outlier");
+	});
+
+	it("keeps the id of the only dated note when others have no date", () => {
+		const rows = [
+			row({ path: "undated.md", title: "NS-LT", recurringEventId: "old111" }),
+			occurrence("dated.md", "new222", "2026-09-09"),
+			row({ path: "untagged.md", title: "NS-LT" }),
+		];
+		const issues = findNoteIssues(rows, true);
+		expect(issues.map((i) => i.path)).toEqual(["untagged.md"]);
+		expect(issues[0]?.reason).toMatchObject({
+			identity: { recurringEventId: "new222" },
+		});
+	});
+});
+
+describe("findNoteIssues: ids win over titles", () => {
+	const d = (iso: string) => new Date(`${iso}T10:00:00Z`);
+
+	it("does not flag a note carrying the folder's own id under a different title", () => {
+		// applyMetadataFix writes the id and leaves the title alone, so a tagged
+		// ad-hoc note keeps its basename. Before the id-merge this reported the
+		// note as mistagged against itself, and the wrench could never clear it.
+		const rows = [
+			row({ path: "a.md", title: "Weekly Sync", recurringEventId: "abc123", date: d("2026-09-01") }),
+			row({ path: "b.md", title: "Weekly Sync", recurringEventId: "abc123", date: d("2026-09-08") }),
+			row({ path: "c.md", title: "2026-09-12 sync notes", recurringEventId: "abc123", date: d("2026-09-12") }),
+		];
+		expect(findNoteIssues(rows, true)).toEqual([]);
+	});
+
+	it("does not turn a folder ambiguous when same-id notes have drifting titles", () => {
+		const rows = [
+			row({ path: "a.md", title: "one", recurringEventId: "abc123", date: d("2026-09-01") }),
+			row({ path: "b.md", title: "two", recurringEventId: "abc123", date: d("2026-09-02") }),
+			row({ path: "c.md", title: "three", recurringEventId: "abc123", date: d("2026-09-03") }),
+		];
+		expect(findNoteIssues(rows, true)).toEqual([]);
+	});
+
+	it("ignores an unparseable date instead of letting it freeze the current id", () => {
+		const rows = [
+			row({ path: "broken.md", title: "NS-LT", recurringEventId: "oldAAA", date: new Date(NaN) }),
+			row({ path: "sep.md", title: "NS-LT", recurringEventId: "newBBB", date: d("2026-09-14") }),
+			row({ path: "untagged.md", title: "NS-LT" }),
+		];
+		const issues = findNoteIssues(rows, true);
+		expect(issues.map((i) => i.path)).toEqual(["untagged.md"]);
+		expect(issues[0]?.reason).toMatchObject({
+			identity: { recurringEventId: "newBBB" },
+		});
+	});
+
+	it("falls back to the most common id when no note has a usable date", () => {
+		const rows = [
+			row({ path: "a.md", title: "NS-LT", recurringEventId: "oldAAA" }),
+			row({ path: "b.md", title: "NS-LT", recurringEventId: "oldAAA" }),
+			row({ path: "c.md", title: "NS-LT", recurringEventId: "newBBB" }),
+			row({ path: "untagged.md", title: "NS-LT" }),
+		];
+		const issues = findNoteIssues(rows, true);
+		expect(issues[0]?.reason).toMatchObject({
+			identity: { recurringEventId: "oldAAA" },
+		});
+	});
+
+	it("keeps a dated note's id when the undated note is scanned last", () => {
+		const rows = [
+			row({ path: "dated.md", title: "NS-LT", recurringEventId: "new222", date: d("2026-09-09") }),
+			row({ path: "undated.md", title: "NS-LT", recurringEventId: "old111" }),
+			row({ path: "untagged.md", title: "NS-LT" }),
+		];
+		const issues = findNoteIssues(rows, true);
+		expect(issues[0]?.reason).toMatchObject({
+			identity: { recurringEventId: "new222" },
+		});
+	});
+
+	it("accepts the documented blind spot: a foreign id under a matching title", () => {
+		const rows = [
+			row({ path: "a.md", title: "Standup", recurringEventId: "ours11", date: d("2026-09-01") }),
+			row({ path: "b.md", title: "Standup", recurringEventId: "ours11", date: d("2026-09-02") }),
+			row({ path: "foreign.md", title: "Standup", recurringEventId: "theirs99", date: d("2026-08-01") }),
+		];
+		// Deliberate: same-titled series are common, and flagging them recreates
+		// the noise this grouping removes. Documented in the module comment.
+		expect(findNoteIssues(rows, true)).toEqual([]);
+	});
+});
+
+describe("disambiguateIdentityLabels: one-sided details", () => {
+	const label = (i: { kind: string; name?: string; title?: string }): string =>
+		i.kind === "one-on-one" ? `your 1:1 with ${i.name}` : `the "${i.title}" series`;
+
+	it("names the side that has an email when the other does not", () => {
+		const out = disambiguateIdentityLabels(
+			{ kind: "one-on-one", name: "Alex", email: null },
+			{ kind: "one-on-one", name: "Alex", email: "alex@x.test" },
+			label as never
+		);
+		expect(out.actual).toBe("your 1:1 with Alex (no email recorded)");
+		expect(out.expected).toBe("your 1:1 with Alex (alex@x.test)");
 	});
 });
