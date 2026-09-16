@@ -7,6 +7,7 @@ import {
 	HELPER_DOWNLOADS_URL,
 	llmStepStatus,
 	modelDownloadSizeRange,
+	modelLoadOutcome,
 	predatesWelcome,
 	PRE_WELCOME_VERSION,
 	setupComplete,
@@ -244,5 +245,47 @@ describe("ENRICH_BACKEND_OPTIONS", () => {
 	it("lists the endpoint first, as the default backend", () => {
 		expect(ENRICH_BACKEND_OPTIONS[0]).toBe("api");
 		expect(DEFAULT_SETTINGS.enrichBackend).toBe("api");
+	});
+});
+
+describe("modelLoadOutcome", () => {
+	const live = {
+		isOpen: true,
+		seq: 2,
+		currentSeq: 2,
+		asked: "url\u0000key",
+		current: "url\u0000key",
+		backend: "api",
+		rowAttached: true,
+	};
+
+	it("reports for the load the user is waiting on", () => {
+		expect(modelLoadOutcome(live)).toBe("report");
+	});
+
+	it("ignores a load that finished after the modal closed", () => {
+		expect(modelLoadOutcome({ ...live, isOpen: false })).toBe("ignore");
+	});
+
+	it("ignores a load superseded by a newer one", () => {
+		expect(modelLoadOutcome({ ...live, seq: 1, currentSeq: 2 })).toBe("ignore");
+	});
+
+	it("frees the button when the credentials changed mid-flight", () => {
+		expect(modelLoadOutcome({ ...live, current: "other\u0000key" })).toBe("reenable");
+	});
+
+	it("stays silent when the pane moved to a CLI backend", () => {
+		expect(modelLoadOutcome({ ...live, backend: "claude-cli" })).toBe("ignore");
+	});
+
+	it("stays silent when its row was detached by a re-render", () => {
+		expect(modelLoadOutcome({ ...live, rowAttached: false })).toBe("ignore");
+	});
+
+	it("prefers ignore over reenable once superseded, so the newer load keeps the button", () => {
+		expect(
+			modelLoadOutcome({ ...live, seq: 1, currentSeq: 2, current: "other\u0000key" })
+		).toBe("ignore");
 	});
 });

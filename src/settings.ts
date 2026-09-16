@@ -1229,14 +1229,25 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
 
             if (backend === "claude-cli" || backend === "codex-cli") {
                 // Hardcoded lists — no need to load; always show a plain dropdown.
-                const models = [...(backend === "claude-cli" ? CLAUDE_CLI_MODELS : CODEX_CLI_MODELS)];
+                // Typed as string[]: the curated lists are `as const` tuples with
+                // disjoint literals, so a union of them narrows `includes` to never.
+                const models: string[] = [
+                    ...(backend === "claude-cli" ? CLAUDE_CLI_MODELS : CODEX_CLI_MODELS),
+                ];
                 const currentModel = this.plugin.settings.enrichCliModels[backend];
                 new Setting(el)
                     .setName(s.settings.enrichCliModel.name)
                     .setDesc(s.settings.enrichCliModel.desc)
                     .addDropdown((dd) => {
-                        dd.addOption("", "— default —");
-                        for (const m of models) dd.addOption(m, m);
+                        dd.addOption("", s.settings.enrichCliModel.defaultOption);
+                        // A stored model that isn't in the curated list (hand-edited,
+                        // or retired since) can't be selected by setValue, so it would
+                        // read as "default" while the CLI still ran it.
+                        const options =
+                            currentModel && !models.includes(currentModel)
+                                ? [currentModel, ...models]
+                                : models;
+                        for (const m of options) dd.addOption(m, m);
                         dd.setValue(currentModel || "")
                             .onChange(async (value) => {
                                 this.plugin.settings.enrichCliModels[backend] = value;

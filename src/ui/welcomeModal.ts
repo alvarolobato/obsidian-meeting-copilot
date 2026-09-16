@@ -9,6 +9,7 @@ import { DASHBOARD_ICON } from "./dashboard/MeetingDashboardView";
 import {
 	ENRICH_BACKEND_OPTIONS,
 	googleStepStatus,
+	modelLoadOutcome,
 	HELPER_DOWNLOADS_URL,
 	llmStepStatus,
 	type EnrichBackendId,
@@ -348,34 +349,35 @@ export class WelcomeModal extends Modal {
 						const seq = ++this.loadSeq;
 						try {
 							const models = await this.host.loadEnrichModels();
-							if (
-								!this.isOpen ||
-								seq !== this.loadSeq ||
-								this.credentialsKey() !== asked
-							) {
-								// Stale: either the credentials moved on, or a newer
-								// load owns the UI now. Only touch the button when
-								// this load is still the current one.
-								if (this.isOpen && seq === this.loadSeq) {
+							// Cache first: even a load the user has moved past is a
+							// valid answer for those credentials, and the next render
+							// of that endpoint can use it.
+							if (this.credentialsKey() === asked) {
+								this.apiModels = models;
+								this.apiModelsFor = asked;
+							}
+							const outcome = modelLoadOutcome({
+								isOpen: this.isOpen,
+								seq,
+								currentSeq: this.loadSeq,
+								asked,
+								current: this.credentialsKey(),
+								backend: this.host.snapshot().enrichBackend,
+								rowAttached: modelRow.isConnected,
+							});
+							if (outcome !== "report") {
+								// Free the button only when this load still owns it.
+								if (outcome === "reenable") {
 									b.setButtonText(settings.testConnection.button);
 									b.setDisabled(false);
 								}
 								return;
 							}
-							this.apiModels = models;
-							this.apiModelsFor = asked;
 							new Notice(
 								models.length
 									? settings.testConnection.success(models.length)
 									: settings.testConnection.empty
 							);
-							// Switching backend and back rebuilds the pane, orphaning
-							// the row this handler captured: repaint the live pane
-							// instead of writing into a detached element.
-							if (!modelRow.isConnected) {
-								this.renderActiveTab();
-								return;
-							}
 							this.renderModelRow(modelRow, pill);
 							this.updatePill(pill, llmStepStatus(this.host.snapshot()));
 							b.setButtonText(settings.testConnection.button);
@@ -439,13 +441,15 @@ export class WelcomeModal extends Modal {
 		// Welcome-specific wording: the settings copy names the settings tab's
 		// own button, which isn't what sits above this row here.
 		model.setDesc(t().welcome.setup.llm.modelDesc).addText((text) => {
+			// Committed on blur, not per keystroke: a half-typed id ("gpt-") would
+			// otherwise be persisted and picked up by an auto-enrich that fires
+			// mid-typing. Mirrors the settings tab's model field.
 			text
 				.setPlaceholder(settings.modelCombobox.placeholderEmpty)
-				.setValue(current)
-				.onChange((value) => {
-					void this.host.setEnrichModel(value.trim());
-				});
-			this.refreshOnBlur(text.inputEl, pill);
+				.setValue(current);
+			this.refreshOnBlur(text.inputEl, pill, () =>
+				this.host.setEnrichModel(text.getValue().trim())
+			);
 		});
 	}
 
@@ -462,9 +466,18 @@ export class WelcomeModal extends Modal {
 	 * click, so rebuilding here would remove the button being clicked (e.g.
 	 * moving from the API key field to "Load models") and drop the click.
 	 */
-	private refreshOnBlur(input: HTMLElement, pill: HTMLElement | null): void {
+	private refreshOnBlur(
+		input: HTMLElement,
+		pill: HTMLElement | null,
+		commit?: () => Promise<void> | void
+	): void {
 		input.addEventListener("blur", () => {
-			if (this.isOpen) this.updatePill(pill, llmStepStatus(this.host.snapshot()));
+			if (!this.isOpen) return;
+			void Promise.resolve(commit?.()).then(() => {
+				if (this.isOpen) {
+					this.updatePill(pill, llmStepStatus(this.host.snapshot()));
+				}
+			});
 		});
 	}
 

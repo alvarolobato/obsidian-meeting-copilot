@@ -80,6 +80,43 @@ export const ENRICH_BACKEND_OPTIONS: readonly EnrichBackendId[] = [
 	"pi-cli",
 ];
 
+/** What a finished model load is still allowed to do. */
+export type LoadOutcome = "report" | "reenable" | "ignore";
+
+/** The state a finished load is judged against. */
+export interface LoadContext {
+	/** The modal is still open. */
+	isOpen: boolean;
+	/** Sequence number this load was given when it started. */
+	seq: number;
+	/** Sequence number of the newest load started since. */
+	currentSeq: number;
+	/** Credentials this load asked about. */
+	asked: string;
+	/** Credentials on screen now. */
+	current: string;
+	/** Backend selected now: a CLI means the endpoint fields are gone. */
+	backend: string;
+	/** The model row this load captured is still in the document. */
+	rowAttached: boolean;
+}
+
+/**
+ * Decides what a completed load may do, kept pure so the races are testable
+ * without a DOM:
+ * - `ignore` — say nothing: the modal closed, a newer load owns the UI, or the
+ *   pane no longer shows this endpoint. Results are still worth caching.
+ * - `reenable` — the credentials changed: free the button so the new endpoint
+ *   can be checked, but don't report on the old one.
+ * - `report` — this load is still the one the user is waiting for.
+ */
+export function modelLoadOutcome(c: LoadContext): LoadOutcome {
+	if (!c.isOpen || c.seq !== c.currentSeq) return "ignore";
+	if (c.asked !== c.current) return "reenable";
+	if (!c.rowAttached || c.backend !== "api") return "ignore";
+	return "report";
+}
+
 /** Where a given setup step stands, driving the pill next to its heading. */
 export type SetupStepStatus = "done" | "pending" | "todo";
 
