@@ -177,6 +177,51 @@ export type NoteIssueReason =
 	/** Tagged, but disagrees with the folder's own majority identity. */
 	| { kind: "outlier"; actual: InferredIdentity; expected: InferredIdentity };
 
+/**
+ * Shortened series id for display — `seriesKey` first, so the two halves of a
+ * split lineage ("edit this and following") never look like different series.
+ */
+export function shortSeriesId(recurringEventId: string): string {
+	const base = seriesKey(recurringEventId);
+	return base.length > 10 ? `${base.slice(0, 10)}…` : base;
+}
+
+/**
+ * Labels for an outlier's two sides. Two different identities routinely render
+ * the *same* text — a recurring series recreated under a new id keeps its
+ * title, so both read `the "Standup" series` and the message becomes "tagged as
+ * X, but folder suggests X", which reads as a bug rather than a diagnosis.
+ * When that happens each side gets the detail that actually distinguishes it
+ * (series id, or a 1:1's email); when the labels already differ, nothing is
+ * appended.
+ */
+export function disambiguateIdentityLabels(
+	actual: InferredIdentity,
+	expected: InferredIdentity,
+	label: (identity: InferredIdentity) => string
+): { actual: string; expected: string } {
+	const actualLabel = label(actual);
+	const expectedLabel = label(expected);
+	if (actualLabel !== expectedLabel) {
+		return { actual: actualLabel, expected: expectedLabel };
+	}
+	const detail = (identity: InferredIdentity): string | null =>
+		identity.kind === "one-on-one"
+			? (identity.email ?? null)
+			: `id ${shortSeriesId(identity.recurringEventId)}`;
+	const actualDetail = detail(actual);
+	const expectedDetail = detail(expected);
+	// Nothing distinguishes them (a 1:1 with no email on either side): leave the
+	// labels alone rather than appending empty parentheses.
+	if (!actualDetail || !expectedDetail) {
+		return { actual: actualLabel, expected: expectedLabel };
+	}
+	return {
+		actual: `${actualLabel} (${actualDetail})`,
+		expected: `${expectedLabel} (${expectedDetail})`,
+	};
+}
+
 export interface NoteIssue {
 	path: string;
 	title: string;

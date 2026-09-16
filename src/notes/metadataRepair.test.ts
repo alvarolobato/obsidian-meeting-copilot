@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+	disambiguateIdentityLabels,
 	findNoteIssues,
 	inferIdentityFromSiblings,
+	shortSeriesId,
 	type NoteIdentityRow,
 	type SiblingIdentity,
 } from "./metadataRepair";
@@ -367,5 +369,51 @@ describe("findNoteIssues", () => {
 		];
 		const issues = findNoteIssues(rows, true);
 		expect(issues.map((i) => i.path)).toEqual(["b.md"]);
+	});
+});
+
+describe("disambiguateIdentityLabels", () => {
+	const label = (i: { kind: string; name?: string; title?: string }): string =>
+		i.kind === "one-on-one" ? `your 1:1 with ${i.name}` : `the "${i.title}" series`;
+	const series = (id: string, title: string) =>
+		({ kind: "recurring", recurringEventId: id, title }) as const;
+
+	it("leaves distinct labels untouched", () => {
+		const out = disambiguateIdentityLabels(
+			series("aaaa111111", "Standup"),
+			series("bbbb222222", "Retro"),
+			label as never
+		);
+		expect(out).toEqual({ actual: 'the "Standup" series', expected: 'the "Retro" series' });
+	});
+
+	it("appends ids when two series share a title", () => {
+		const out = disambiguateIdentityLabels(
+			series("28e1qt1t7j8vtunlr5nui7a3q6_R20260908T080000", "NS-LT"),
+			series("7ee4clb2gsnk6evav8o0m8jha4", "NS-LT"),
+			label as never
+		);
+		expect(out.actual).toBe('the "NS-LT" series (id 28e1qt1t7j…)');
+		expect(out.expected).toBe('the "NS-LT" series (id 7ee4clb2gs…)');
+	});
+
+	it("uses the series key, so a split lineage reads as one series", () => {
+		expect(shortSeriesId("7ee4clb2gsnk6evav8o0m8jha4_R20260908T080000")).toBe(
+			shortSeriesId("7ee4clb2gsnk6evav8o0m8jha4")
+		);
+	});
+
+	it("appends emails when two 1:1s share a name", () => {
+		const one = (email: string) =>
+			({ kind: "one-on-one", name: "Alex", email }) as const;
+		const out = disambiguateIdentityLabels(one("a@x.test"), one("b@x.test"), label as never);
+		expect(out.actual).toBe("your 1:1 with Alex (a@x.test)");
+		expect(out.expected).toBe("your 1:1 with Alex (b@x.test)");
+	});
+
+	it("leaves labels alone when nothing distinguishes them", () => {
+		const one = { kind: "one-on-one", name: "Alex", email: null } as const;
+		const out = disambiguateIdentityLabels(one, one, label as never);
+		expect(out).toEqual({ actual: "your 1:1 with Alex", expected: "your 1:1 with Alex" });
 	});
 });
