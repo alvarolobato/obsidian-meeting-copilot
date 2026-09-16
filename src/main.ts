@@ -4384,12 +4384,11 @@ export default class SystemRecordingPlugin extends Plugin {
                 typeof titleRaw === "string" && titleRaw
                     ? titleRaw
                     : entry.file.basename;
-            dates.set(
-                entry.file.path,
-                entry.stamp ? parseStampDate(entry.stamp) : null
-            );
+            const meetingDate = entry.stamp ? parseStampDate(entry.stamp) : null;
+            dates.set(entry.file.path, meetingDate);
             return {
                 path: entry.file.path,
+                date: meetingDate,
                 title,
                 fileTitle: entry.file.basename,
                 folder: folderOf(entry.file),

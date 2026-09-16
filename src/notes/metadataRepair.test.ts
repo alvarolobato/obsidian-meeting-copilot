@@ -27,6 +27,7 @@ function row(over: Partial<NoteIdentityRow> & Pick<NoteIdentityRow, "path">): No
 		oneOnOneWith: null,
 		oneOnOneEmail: null,
 		recurringEventId: null,
+		date: null,
 		...over,
 	};
 }
@@ -415,5 +416,73 @@ describe("disambiguateIdentityLabels", () => {
 		const one = { kind: "one-on-one", name: "Alex", email: null } as const;
 		const out = disambiguateIdentityLabels(one, one, label as never);
 		expect(out).toEqual({ actual: "your 1:1 with Alex", expected: "your 1:1 with Alex" });
+	});
+});
+
+describe("findNoteIssues: a series split across ids", () => {
+	const d = (iso: string) => new Date(`${iso}T10:00:00Z`);
+	const occurrence = (path: string, id: string, date: string) =>
+		row({ path, title: "NS-LT", recurringEventId: id, date: d(date) });
+
+	it("does not flag notes carrying an older id of the same series", () => {
+		// The real case: one meeting recreated in September under a new id.
+		const rows = [
+			occurrence("jul-1.md", "7ee4clb2gsnk6evav8o0m8jha4", "2026-07-28"),
+			occurrence("jul-2.md", "7ee4clb2gsnk6evav8o0m8jha4", "2026-07-31"),
+			occurrence("sep-1.md", "28e1qt1t7j8vtunlr5nui7a3q6_R20260908T080000", "2026-09-09"),
+			occurrence("sep-2.md", "28e1qt1t7j8vtunlr5nui7a3q6", "2026-09-14"),
+		];
+		expect(findNoteIssues(rows, true)).toEqual([]);
+	});
+
+	it("tags a missing note with the newest id, not the most common one", () => {
+		const rows = [
+			occurrence("jul-1.md", "old111111aaaa", "2026-07-28"),
+			occurrence("jul-2.md", "old111111aaaa", "2026-07-31"),
+			occurrence("jul-3.md", "old111111aaaa", "2026-08-04"),
+			occurrence("sep-1.md", "new222222bbbb", "2026-09-09"),
+			row({ path: "untagged.md", title: "NS-LT", date: d("2026-09-16") }),
+		];
+		const issues = findNoteIssues(rows, true);
+		expect(issues).toHaveLength(1);
+		expect(issues[0]?.path).toBe("untagged.md");
+		expect(issues[0]?.reason).toEqual({
+			kind: "missing",
+			identity: {
+				kind: "recurring",
+				recurringEventId: "new222222bbbb",
+				title: "NS-LT",
+			},
+		});
+	});
+
+	it("still flags a note from a genuinely different series", () => {
+		const rows = [
+			occurrence("a.md", "aaa111", "2026-09-01"),
+			occurrence("b.md", "aaa111", "2026-09-08"),
+			row({
+				path: "c.md",
+				title: "Retro",
+				recurringEventId: "zzz999",
+				date: d("2026-09-09"),
+			}),
+		];
+		const issues = findNoteIssues(rows, true);
+		expect(issues).toHaveLength(1);
+		expect(issues[0]?.path).toBe("c.md");
+		expect(issues[0]?.reason.kind).toBe("outlier");
+	});
+
+	it("keeps the id of the only dated note when others have no date", () => {
+		const rows = [
+			row({ path: "undated.md", title: "NS-LT", recurringEventId: "old111" }),
+			occurrence("dated.md", "new222", "2026-09-09"),
+			row({ path: "untagged.md", title: "NS-LT" }),
+		];
+		const issues = findNoteIssues(rows, true);
+		expect(issues.map((i) => i.path)).toEqual(["untagged.md"]);
+		expect(issues[0]?.reason).toMatchObject({
+			identity: { recurringEventId: "new222" },
+		});
 	});
 });

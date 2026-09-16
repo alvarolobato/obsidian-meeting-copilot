@@ -142,13 +142,6 @@ export function inferIdentityFromSiblings(
 	return { kind: "ambiguous", oneOnOnes, recurring };
 }
 
-/** Stable key for comparing two identities — same rule the candidate counting dedupes with (email over name for a 1:1). */
-function identityKey(identity: InferredIdentity): string {
-	return identity.kind === "one-on-one"
-		? `1:1:${identity.email ?? identity.name.trim().toLowerCase()}`
-		: `series:${seriesKey(identity.recurringEventId)}`;
-}
-
 export interface NoteIdentityRow {
 	path: string;
 	/**
@@ -167,6 +160,13 @@ export interface NoteIdentityRow {
 	oneOnOneWith: string | null;
 	oneOnOneEmail: string | null;
 	recurringEventId: string | null;
+	/**
+	 * The note's meeting date, when it could be read. Used only to pick which
+	 * id a *split* series counts as current — a meeting recreated or moved in
+	 * the calendar gets a new `recurring_event_id`, and the newest note holds
+	 * the one new occurrences will keep using.
+	 */
+	date?: Date | null;
 }
 
 export type NoteIssueReason =
@@ -273,6 +273,96 @@ function toSibling(row: NoteIdentityRow): SiblingIdentity {
 	};
 }
 
+/** Normalised series title — what decides whether two ids are one real series. */
+function titleKey(title: string): string {
+	return title.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/**
+ * One real series, which may span several `recurring_event_id`s: Google mints
+ * a new id when a meeting is recreated, rescheduled, or split, and the old
+ * occurrences keep the old one. Grouping by title keeps that history together
+ * so a folder full of one meeting's notes isn't read as two rival series.
+ */
+interface SeriesGroup {
+	/** Id new occurrences carry — from the newest dated note in the group. */
+	currentId: string;
+	title: string;
+	count: number;
+	/** Newest note's date, or null when none of the notes had a readable one. */
+	newest: Date | null;
+}
+
+/**
+ * Groups a folder's tagged notes into real series (by title) and 1:1s. Used
+ * for *diagnosis only* — `inferIdentityFromSiblings`, which feeds the fix
+ * commands that write frontmatter, keeps its stricter id-based rule.
+ */
+function groupFolderIdentities(rows: NoteIdentityRow[]): {
+	oneOnOnes: OneOnOneCandidate[];
+	series: SeriesGroup[];
+} {
+	const oneOnOnes = new Map<string, OneOnOneCandidate>();
+	const series = new Map<string, SeriesGroup>();
+	for (const row of rows) {
+		// Same precedence countCandidates uses: a recurring 1:1 counts as a 1:1.
+		if (row.oneOnOneWith) {
+			const key = row.oneOnOneEmail ?? row.oneOnOneWith.trim().toLowerCase();
+			const existing = oneOnOnes.get(key);
+			if (existing) existing.count++;
+			else {
+				oneOnOnes.set(key, {
+					name: row.oneOnOneWith,
+					email: row.oneOnOneEmail,
+					count: 1,
+				});
+			}
+			continue;
+		}
+		if (!row.recurringEventId) continue;
+		// Fall back to the id when a note has no title to group on, so an
+		// untitled note can't merge two genuinely different series.
+		const key = titleKey(row.title) || `id:${seriesKey(row.recurringEventId)}`;
+		const date = row.date ?? null;
+		const existing = series.get(key);
+		if (!existing) {
+			series.set(key, {
+				currentId: row.recurringEventId,
+				title: row.title,
+				count: 1,
+				newest: date,
+			});
+			continue;
+		}
+		existing.count++;
+		// Newer note wins the id. An undated note never displaces a dated one,
+		// so a note whose date couldn't be read can't hijack the series.
+		if (date && (!existing.newest || date > existing.newest)) {
+			existing.newest = date;
+			existing.currentId = row.recurringEventId;
+		}
+	}
+	return { oneOnOnes: [...oneOnOnes.values()], series: [...series.values()] };
+}
+
+/** The identity a group stands for, carrying the id new occurrences use. */
+function groupIdentity(group: SeriesGroup): InferredIdentity {
+	return {
+		kind: "recurring",
+		recurringEventId: group.currentId,
+		title: group.title,
+	};
+}
+
+/** Which group a single tagged note belongs to, for outlier comparison. */
+function rowGroupKey(row: NoteIdentityRow): string | null {
+	if (row.oneOnOneWith) {
+		return `1:1:${row.oneOnOneEmail ?? row.oneOnOneWith.trim().toLowerCase()}`;
+	}
+	if (!row.recurringEventId) return null;
+	return `series:${titleKey(row.title) || `id:${seriesKey(row.recurringEventId)}`}`;
+}
+
 /**
  * Vault-wide sanity check, grouping notes by their *direct* parent folder
  * (same non-recursive rule {@link inferIdentityFromSiblings}'s caller in the
@@ -315,10 +405,29 @@ export function findNoteIssues(
 		const untagged = folderRows.filter(
 			(r) => !r.oneOnOneWith && !r.recurringEventId
 		);
-		const result = majorityIdentity(tagged.map(toSibling));
+		const { oneOnOnes, series } = groupFolderIdentities(tagged);
+		const candidates = [
+			...oneOnOnes.map((c) => ({
+				key: `1:1:${c.email ?? c.name.trim().toLowerCase()}`,
+				identity: {
+					kind: "one-on-one",
+					name: c.name,
+					email: c.email,
+				} as InferredIdentity,
+				count: c.count,
+			})),
+			...series.map((g) => ({
+				key: `series:${titleKey(g.title) || `id:${seriesKey(g.currentId)}`}`,
+				identity: groupIdentity(g),
+				count: g.count,
+			})),
+		];
+		if (candidates.length === 0) continue;
 
-		if (result.kind === "none") continue;
-		if (result.kind === "ambiguous") {
+		const [top, runnerUp] = [...candidates].sort((a, b) => b.count - a.count);
+		// A real tie between two *different* identities: nothing can be called
+		// the folder's, so every note is suspect until a human sorts it out.
+		if (candidates.length > 1 && top!.count === runnerUp!.count) {
 			for (const row of folderRows) {
 				issues.push({
 					path: row.path,
@@ -326,38 +435,42 @@ export function findNoteIssues(
 					folder,
 					reason: {
 						kind: "ambiguous",
-						oneOnOnes: result.oneOnOnes,
-						recurring: result.recurring,
+						oneOnOnes,
+						recurring: series.map((g) => ({
+							recurringEventId: g.currentId,
+							title: g.title,
+							count: g.count,
+						})),
 					},
 				});
 			}
 			continue;
 		}
-		if (result.identity.kind === "one-on-one" && !oneOnOneSeparately) continue;
+		const expected = top!.identity;
+		if (expected.kind === "one-on-one" && !oneOnOneSeparately) continue;
 
 		for (const row of untagged) {
 			issues.push({
 				path: row.path,
 				title: row.fileTitle,
 				folder,
-				reason: { kind: "missing", identity: result.identity },
+				reason: { kind: "missing", identity: expected },
 			});
 		}
 
-		const expectedKey = identityKey(result.identity);
 		for (const row of tagged) {
+			const key = rowGroupKey(row);
+			// Same group as the folder's identity — including an older id from
+			// before the series was recreated or moved, which is history, not a
+			// mistag.
+			if (!key || key === top!.key) continue;
 			const own = majorityIdentity([toSibling(row)]);
 			if (own.kind !== "resolved") continue;
-			if (identityKey(own.identity) === expectedKey) continue;
 			issues.push({
 				path: row.path,
 				title: row.fileTitle,
 				folder,
-				reason: {
-					kind: "outlier",
-					actual: own.identity,
-					expected: result.identity,
-				},
+				reason: { kind: "outlier", actual: own.identity, expected },
 			});
 		}
 	}
