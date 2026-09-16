@@ -339,10 +339,13 @@ export class WelcomeModal extends Modal {
 						const asked = this.credentialsKey();
 						try {
 							const models = await this.host.loadEnrichModels();
-							if (!this.isOpen) return;
-							if (this.credentialsKey() !== asked) {
-								b.setButtonText(settings.testConnection.button);
-								b.setDisabled(false);
+							if (!this.isOpen || this.credentialsKey() !== asked) {
+								// The credentials moved on while this was in flight:
+								// the answer describes an endpoint the user has left.
+								if (this.isOpen) {
+									b.setButtonText(settings.testConnection.button);
+									b.setDisabled(false);
+								}
 								return;
 							}
 							this.apiModels = models;
@@ -352,11 +355,21 @@ export class WelcomeModal extends Modal {
 									? settings.testConnection.success(models.length)
 									: settings.testConnection.empty
 							);
+							// Switching backend and back rebuilds the pane, orphaning
+							// the row this handler captured: repaint the live pane
+							// instead of writing into a detached element.
+							if (!modelRow.isConnected) {
+								this.renderActiveTab();
+								return;
+							}
 							this.renderModelRow(modelRow, pill);
 							this.updatePill(pill, llmStepStatus(this.host.snapshot()));
 							b.setButtonText(settings.testConnection.button);
 							b.setDisabled(false);
 						} catch (e) {
+							// Same rule as the success path: don't report a failure
+							// for credentials the user has already changed.
+							if (!this.isOpen || this.credentialsKey() !== asked) return;
 							new Notice(
 								settings.testConnection.failure(
 									e instanceof Error ? e.message : String(e)

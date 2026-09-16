@@ -14,6 +14,23 @@ describe("isLoopbackUrl", () => {
 		expect(isLoopbackUrl("https://localhost.example.com/v1")).toBe(false);
 		expect(isLoopbackUrl("not a url")).toBe(false);
 	});
+
+	it("rejects hosts that merely start with a loopback address", () => {
+		// Would pass a `127.` prefix test, but resolves wherever its DNS says.
+		expect(isLoopbackUrl("http://127.0.0.1.attacker.example/v1")).toBe(false);
+		expect(isLoopbackUrl("http://127.0.0.1evil.example/v1")).toBe(false);
+		expect(isLoopbackUrl("http://1270.0.0.1/v1")).toBe(false);
+		expect(isLoopbackUrl("http://127.0.0.999/v1")).toBe(false);
+	});
+
+	it("accepts loopback shorthand the URL parser normalises", () => {
+		expect(isLoopbackUrl("http://127.1/v1")).toBe(true);
+		expect(isLoopbackUrl("http://127.0.0.2:8080/v1")).toBe(true);
+	});
+
+	it("ignores non-http(s) schemes", () => {
+		expect(isLoopbackUrl("file://localhost/v1")).toBe(false);
+	});
 });
 
 describe("apiEnrichConfigured", () => {
@@ -32,6 +49,26 @@ describe("apiEnrichConfigured", () => {
 		expect(
 			apiEnrichConfigured({ apiBaseUrl: "http://localhost:11434/v1", apiKey: "", enrichModel: "llama3" })
 		).toBe(true);
+	});
+
+	it("treats hand-edited non-string settings as unconfigured, not a crash", () => {
+		const bad = {
+			apiBaseUrl: "https://api.openai.com/v1",
+			apiKey: "sk-test",
+			enrichModel: null,
+		} as unknown as Parameters<typeof apiEnrichConfigured>[0];
+		expect(() => apiEnrichConfigured(bad)).not.toThrow();
+		expect(apiEnrichConfigured(bad)).toBe(false);
+	});
+
+	it("does not treat a spoofed loopback host as keyless-local", () => {
+		expect(
+			apiEnrichConfigured({
+				apiBaseUrl: "http://127.0.0.1.attacker.example/v1",
+				apiKey: "",
+				enrichModel: "llama3",
+			})
+		).toBe(false);
 	});
 
 	it("still requires a URL and a model", () => {
