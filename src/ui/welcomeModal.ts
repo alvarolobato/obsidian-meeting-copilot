@@ -367,9 +367,15 @@ export class WelcomeModal extends Modal {
 							b.setButtonText(settings.testConnection.button);
 							b.setDisabled(false);
 						} catch (e) {
-							// Same rule as the success path: don't report a failure
-							// for credentials the user has already changed.
-							if (!this.isOpen || this.credentialsKey() !== asked) return;
+							if (!this.isOpen) return;
+							// Don't report a failure for credentials the user has
+							// already changed — but still re-enable the button, or
+							// the new endpoint could never be checked.
+							if (this.credentialsKey() !== asked) {
+								b.setButtonText(settings.testConnection.button);
+								b.setDisabled(false);
+								return;
+							}
 							new Notice(
 								settings.testConnection.failure(
 									e instanceof Error ? e.message : String(e)
