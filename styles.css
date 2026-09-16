@@ -1915,11 +1915,13 @@ ul.mc-action-tasks {
 	padding-top: 0;
 }
 
-/* Keep the model control readable instead of squeezed against its label. */
+/* The control always takes its own full-width line, whether it's the free-text
+ * field or the dropdown that replaces it after loading models — otherwise the
+ * shorter dropdown sits beside the label and the row jumps. */
 .mc-welcome-model-row .setting-item-control {
-	flex: 1 1 55%;
+	flex: 1 1 100%;
 	justify-content: flex-start;
-	min-width: 55%;
+	min-width: 100%;
 }
 
 .mc-welcome-model-row .setting-item-control select,
