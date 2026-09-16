@@ -317,7 +317,7 @@ const SETTINGS_TABS: readonly SettingsTabId[] = [
 ] as const;
 
 /** Return the appropriate placeholder string for a per-CLI model text field. */
-function cliModelPlaceholder(cli: EnrichCLI, s: ReturnType<typeof t>): string {
+export function cliModelPlaceholder(cli: EnrichCLI, s: ReturnType<typeof t>): string {
 	switch (cli) {
 		case "claude-cli":
 			return s.settings.enrichCliModel.placeholderClaude;
@@ -331,7 +331,7 @@ function cliModelPlaceholder(cli: EnrichCLI, s: ReturnType<typeof t>): string {
 }
 
 /** Return the appropriate placeholder string for a per-CLI path text field. */
-function cliPathPlaceholder(cli: EnrichCLI, s: ReturnType<typeof t>): string {
+export function cliPathPlaceholder(cli: EnrichCLI, s: ReturnType<typeof t>): string {
 	switch (cli) {
 		case "claude-cli":
 			return s.settings.enrichCliPath.placeholderClaude;

@@ -174,6 +174,7 @@ const FOLLOW_UPS_HEADING = "## Follow-ups";
  */
 const PAST_WINDOW_DAYS = 2;
 import { chatComplete, ChatAbortError, EnrichTimeoutError } from "./enrich/llm";
+import { listModels } from "./enrich/models";
 import {
     cliChatComplete,
     CLIAbortError,
@@ -2074,6 +2075,27 @@ export default class SystemRecordingPlugin extends Plugin {
 			setApiCredentials: async (baseUrl, apiKey) => {
 				this.settings.apiBaseUrl = baseUrl;
 				this.settings.apiKey = apiKey;
+				await this.saveSettings();
+			},
+			setEnrichBackend: async (backend) => {
+				this.settings.enrichBackend = backend;
+				await this.saveSettings();
+			},
+			getCliPath: (cli) => this.settings.enrichCliPaths[cli],
+			setCliPath: async (cli, path) => {
+				this.settings.enrichCliPaths[cli] = path;
+				await this.saveSettings();
+			},
+			getEnrichModel: () => this.settings.enrichModel,
+			setEnrichModel: async (model) => {
+				this.settings.enrichModel = model;
+				await this.saveSettings();
+			},
+			loadEnrichModels: () =>
+				listModels(this.settings.apiBaseUrl, this.settings.apiKey),
+			getCliModel: (cli) => this.settings.enrichCliModels[cli],
+			setCliModel: async (cli, model) => {
+				this.settings.enrichCliModels[cli] = model;
 				await this.saveSettings();
 			},
 			openSettings: (tab) => this.openPluginSettings(tab),

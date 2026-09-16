@@ -4,6 +4,7 @@
  * lives in {@link ../ui/welcomeModal.ts}.
  */
 
+import type { EnrichCLI } from "../enrich/cliBridge";
 import { formatBytes } from "../transcribe/localModels";
 
 /** README section explaining what the plugin downloads, and from where. */
@@ -61,6 +62,22 @@ export function predatesWelcome(raw: Record<string, unknown> | null): boolean {
 export function shouldShowWelcome(state: WelcomeGateState): boolean {
 	return !state.welcomeShownVersion;
 }
+
+/** An enrichment backend: the shared API endpoint, or one of the local CLIs. */
+export type EnrichBackendId = "api" | EnrichCLI;
+
+/**
+ * Backends offered by the welcome screen's picker, in display order. Shared
+ * with the settings tab's dropdown through `t().settings.enrichBackend.options`
+ * so the two surfaces can't drift apart.
+ */
+export const ENRICH_BACKEND_OPTIONS: readonly EnrichBackendId[] = [
+	"api",
+	"claude-cli",
+	"codex-cli",
+	"opencode-cli",
+	"pi-cli",
+];
 
 /** Where a given setup step stands, driving the pill next to its heading. */
 export type SetupStepStatus = "done" | "pending" | "todo";

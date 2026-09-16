@@ -890,6 +890,7 @@ export const en = {
 		enrichCliModel: {
 			name: "Model",
 			desc: "Model to use. Leave empty for the CLI default.",
+			defaultOption: "— default —",
 			placeholderClaude: "sonnet",
 			placeholderCodex: "gpt-5.5",
 			placeholderOpencode: "anthropic/claude-sonnet-5",
@@ -938,8 +939,9 @@ export const en = {
 				cancel: "Cancel",
 			},
 			llm: {
-				heading: "AI endpoint",
-				desc: "Used to summarize transcripts into notes and action items. Any OpenAI-compatible endpoint — including a local one.",
+				heading: "AI for summaries",
+				desc: "Used to summarize transcripts into notes and action items. Use an OpenAI-compatible endpoint (including a local one), or a CLI you're already signed in to.",
+				backend: "Enrichment backend",
 				baseUrl: "API base URL",
 				baseUrlPlaceholder: "https://api.openai.com/v1",
 				apiKey: "API key",

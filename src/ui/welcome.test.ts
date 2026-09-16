@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS } from "../settings";
 import { LOCAL_MODELS } from "../transcribe/localModels";
 import {
+	ENRICH_BACKEND_OPTIONS,
 	googleStepStatus,
 	HELPER_DOWNLOADS_URL,
 	isLoopbackUrl,
@@ -248,5 +249,19 @@ describe("isLoopbackUrl", () => {
 		expect(isLoopbackUrl("https://api.openai.com/v1")).toBe(false);
 		expect(isLoopbackUrl("https://localhost.example.com/v1")).toBe(false);
 		expect(isLoopbackUrl("not a url")).toBe(false);
+	});
+});
+
+describe("ENRICH_BACKEND_OPTIONS", () => {
+	it("offers the endpoint plus every CLI the settings tab knows", () => {
+		expect([...ENRICH_BACKEND_OPTIONS]).toEqual([
+			"api",
+			...Object.keys(DEFAULT_SETTINGS.enrichCliPaths),
+		]);
+	});
+
+	it("lists the endpoint first, as the default backend", () => {
+		expect(ENRICH_BACKEND_OPTIONS[0]).toBe("api");
+		expect(DEFAULT_SETTINGS.enrichBackend).toBe("api");
 	});
 });
