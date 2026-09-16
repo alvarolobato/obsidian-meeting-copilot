@@ -287,15 +287,17 @@ export class WelcomeModal extends Modal {
 			return;
 		}
 
+		// Declared before the credential fields: their onChange closes over it.
+		const modelRow = step.createDiv({ cls: "mc-welcome-model-row" });
+
 		new Setting(step).setName(s.llm.baseUrl).addText((text) => {
 			text
 				.setPlaceholder(s.llm.baseUrlPlaceholder)
 				.setValue(this.host.getApiBaseUrl())
 				.onChange((value) => {
-					void this.host.setApiCredentials(
-						value.trim(),
-						this.host.getApiKey()
-					);
+					void this.host
+						.setApiCredentials(value.trim(), this.host.getApiKey())
+						.then(() => this.onCredentialsEdited(modelRow, pill));
 				});
 			this.refreshOnBlur(text.inputEl, pill);
 		});
@@ -306,10 +308,9 @@ export class WelcomeModal extends Modal {
 				.setPlaceholder(s.llm.apiKeyPlaceholder)
 				.setValue(this.host.getApiKey())
 				.onChange((value) => {
-					void this.host.setApiCredentials(
-						this.host.getApiBaseUrl(),
-						value.trim()
-					);
+					void this.host
+						.setApiCredentials(this.host.getApiBaseUrl(), value.trim())
+						.then(() => this.onCredentialsEdited(modelRow, pill));
 				});
 			this.refreshOnBlur(text.inputEl, pill);
 		});
@@ -317,8 +318,10 @@ export class WelcomeModal extends Modal {
 		// Loading the models is the only honest check that the URL and key work,
 		// so the same button doubles as "test these credentials".
 		new Setting(step)
-			.setName(settings.endpointActions.name)
-			.setDesc(settings.endpointActions.desc)
+			// Welcome-specific wording: the settings description promises a
+			// fallback-endpoint probe, which this pane doesn't do.
+			.setName(s.llm.checkEndpoint)
+			.setDesc(s.llm.checkEndpointDesc)
 			.addButton((b) =>
 				b
 					.setButtonText(settings.testConnection.button)
@@ -330,17 +333,29 @@ export class WelcomeModal extends Modal {
 						}
 						b.setButtonText(settings.testConnection.testing);
 						b.setDisabled(true);
+						// The credentials this request is for. If they change while
+						// it's in flight, the answer describes an endpoint the user
+						// has already moved on from.
+						const asked = this.credentialsKey();
 						try {
 							const models = await this.host.loadEnrichModels();
 							if (!this.isOpen) return;
+							if (this.credentialsKey() !== asked) {
+								b.setButtonText(settings.testConnection.button);
+								b.setDisabled(false);
+								return;
+							}
 							this.apiModels = models;
-							this.apiModelsFor = `${this.host.getApiBaseUrl()}\u0000${this.host.getApiKey()}`;
+							this.apiModelsFor = asked;
 							new Notice(
 								models.length
 									? settings.testConnection.success(models.length)
 									: settings.testConnection.empty
 							);
-							this.renderActiveTab();
+							this.renderModelRow(modelRow, pill);
+							this.updatePill(pill, llmStepStatus(this.host.snapshot()));
+							b.setButtonText(settings.testConnection.button);
+							b.setDisabled(false);
 						} catch (e) {
 							new Notice(
 								settings.testConnection.failure(
@@ -353,7 +368,18 @@ export class WelcomeModal extends Modal {
 					})
 			);
 
-		const model = new Setting(step).setName(settings.enrichModel.name);
+		this.renderModelRow(modelRow, pill);
+	}
+
+	/**
+	 * The model control, in its own container so it can be rebuilt alone when
+	 * the credentials change — a full re-render here would race the blur/click
+	 * transition, and leaving it alone would offer the old endpoint's models.
+	 */
+	private renderModelRow(row: HTMLElement, pill: HTMLElement | null): void {
+		const settings = t().settings;
+		row.empty();
+		const model = new Setting(row).setName(settings.enrichModel.name);
 		const current = this.host.getEnrichModel();
 		const loaded = this.endpointModels();
 		if (loaded.length > 0) {
@@ -383,6 +409,13 @@ export class WelcomeModal extends Modal {
 				});
 			this.refreshOnBlur(text.inputEl, pill);
 		});
+	}
+
+	/** After a credential edit: refresh the pill and drop now-stale models. */
+	private onCredentialsEdited(row: HTMLElement, pill: HTMLElement | null): void {
+		if (!this.isOpen) return;
+		this.updatePill(pill, llmStepStatus(this.host.snapshot()));
+		if (this.discardStaleModels()) this.renderModelRow(row, pill);
 	}
 
 	/**
@@ -417,12 +450,29 @@ export class WelcomeModal extends Modal {
 	 * leave the previous endpoint's models on offer.
 	 */
 	private endpointModels(): string[] {
-		const key = `${this.host.getApiBaseUrl()}\u0000${this.host.getApiKey()}`;
-		if (this.apiModelsFor !== key) {
+		if (this.apiModelsFor !== this.credentialsKey()) {
 			this.apiModels = [];
 			this.apiModelsFor = null;
 		}
 		return this.apiModels;
+	}
+
+	/** Identifies the endpoint credentials a model list belongs to. */
+	private credentialsKey(): string {
+		return `${this.host.getApiBaseUrl()}\u0000${this.host.getApiKey()}`;
+	}
+
+	/**
+	 * Drops a model list that no longer matches the credentials on screen.
+	 * Returns true when something was discarded, so the caller can rebuild the
+	 * model row instead of leaving the old endpoint's models selectable.
+	 */
+	private discardStaleModels(): boolean {
+		if (this.apiModels.length === 0) return false;
+		if (this.apiModelsFor === this.credentialsKey()) return false;
+		this.apiModels = [];
+		this.apiModelsFor = null;
+		return true;
 	}
 
 	/**

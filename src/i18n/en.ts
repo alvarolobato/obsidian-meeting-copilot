@@ -88,7 +88,7 @@ export const en = {
 		endpointFallbackTranscribeNoDiarization:
 			"Primary AI endpoint failed — retrying transcription on the fallback (without speaker separation)…",
 		enrichNotConfigured:
-			"Set the AI endpoint (base URL + API key) and an enrichment model in settings first.",
+			"Set the AI endpoint (base URL, plus an API key unless it's a local server) and an enrichment model in settings first.",
 		enrichDisabled: "AI enrichment is disabled in settings.",
 		enrichInProgress: "This note is already being enriched…",
 		nothingToEnrich: "No notes or transcript to enrich in this note.",
@@ -148,7 +148,7 @@ export const en = {
 		transcriptImportError: (msg: string) =>
 			`Transcript import failed: ${msg}`,
 		transcriptImportNoEndpoint:
-			"Set the AI endpoint (base URL + API key) and an enrichment model in settings before importing a non-Zoom transcript.",
+			"Set the AI endpoint (base URL, plus an API key unless it's a local server) and an enrichment model in settings before importing a non-Zoom transcript.",
 		transcriptImportNotApplied:
 			"Transcript imported, but not written to the note or enriched — check the \"Insert transcript\" and enrichment settings.",
 		enrichCliNotFound: (cli: string) =>
@@ -942,6 +942,9 @@ export const en = {
 				heading: "AI for summaries",
 				desc: "Used to summarize transcripts into notes and action items. Use an OpenAI-compatible endpoint (including a local one), or a CLI you're already signed in to.",
 				backend: "Enrichment backend",
+				checkEndpoint: "Check this endpoint",
+				checkEndpointDesc:
+					"Loads the models this endpoint offers — the quickest way to confirm the URL and key work.",
 				baseUrl: "API base URL",
 				baseUrlPlaceholder: "https://api.openai.com/v1",
 				apiKey: "API key",

@@ -5,6 +5,7 @@
  */
 
 import type { EnrichCLI } from "../enrich/cliBridge";
+import { apiEnrichConfigured } from "../enrich/endpointConfig";
 import { formatBytes } from "../transcribe/localModels";
 
 /** README section explaining what the plugin downloads, and from where. */
@@ -105,15 +106,13 @@ export function googleStepStatus(s: SetupSnapshot): SetupStepStatus {
 
 /**
  * A CLI backend shells out to an already-authenticated tool, so it needs no
- * endpoint from us. The API backend is "ready" only when it has everything
- * `enqueueEnrich` checks — base URL, key, and model — so the pill can't claim
- * Ready while enrichment refuses to run.
+ * endpoint from us. The API backend is "ready" exactly when
+ * {@link apiEnrichConfigured} says so — the same rule the enrichment gates
+ * use, so the pill can't claim Ready while enrichment refuses to run.
  */
 export function llmStepStatus(s: SetupSnapshot): SetupStepStatus {
 	if (s.enrichBackend !== "api") return "done";
-	return s.apiBaseUrl.trim() && s.apiKey.trim() && s.enrichModel.trim()
-		? "done"
-		: "todo";
+	return apiEnrichConfigured(s) ? "done" : "todo";
 }
 
 /**

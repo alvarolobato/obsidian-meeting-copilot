@@ -114,6 +114,14 @@ describe("llmStepStatus", () => {
 		expect(llmStepStatus(snapshot({ ...ready, enrichModel: "" }))).toBe("todo");
 	});
 
+	it("is done for a keyless local server, which enrichment also accepts", () => {
+		expect(
+			llmStepStatus(
+				snapshot({ apiBaseUrl: "http://localhost:11434/v1", apiKey: "", enrichModel: "llama3" })
+			)
+		).toBe("done");
+	});
+
 	it("ignores whitespace-only values", () => {
 		expect(llmStepStatus(snapshot({ ...ready, apiKey: "   " }))).toBe("todo");
 		expect(llmStepStatus(snapshot({ ...ready, enrichModel: "  " }))).toBe("todo");

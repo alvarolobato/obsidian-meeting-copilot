@@ -19,6 +19,7 @@ import {
 } from "./notes/meetingNote";
 import { DEFAULT_ENRICH_PROMPT } from "./enrich/prompt";
 import { listModels } from "./enrich/models";
+import { ENRICH_BACKEND_OPTIONS } from "./ui/welcome";
 import {
 	inferSttApiType,
 	isTimestampCapableFamily,
@@ -1064,12 +1065,11 @@ export class SystemRecordingSettingTab extends PluginSettingTab {
             .setName(s.settings.enrichBackend.name)
             .setDesc(s.settings.enrichBackend.desc)
             .addDropdown((dd) => {
+                // Same list the welcome screen offers, so the two can't drift.
+                for (const option of ENRICH_BACKEND_OPTIONS) {
+                    dd.addOption(option, s.settings.enrichBackend.options[option]);
+                }
                 dd
-                    .addOption("api", s.settings.enrichBackend.options.api)
-                    .addOption("claude-cli", s.settings.enrichBackend.options["claude-cli"])
-                    .addOption("codex-cli", s.settings.enrichBackend.options["codex-cli"])
-                    .addOption("opencode-cli", s.settings.enrichBackend.options["opencode-cli"])
-                    .addOption("pi-cli", s.settings.enrichBackend.options["pi-cli"])
                     .setValue(this.plugin.settings.enrichBackend)
                     .onChange(async (value) => {
                         this.plugin.settings.enrichBackend = value as "api" | EnrichCLI;
