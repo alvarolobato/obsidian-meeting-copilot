@@ -944,7 +944,7 @@ export const en = {
 				backend: "Enrichment backend",
 				checkEndpoint: "Check this endpoint",
 				modelDesc:
-					"Type a model id, or check the endpoint below to pick from the models it offers.",
+					"Check the endpoint above to pick from the models it offers, or type a model id.",
 				checkEndpointDesc:
 					"Loads the models this endpoint offers — the quickest way to confirm the URL and key work.",
 				baseUrl: "API base URL",

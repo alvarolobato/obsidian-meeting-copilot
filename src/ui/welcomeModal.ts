@@ -290,7 +290,10 @@ export class WelcomeModal extends Modal {
 		}
 
 		// Declared before the credential fields: their onChange closes over it.
-		const modelRow = step.createDiv({ cls: "mc-welcome-model-row" });
+		// Detached for now: the credential fields below close over it, but it is
+		// attached *after* the check button so the pane reads in flow order —
+		// URL, key, check the endpoint, then pick a model from what it returned.
+		const modelRow = createDiv({ cls: "mc-welcome-model-row" });
 
 		new Setting(step).setName(s.llm.baseUrl).addText((text) => {
 			text
@@ -400,6 +403,7 @@ export class WelcomeModal extends Modal {
 					})
 			);
 
+		step.appendChild(modelRow);
 		this.renderModelRow(modelRow, pill);
 	}
 
@@ -432,8 +436,8 @@ export class WelcomeModal extends Modal {
 			});
 			return;
 		}
-		// Not the settings description: it says "use Load models above", but in
-		// this pane the action sits below this row.
+		// Welcome-specific wording: the settings copy names the settings tab's
+		// own button, which isn't what sits above this row here.
 		model.setDesc(t().welcome.setup.llm.modelDesc).addText((text) => {
 			text
 				.setPlaceholder(settings.modelCombobox.placeholderEmpty)
