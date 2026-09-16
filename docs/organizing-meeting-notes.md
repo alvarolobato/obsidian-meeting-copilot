@@ -100,7 +100,7 @@ Each step is independently shippable:
 ## Rejected alternatives
 
 - **Series-to-folder map in plugin data.** Doesn't sync with the vault, invisible to the user, wrong after any move made outside Obsidian.
-- **Title-based identity.** Titles change; ids don't. Title matching stays available only as an opt-in heuristic for grouping ad-hoc meetings that have no `recurring_event_id`.
+- **Title-based identity for *writes*.** Titles change; ids don't, so everything that writes frontmatter (`inferIdentityFromSiblings`, the fix commands) matches on `recurring_event_id`. The dashboard's *diagnosis* does group a folder's notes by title first, then widens by id, so a series recreated under a new id isn't reported as a mistag — see `findNoteIssues`. It accepts one blind spot in exchange: a genuinely foreign id under a matching title isn't flagged. Title matching stays available only as an opt-in heuristic for grouping ad-hoc meetings that have no `recurring_event_id`.
 - **Deep date sharding (`Meetings/2026/07/…`) as default.** Possible via templates, but burying notes two folders deep hurts more than it helps at typical volumes.
 
 ## Open questions (answered — see Decisions)

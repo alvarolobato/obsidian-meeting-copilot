@@ -211,14 +211,17 @@ export function disambiguateIdentityLabels(
 			: `id ${shortSeriesId(identity.recurringEventId)}`;
 	const actualDetail = detail(actual);
 	const expectedDetail = detail(expected);
-	// Nothing distinguishes them (a 1:1 with no email on either side): leave the
-	// labels alone rather than appending empty parentheses.
-	if (!actualDetail || !expectedDetail) {
+	// Nothing distinguishes either side (two 1:1s, neither with an email):
+	// leave the labels alone rather than appending empty parentheses.
+	if (!actualDetail && !expectedDetail) {
 		return { actual: actualLabel, expected: expectedLabel };
 	}
+	// One-sided is still worth showing: "(no email recorded)" against a real
+	// address tells the user which note is the odd one out.
+	const none = "no email recorded";
 	return {
-		actual: `${actualLabel} (${actualDetail})`,
-		expected: `${expectedLabel} (${expectedDetail})`,
+		actual: `${actualLabel} (${actualDetail ?? none})`,
+		expected: `${expectedLabel} (${expectedDetail ?? none})`,
 	};
 }
 
@@ -285,25 +288,65 @@ function titleKey(title: string): string {
  * so a folder full of one meeting's notes isn't read as two rival series.
  */
 interface SeriesGroup {
-	/** Id new occurrences carry — from the newest dated note in the group. */
-	currentId: string;
 	title: string;
 	count: number;
-	/** Newest note's date, or null when none of the notes had a readable one. */
+	/** Newest *valid* date seen, and the id that note carried. */
 	newest: Date | null;
+	newestId: string | null;
+	/** Every `seriesKey` in this group — what makes merging and outlier checks id-based. */
+	ids: Set<string>;
+	/** Raw id -> how many notes carried it, for the all-undated fallback. */
+	idCounts: Map<string, number>;
 }
 
 /**
- * Groups a folder's tagged notes into real series (by title) and 1:1s. Used
- * for *diagnosis only* — `inferIdentityFromSiblings`, which feeds the fix
- * commands that write frontmatter, keeps its stricter id-based rule.
+ * The id new occurrences carry. The newest dated note wins, so a recreated or
+ * rescheduled series takes over from its first occurrence. With no usable date
+ * anywhere in the group, the most common id wins rather than whichever note the
+ * vault scan happened to reach first.
+ */
+function currentIdOf(group: SeriesGroup): string {
+	if (group.newestId) return group.newestId;
+	let best = "";
+	let bestCount = -1;
+	for (const [id, count] of group.idCounts) {
+		if (count > bestCount) {
+			best = id;
+			bestCount = count;
+		}
+	}
+	return best;
+}
+
+/** A date we can actually order by — `parseStampDate` returns Invalid Date for a malformed stamp. */
+function usableDate(date: Date | null | undefined): Date | null {
+	return date && !Number.isNaN(date.getTime()) ? date : null;
+}
+
+/**
+ * Groups a folder's tagged notes into real series and 1:1s, for *diagnosis
+ * only* — `inferIdentityFromSiblings`, which feeds the fix commands that write
+ * frontmatter, keeps its stricter id-based rule.
+ *
+ * Grouping starts from the title (a recreated series keeps its name but gets a
+ * new id) and is then widened by id: any two groups sharing a `seriesKey` are
+ * merged. That second step matters because a note's title is *not* rewritten
+ * when it's tagged — `applyMetadataFix` writes only the id — so an ad-hoc or
+ * imported note keeps its own basename as a title while carrying the folder's
+ * correct id. Without the merge it would form its own group and be reported as
+ * mistagged against itself, with the same id on both sides, and the wrench
+ * could never clear it.
+ *
+ * Deliberate blind spot: a genuinely foreign id hiding under a matching title
+ * is not flagged. Same-titled series are common ("Standup", "Team sync"), and
+ * the alternative re-creates the noise this grouping exists to remove.
  */
 function groupFolderIdentities(rows: NoteIdentityRow[]): {
 	oneOnOnes: OneOnOneCandidate[];
 	series: SeriesGroup[];
 } {
 	const oneOnOnes = new Map<string, OneOnOneCandidate>();
-	const series = new Map<string, SeriesGroup>();
+	const byTitle = new Map<string, SeriesGroup>();
 	for (const row of rows) {
 		// Same precedence countCandidates uses: a recurring 1:1 counts as a 1:1.
 		if (row.oneOnOneWith) {
@@ -320,47 +363,62 @@ function groupFolderIdentities(rows: NoteIdentityRow[]): {
 			continue;
 		}
 		if (!row.recurringEventId) continue;
-		// Fall back to the id when a note has no title to group on, so an
-		// untitled note can't merge two genuinely different series.
-		const key = titleKey(row.title) || `id:${seriesKey(row.recurringEventId)}`;
-		const date = row.date ?? null;
-		const existing = series.get(key);
+		const id = row.recurringEventId;
+		const key = titleKey(row.title) || `id:${seriesKey(id)}`;
+		const date = usableDate(row.date);
+		const existing = byTitle.get(key);
 		if (!existing) {
-			series.set(key, {
-				currentId: row.recurringEventId,
+			byTitle.set(key, {
 				title: row.title,
 				count: 1,
 				newest: date,
+				newestId: date ? id : null,
+				ids: new Set([seriesKey(id)]),
+				idCounts: new Map([[id, 1]]),
 			});
 			continue;
 		}
 		existing.count++;
-		// Newer note wins the id. An undated note never displaces a dated one,
-		// so a note whose date couldn't be read can't hijack the series.
+		existing.ids.add(seriesKey(id));
+		existing.idCounts.set(id, (existing.idCounts.get(id) ?? 0) + 1);
+		// An undated note never displaces a dated one, in either scan order.
 		if (date && (!existing.newest || date > existing.newest)) {
 			existing.newest = date;
-			existing.currentId = row.recurringEventId;
+			existing.newestId = id;
 		}
 	}
-	return { oneOnOnes: [...oneOnOnes.values()], series: [...series.values()] };
+
+	// Widen by id: two titles that share a series are one series.
+	const merged: SeriesGroup[] = [];
+	for (const group of byTitle.values()) {
+		const target = merged.find((m) => [...group.ids].some((id) => m.ids.has(id)));
+		if (!target) {
+			merged.push(group);
+			continue;
+		}
+		target.count += group.count;
+		for (const id of group.ids) target.ids.add(id);
+		for (const [id, count] of group.idCounts) {
+			target.idCounts.set(id, (target.idCounts.get(id) ?? 0) + count);
+		}
+		if (group.newest && (!target.newest || group.newest > target.newest)) {
+			target.newest = group.newest;
+			target.newestId = group.newestId;
+			// The surviving title follows the newest note, so labels name the
+			// series as it is called now.
+			target.title = group.title;
+		}
+	}
+	return { oneOnOnes: [...oneOnOnes.values()], series: merged };
 }
 
 /** The identity a group stands for, carrying the id new occurrences use. */
 function groupIdentity(group: SeriesGroup): InferredIdentity {
 	return {
 		kind: "recurring",
-		recurringEventId: group.currentId,
+		recurringEventId: currentIdOf(group),
 		title: group.title,
 	};
-}
-
-/** Which group a single tagged note belongs to, for outlier comparison. */
-function rowGroupKey(row: NoteIdentityRow): string | null {
-	if (row.oneOnOneWith) {
-		return `1:1:${row.oneOnOneEmail ?? row.oneOnOneWith.trim().toLowerCase()}`;
-	}
-	if (!row.recurringEventId) return null;
-	return `series:${titleKey(row.title) || `id:${seriesKey(row.recurringEventId)}`}`;
 }
 
 /**
@@ -409,6 +467,7 @@ export function findNoteIssues(
 		const candidates = [
 			...oneOnOnes.map((c) => ({
 				key: `1:1:${c.email ?? c.name.trim().toLowerCase()}`,
+				group: null as SeriesGroup | null,
 				identity: {
 					kind: "one-on-one",
 					name: c.name,
@@ -417,7 +476,8 @@ export function findNoteIssues(
 				count: c.count,
 			})),
 			...series.map((g) => ({
-				key: `series:${titleKey(g.title) || `id:${seriesKey(g.currentId)}`}`,
+				key: `series:${currentIdOf(g)}`,
+				group: g,
 				identity: groupIdentity(g),
 				count: g.count,
 			})),
@@ -437,7 +497,7 @@ export function findNoteIssues(
 						kind: "ambiguous",
 						oneOnOnes,
 						recurring: series.map((g) => ({
-							recurringEventId: g.currentId,
+							recurringEventId: currentIdOf(g),
 							title: g.title,
 							count: g.count,
 						})),
@@ -458,12 +518,20 @@ export function findNoteIssues(
 			});
 		}
 
+		const topGroup = top!.group;
 		for (const row of tagged) {
-			const key = rowGroupKey(row);
-			// Same group as the folder's identity — including an older id from
-			// before the series was recreated or moved, which is history, not a
-			// mistag.
-			if (!key || key === top!.key) continue;
+			// Id first: a note carrying an id the winning series already owns is
+			// never a mistag, whatever its title says (the fix command writes the
+			// id and leaves the title alone, so titles drift legitimately).
+			if (row.recurringEventId && topGroup?.ids.has(seriesKey(row.recurringEventId))) {
+				continue;
+			}
+			if (row.oneOnOneWith && top!.identity.kind === "one-on-one") {
+				const key = row.oneOnOneEmail ?? row.oneOnOneWith.trim().toLowerCase();
+				if (key === (top!.identity.email ?? top!.identity.name.trim().toLowerCase())) {
+					continue;
+				}
+			}
 			const own = majorityIdentity([toSibling(row)]);
 			if (own.kind !== "resolved") continue;
 			issues.push({

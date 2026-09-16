@@ -4057,10 +4057,21 @@ export default class SystemRecordingPlugin extends Plugin {
                                 issue.reason.kind === "missing"
                                     ? issue.reason.identity
                                     : issue.reason.expected;
+                            const plainLabel = (i: InferredIdentity): string =>
+                                i.kind === "one-on-one"
+                                    ? n.metadataFixLabelOneOnOne(i.name)
+                                    : n.metadataFixLabelRecurring(i.title);
+                            // Same disambiguation the issues list uses: two
+                            // same-titled series must not both read "Retag as
+                            // the "Standup" series".
                             const label =
-                                identity.kind === "one-on-one"
-                                    ? n.metadataFixLabelOneOnOne(identity.name)
-                                    : n.metadataFixLabelRecurring(identity.title);
+                                issue.reason.kind === "missing"
+                                    ? plainLabel(identity)
+                                    : disambiguateIdentityLabels(
+                                          issue.reason.actual,
+                                          issue.reason.expected,
+                                          plainLabel
+                                      ).expected;
                             const fixTooltip =
                                 issue.reason.kind === "missing"
                                     ? id.fixTooltipTag(label)

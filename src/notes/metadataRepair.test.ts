@@ -486,3 +486,92 @@ describe("findNoteIssues: a series split across ids", () => {
 		});
 	});
 });
+
+describe("findNoteIssues: ids win over titles", () => {
+	const d = (iso: string) => new Date(`${iso}T10:00:00Z`);
+
+	it("does not flag a note carrying the folder's own id under a different title", () => {
+		// applyMetadataFix writes the id and leaves the title alone, so a tagged
+		// ad-hoc note keeps its basename. Before the id-merge this reported the
+		// note as mistagged against itself, and the wrench could never clear it.
+		const rows = [
+			row({ path: "a.md", title: "Weekly Sync", recurringEventId: "abc123", date: d("2026-09-01") }),
+			row({ path: "b.md", title: "Weekly Sync", recurringEventId: "abc123", date: d("2026-09-08") }),
+			row({ path: "c.md", title: "2026-09-12 sync notes", recurringEventId: "abc123", date: d("2026-09-12") }),
+		];
+		expect(findNoteIssues(rows, true)).toEqual([]);
+	});
+
+	it("does not turn a folder ambiguous when same-id notes have drifting titles", () => {
+		const rows = [
+			row({ path: "a.md", title: "one", recurringEventId: "abc123", date: d("2026-09-01") }),
+			row({ path: "b.md", title: "two", recurringEventId: "abc123", date: d("2026-09-02") }),
+			row({ path: "c.md", title: "three", recurringEventId: "abc123", date: d("2026-09-03") }),
+		];
+		expect(findNoteIssues(rows, true)).toEqual([]);
+	});
+
+	it("ignores an unparseable date instead of letting it freeze the current id", () => {
+		const rows = [
+			row({ path: "broken.md", title: "NS-LT", recurringEventId: "oldAAA", date: new Date(NaN) }),
+			row({ path: "sep.md", title: "NS-LT", recurringEventId: "newBBB", date: d("2026-09-14") }),
+			row({ path: "untagged.md", title: "NS-LT" }),
+		];
+		const issues = findNoteIssues(rows, true);
+		expect(issues.map((i) => i.path)).toEqual(["untagged.md"]);
+		expect(issues[0]?.reason).toMatchObject({
+			identity: { recurringEventId: "newBBB" },
+		});
+	});
+
+	it("falls back to the most common id when no note has a usable date", () => {
+		const rows = [
+			row({ path: "a.md", title: "NS-LT", recurringEventId: "oldAAA" }),
+			row({ path: "b.md", title: "NS-LT", recurringEventId: "oldAAA" }),
+			row({ path: "c.md", title: "NS-LT", recurringEventId: "newBBB" }),
+			row({ path: "untagged.md", title: "NS-LT" }),
+		];
+		const issues = findNoteIssues(rows, true);
+		expect(issues[0]?.reason).toMatchObject({
+			identity: { recurringEventId: "oldAAA" },
+		});
+	});
+
+	it("keeps a dated note's id when the undated note is scanned last", () => {
+		const rows = [
+			row({ path: "dated.md", title: "NS-LT", recurringEventId: "new222", date: d("2026-09-09") }),
+			row({ path: "undated.md", title: "NS-LT", recurringEventId: "old111" }),
+			row({ path: "untagged.md", title: "NS-LT" }),
+		];
+		const issues = findNoteIssues(rows, true);
+		expect(issues[0]?.reason).toMatchObject({
+			identity: { recurringEventId: "new222" },
+		});
+	});
+
+	it("accepts the documented blind spot: a foreign id under a matching title", () => {
+		const rows = [
+			row({ path: "a.md", title: "Standup", recurringEventId: "ours11", date: d("2026-09-01") }),
+			row({ path: "b.md", title: "Standup", recurringEventId: "ours11", date: d("2026-09-02") }),
+			row({ path: "foreign.md", title: "Standup", recurringEventId: "theirs99", date: d("2026-08-01") }),
+		];
+		// Deliberate: same-titled series are common, and flagging them recreates
+		// the noise this grouping removes. Documented in the module comment.
+		expect(findNoteIssues(rows, true)).toEqual([]);
+	});
+});
+
+describe("disambiguateIdentityLabels: one-sided details", () => {
+	const label = (i: { kind: string; name?: string; title?: string }): string =>
+		i.kind === "one-on-one" ? `your 1:1 with ${i.name}` : `the "${i.title}" series`;
+
+	it("names the side that has an email when the other does not", () => {
+		const out = disambiguateIdentityLabels(
+			{ kind: "one-on-one", name: "Alex", email: null },
+			{ kind: "one-on-one", name: "Alex", email: "alex@x.test" },
+			label as never
+		);
+		expect(out.actual).toBe("your 1:1 with Alex (no email recorded)");
+		expect(out.expected).toBe("your 1:1 with Alex (alex@x.test)");
+	});
+});
