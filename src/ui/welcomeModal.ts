@@ -417,7 +417,12 @@ export class WelcomeModal extends Modal {
 	private renderModelRow(row: HTMLElement, pill: HTMLElement | null): void {
 		const settings = t().settings;
 		row.empty();
-		const model = new Setting(row).setName(settings.enrichModel.name);
+		// Same name *and* description in both states: without the description the
+		// dropdown row is shorter than the text one, so the control stops
+		// wrapping and the layout jumps when models load.
+		const model = new Setting(row)
+			.setName(settings.enrichModel.name)
+			.setDesc(t().welcome.setup.llm.modelDesc);
 		const current = this.host.getEnrichModel();
 		const loaded = this.endpointModels();
 		if (loaded.length > 0) {
@@ -438,9 +443,7 @@ export class WelcomeModal extends Modal {
 			});
 			return;
 		}
-		// Welcome-specific wording: the settings copy names the settings tab's
-		// own button, which isn't what sits above this row here.
-		model.setDesc(t().welcome.setup.llm.modelDesc).addText((text) => {
+		model.addText((text) => {
 			// Committed on blur, not per keystroke: a half-typed id ("gpt-") would
 			// otherwise be persisted and picked up by an auto-enrich that fires
 			// mid-typing. Mirrors the settings tab's model field.
